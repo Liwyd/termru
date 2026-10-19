@@ -1,0 +1,51 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.svelte-kit/
+*.local
+
+# Test / coverage output
+coverage/
+*.profraw
+*.lcov
+/coverage-*
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+# Local databases / logs (never commit user data)
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+/logs/
+*.log
+
+# Packaging outputs
+/bundle/
+/apps/desktop/src-tauri/target/
+/dist-electron/
+*.deb
+*.rpm
+*.AppImage
+*.exe
+
+# Docker local overrides
+compose.override.yaml

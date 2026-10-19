@@ -1,0 +1,25 @@
+[package]
+name = "termru-store"
+description = "Local SQLite persistence for Termru (schema, migrations, repositories)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+termru-core.workspace = true
+rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
