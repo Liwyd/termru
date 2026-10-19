@@ -21,6 +21,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+termru-core = { workspace = true }
+termru-store = { workspace = true }
+termru-ssh = { workspace = true }
+async-trait = "0.1"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true
