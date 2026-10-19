@@ -1,0 +1,23 @@
+{
+  "name": "termru",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Termru — SSH terminal workspace (monorepo root)",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Liwyd/termru",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @termru/desktop",
+    "build": "npm run build --workspace @termru/desktop",
+    "test": "npm run test --workspace @termru/desktop",
+    "lint": "npm run lint --workspace @termru/desktop",
+    "format": "npm run format --workspace @termru/desktop",
+    "typecheck": "npm run typecheck --workspace @termru/desktop",
+    "tauri": "npm run tauri --workspace @termru/desktop --"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

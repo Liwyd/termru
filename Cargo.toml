@@ -4,6 +4,7 @@ members = [
     "crates/termru-core",
     "crates/termru-store",
     "crates/termru-ssh",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]

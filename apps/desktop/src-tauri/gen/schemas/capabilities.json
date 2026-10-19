@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Least-privilege capability for the main window: core IPC and window basics only.","local":true,"windows":["main"],"permissions":["core:default"]}}

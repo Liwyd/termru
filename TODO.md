@@ -37,13 +37,14 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 ## Phase 2 — Repository structure and development tooling
 
 - [x] Cargo workspace with the three core crates (`termru-core`, `termru-store`, `termru-ssh`) + shared lints/profiles.
-- [ ] Add `apps/desktop/src-tauri` + `apps/cloud-server` to the workspace (they do not exist yet).
-- [ ] Frontend package layout (`apps/desktop`, Svelte 5 + Vite 8 + TS 5) + editor/format configs for TS/Svelte.
+- [x] Add `apps/desktop/src-tauri` to the Cargo workspace (member of root workspace; links clean against webkit2gtk-4.1).
+- [ ] Add `apps/cloud-server` to the workspace (does not exist yet → Phase 9).
+- [x] Frontend package layout (`apps/desktop`: Svelte 5.57 + Vite 8.3 + TS 5.9 pinned, `@xterm/xterm` 6) + editor/format configs (`.prettierrc` + prettier-plugin-svelte, strict `tsconfig`, `.editorconfig` already repo-wide, `.vscode/extensions.json`).
 - [x] Rust tooling: rustfmt config, clippy workspace lints (incl. unwrap/expect warns + allow-in-tests), `.editorconfig`, `.gitignore`, `cargo-deny` config (licenses + advisories).
-- [ ] Root scripts (`scripts/` + npm scripts) for: dev, test, lint, format, typecheck.
-- [ ] Base project files beyond LICENSE: README stub, CONTRIBUTING/SECURITY/CODE_OF_CONDUCT/CHANGELOG, issue/PR templates, Dependabot config.
+- [x] Root scripts for: dev, test, lint, format, typecheck — root `package.json` npm scripts delegating to the `apps/*` workspace (single source of truth; no separate `scripts/` duplicates).
+- [x] Base project files beyond LICENSE: README (stub), CONTRIBUTING, SECURITY (private advisory reporting), CODE_OF_CONDUCT (Contributor Covenant 2.1), CHANGELOG (Keep a Changelog), issue/PR templates (YAML forms), Dependabot config (cargo/npm/github-actions).
 - [ ] CI workflow for PRs: fmt, clippy, tests, tsc/svelte-check, vitest, cargo-deny. → Phase 14.
-- Verification (Rust scope): `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests) all pass locally. Frontend checks come with the frontend scaffold.
+- Verification: `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests) green; `npm run lint` (prettier + svelte-check 0 errors), `npm run test` (4 vitest), `npm run build` green; `cargo build -p termru-desktop` links; debug binary smoke-ran against vite dev without fatal output.
 
 ## Phase 3 — Core domain and local persistence
 
@@ -67,7 +68,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 5 — Desktop MVP (main UI + SSH end-to-end)
 
-- [ ] Tauri app scaffold: windows, capabilities (least privilege), app state (`SessionManager` owns all SSH sessions in Rust — single owner across windows), structured logging (file + stderr, no secrets), panic hygiene.
+- [x] Tauri app scaffold: window config (label `main`, 1200×800, min 640×400), capabilities least-privilege (`core:default` only — no fs/shell/opener), CSP set, `AppState` stub as future single session owner, structured stderr logging (`tracing` + `EnvFilter`), `app_info` IPC smoke command (frontend renders it).
+- [ ] App runtime hardening: file logging alongside stderr (no secrets), panic hygiene (hook + recovery), `SessionManager` wired into `AppState` (this + logging = Phase 5 items 71–72).
 - [ ] Commands: host CRUD (validation in-app), session open/close/write/resize/duplicate, known-host confirm/decline, preferences.
 - [ ] SessionManager: per-session tokio task (actor exists in `termru-ssh`), Tauri command layer, bounded input/output channels, status events, graceful shutdown on app exit, orphan prevention.
 - [ ] Frontend foundation: design tokens, theme (light/dark), layout shell (sidebar + main), components: HostList/HostCard, host editor form, connection dialog (password/passphrase prompts), status badges, empty states, toasts/errors.
@@ -188,4 +190,4 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Current status
 
-Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architecture/`). Phases 2–4 Rust scope complete: workspace + three crates; `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests = 28 core + 26 ssh + 16 sshd integration + 25 store) green locally. Known-hosts verified against OpenSSH incl. hashed entries, wildcards, negation, `@revoked`, changed-key detection. SSH integration suite runs a private unprivileged sshd per test (loud self-skip without OpenSSH tooling). Defects found & fixed by the suite: russh `SshId::Standard` needs the full `SSH-2.0-` banner prefix; `ChannelMsg::ExitSignal` without an `ExitStatus` is now classified `Failed{Network}` (reconnect-eligible) per the no-status-is-an-abrupt-death invariant; monotonic `now_ms` + deterministic `ORDER BY` tiebreakers in the store. Next milestone: frontend scaffold (Phase 2 remainder) + Tauri app scaffold (Phase 5).
+Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architecture/`). Phases 2–4 Rust scope complete: workspace + three crates; `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests = 28 core + 26 ssh + 16 sshd integration + 25 store) green locally. Known-hosts verified against OpenSSH incl. hashed entries, wildcards, negation, `@revoked`, changed-key detection. SSH integration suite runs a private unprivileged sshd per test (loud self-skip without OpenSSH tooling). Defects found & fixed by the suite: russh `SshId::Standard` needs the full `SSH-2.0-` banner prefix; `ChannelMsg::ExitSignal` without an `ExitStatus` is now classified `Failed{Network}` (reconnect-eligible) per the no-status-is-an-abrupt-death invariant; monotonic `now_ms` + deterministic `ORDER BY` tiebreakers in the store. Desktop scaffold complete: `apps/desktop` (Svelte 5 + Vite 8 + TS 5 + xterm 6, prettier/svelte-check/vitest green) and `apps/desktop/src-tauri` (Tauri 2.12, least-privilege capability `core:default`, CSP, `app_info` IPC) wired into the workspace; debug binary smoke-ran against vite dev. Next milestone: Phase 5 product surface — `SessionManager` in `AppState`, session commands, HostList/editor + terminal view on xterm.
