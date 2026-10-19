@@ -31,8 +31,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Decide cloud API framework: **Axum** (candidate; stable ecosystem, first-class tower middleware for rate limiting).
 - [x] Decide secret policy v1: **no secret synchronization**. Secrets stay in OS keyring (keyring crate) only. Documented limitation; config sync only. (Avoids inventing a recovery mechanism that breaks E2E guarantees.)
 - [x] Decide sync model: **transactional, revision-based, per-user monotonic `rev`, tombstones, cursor pagination, explicit conflict surfacing** (no silent LWW, no CRDTs).
-- [ ] ADRs written in `docs/architecture/` for: SSH transport, desktop stack, persistence split, sync protocol, secret policy, multi-window session ownership, licensing.
-  - Verification: files exist, decisions match code.
+- [x] ADRs written in `docs/architecture/` for: SSH transport, desktop stack, persistence split, sync protocol, secret policy, multi-window session ownership, licensing.
+  - Verification: `docs/architecture/README.md` + `0001`–`0007` exist; decisions match code (russh, Tauri 2/Svelte 5, SQLite+Postgres split, rev-based sync, no secret sync, single session owner, Apache-2.0).
 
 ## Phase 2 — Repository structure and development tooling
 
@@ -43,7 +43,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [ ] Root scripts (`scripts/` + npm scripts) for: dev, test, lint, format, typecheck.
 - [ ] Base project files beyond LICENSE: README stub, CONTRIBUTING/SECURITY/CODE_OF_CONDUCT/CHANGELOG, issue/PR templates, Dependabot config.
 - [ ] CI workflow for PRs: fmt, clippy, tests, tsc/svelte-check, vitest, cargo-deny. → Phase 14.
-- Verification (Rust scope): `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (63 tests) all pass locally. Frontend checks come with the frontend scaffold.
+- Verification (Rust scope): `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests) all pass locally. Frontend checks come with the frontend scaffold.
 
 ## Phase 3 — Core domain and local persistence
 
@@ -52,7 +52,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Store safety: WAL mode, busy timeout, foreign keys ON, transactions per operation, corruption detection on open (quick_check → actionable error), file permissions 0600.
 - [x] Export/import/backup (VACUUM INTO → atomic rename; restore verifies, keeps pre-restore aside) with round-trip test + corrupt-backup rejection test.
 - [ ] Concurrent-access test (two connections, busy-timeout behavior).
-- Verification: unit tests incl. migration-from-empty AND future-schema rejection, backup/restore round-trip, 24 store tests green.
+- Verification: unit tests incl. migration-from-empty AND future-schema rejection, backup/restore round-trip, 25 store tests green (incl. deterministic monotonic `now_ms` + `ORDER BY` tiebreakers).
 
 ## Phase 4 — SSH engine and terminal reliability (russh)
 
@@ -60,10 +60,10 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Auth: password, private key (+ passphrase), SSH agent (OpenSSH agent socket) with graceful degradation when unavailable.
 - [x] Known-hosts: OpenSSH format read/write incl. hashed entries, TOFU first-use confirmation flow, **changed host key = hard warning with old/new fingerprint**, never auto-accept on change.
 - [x] PTY shell: pty-req with TERM/size, window-change resize propagation, shell selection, output streaming with bounded buffering (backpressure), input writes, exit/close propagation, bounded scrollback replay buffer for re-attach.
-- [ ] Reconnect policy: bounded backoff with cap, no uncontrolled loops; explicit user action vs automatic. (Error classification primitives — `is_retriable`, categories — exist; the reconnect loop itself is not implemented.)
+- [x] Reconnect policy: bounded backoff with cap, no uncontrolled loops; explicit user action vs automatic. (`termru_ssh::reconnect::ReconnectPolicy`: 8 attempts, 500ms→30s cap, ×2 backoff + 20% jitter; `connect_with_retry` emits `Reconnecting` attempts then `Failed`+`Closed` with `GiveUpReason` on give-up; connect cancellable mid-flight; only `Network`/`Timeout` categories retriable — auth/host-key/protocol never auto-retried. Verified: unit tests incl. tokio paused-time; integration give-up test.)
 - [ ] Port forwarding (local/remote/dynamic), jump hosts: implement if time-justified for v1 → tracked under Phase 5 scope decision (ADR).
-- [ ] Integration tests against real OpenSSH (local `sshd` as unprivileged user on high port; CI with root sshd): success, wrong password, wrong key, passphrase-protected key, host-key-change detection, resize, large output flood, interrupted connection, malformed/binary output.
-- Verification: integration suite green locally; each negative case asserts actionable error classification.
+- [x] Integration tests against real OpenSSH (local `sshd` as unprivileged user on high port; CI with root sshd): success, wrong password, wrong key, passphrase-protected key, host-key-change detection, resize, large output flood, interrupted connection, malformed/binary output.
+- Verification: `crates/termru-ssh/tests/sshd.rs` — 16 tests green locally (private sshd per test, self-skips with loud `SKIPPED:` if OpenSSH tooling missing): shell roundtrip + TOFU write, declined/changed host keys (decline + accept + subsequently-known), wrong password, unauthorized/wrong/correct passphrase, agent auth via explicit socket, PTY resize, 4MiB flood, reattach replay ordering, interrupted connection → `Failed{Network}`, binary output verbatim, clean `exit(7)` → status without failure, bounded reconnect give-up. Negative cases assert `ErrorCategory` and no credential leakage.
 
 ## Phase 5 — Desktop MVP (main UI + SSH end-to-end)
 
@@ -188,4 +188,4 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Current status
 
-Phases 0–1 done (environment baseline + decisions recorded here). Phase 2–4 Rust scope largely done: workspace + three crates compile clean, `cargo fmt`/`cargo clippy` (0 warnings)/`cargo test --workspace` (63 tests) green. Known-hosts engine verified against OpenSSH format incl. hashed entries, wildcards, negation, `@revoked`, changed-key detection. Next milestone: ADRs in `docs/architecture/`, then Tauri app scaffold (Phase 5) and SSH integration tests against a local sshd.
+Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architecture/`). Phases 2–4 Rust scope complete: workspace + three crates; `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests = 28 core + 26 ssh + 16 sshd integration + 25 store) green locally. Known-hosts verified against OpenSSH incl. hashed entries, wildcards, negation, `@revoked`, changed-key detection. SSH integration suite runs a private unprivileged sshd per test (loud self-skip without OpenSSH tooling). Defects found & fixed by the suite: russh `SshId::Standard` needs the full `SSH-2.0-` banner prefix; `ChannelMsg::ExitSignal` without an `ExitStatus` is now classified `Failed{Network}` (reconnect-eligible) per the no-status-is-an-abrupt-death invariant; monotonic `now_ms` + deterministic `ORDER BY` tiebreakers in the store. Next milestone: frontend scaffold (Phase 2 remainder) + Tauri app scaffold (Phase 5).

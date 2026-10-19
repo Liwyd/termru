@@ -9,6 +9,7 @@
 pub mod config;
 pub mod error;
 pub mod known_hosts;
+pub mod reconnect;
 pub mod session;
 
 pub use config::{
@@ -16,4 +17,5 @@ pub use config::{
 };
 pub use error::SshError;
 pub use known_hosts::{Evaluation, HostKeyEntry, KnownHosts};
-pub use session::{Session, SessionEvent, SessionOptions};
+pub use reconnect::{GiveUpReason, ReconnectDecision, ReconnectPolicy};
+pub use session::{ErrorCategory, Session, SessionEvent, SessionOptions, SessionStatus};

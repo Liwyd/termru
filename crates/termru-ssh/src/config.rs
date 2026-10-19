@@ -39,7 +39,12 @@ pub enum AuthChoice {
         key_path: PathBuf,
         passphrase: Option<SecretValue>,
     },
-    Agent,
+    /// Authenticate via an SSH agent.
+    Agent {
+        /// Explicit agent socket path. `None` = read `SSH_AUTH_SOCK` from the
+        /// environment (the desktop resolves and passes the path explicitly).
+        socket: Option<PathBuf>,
+    },
 }
 
 impl AuthChoice {
@@ -47,7 +52,7 @@ impl AuthChoice {
         match self {
             Self::Password { .. } => "password",
             Self::PrivateKey { .. } => "publickey",
-            Self::Agent => "publickey (agent)",
+            Self::Agent { .. } => "publickey (agent)",
         }
     }
 }

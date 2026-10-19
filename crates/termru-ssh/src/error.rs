@@ -103,11 +103,16 @@ pub enum SshError {
 
 impl SshError {
     /// Whether retrying the same operation could plausibly succeed without
-    /// user intervention (used to gate automatic reconnects).
+    /// user intervention. This is **the** classification used to gate
+    /// automatic reconnects: it is exactly `ErrorCategory::Network` or
+    /// `ErrorCategory::Timeout` (dial, handshake, connection-interrupted
+    /// failures), and never authentication, host-key, protocol, or local
+    /// failures.
     pub fn is_retriable(&self) -> bool {
+        use crate::session::ErrorCategory;
         matches!(
-            self,
-            Self::ConnectionClosed | Self::Interrupted | Self::ConnectFailed { .. }
+            ErrorCategory::of(self),
+            ErrorCategory::Network | ErrorCategory::Timeout
         )
     }
 

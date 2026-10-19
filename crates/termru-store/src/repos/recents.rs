@@ -28,7 +28,7 @@ impl Recents<'_> {
                     "SELECT {cols}, r.last_used_at FROM recents r \
                      JOIN hosts h ON h.id = r.host_id \
                      WHERE h.deleted = 0 \
-                     ORDER BY r.last_used_at DESC LIMIT {MAX_RECENTS}",
+                     ORDER BY r.last_used_at DESC, r.host_id LIMIT {MAX_RECENTS}",
                     cols = super::hosts::HOST_COLUMNS,
                 ))
                 .map_err(StoreError::Sqlite)?;
@@ -67,7 +67,8 @@ impl Recents<'_> {
             conn.execute(
                 &format!(
                     "DELETE FROM recents WHERE host_id NOT IN (\
-                     SELECT host_id FROM recents ORDER BY last_used_at DESC LIMIT {MAX_RECENTS})"
+                     SELECT host_id FROM recents ORDER BY last_used_at DESC, host_id \
+                     LIMIT {MAX_RECENTS})"
                 ),
                 [],
             )

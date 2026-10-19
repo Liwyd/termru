@@ -31,12 +31,13 @@ use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use russh::{Channel, ChannelMsg};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use crate::config::{AuthChoice, ConnectParams, ConnectTimeouts, HostKeyPromptRequest};
+use crate::config::{AuthChoice, ConnectParams, HostKeyPromptRequest};
 use crate::error::SshError;
 use crate::known_hosts::{Evaluation, KnownHosts};
+use crate::reconnect::ReconnectPolicy;
 
 pub const DEFAULT_KEEPALIVE_MAX: usize = 3;
 const REPLAY_CHUNK: usize = 32 * 1024;
@@ -61,6 +62,15 @@ pub enum SessionStatus {
     Connecting,
     Authenticating,
     Ready,
+    /// A retriable failure occurred and a bounded reconnect is scheduled.
+    Reconnecting {
+        /// 1-based number of the attempt that just failed.
+        attempt: u32,
+        /// Backoff before the next attempt (jitter already applied).
+        delay: Duration,
+        /// Message of the failure that triggered the reconnect.
+        last_error: String,
+    },
     Closed {
         reason: String,
     },
@@ -143,42 +153,106 @@ pub struct Session {
 }
 
 impl Session {
-    /// Opens a connection and starts the session actor. On failure, `events`
-    /// receives `Failed` followed by `Closed` before the error is returned.
+    /// Opens a connection (no auto-reconnect, not cancellable mid-flight).
     pub async fn open(
         params: ConnectParams,
         options: SessionOptions,
         events: mpsc::Sender<SessionEvent>,
     ) -> Result<Session, SshError> {
-        match Self::connect_and_start(params, options, events.clone()).await {
-            Ok(session) => {
-                let _ = events
-                    .send(SessionEvent::Status(SessionStatus::Ready))
-                    .await;
-                Ok(session)
-            }
-            Err(error) => {
-                let category = ErrorCategory::of(&error);
-                let _ = events
-                    .send(SessionEvent::Status(SessionStatus::Failed {
-                        category,
-                        message: error.to_string(),
-                    }))
-                    .await;
-                let _ = events
-                    .send(SessionEvent::Status(SessionStatus::Closed {
-                        reason: error.to_string(),
-                    }))
-                    .await;
-                Err(error)
-            }
-        }
+        let (_cancel_tx, cancel) = watch::channel(false);
+        Self::connect(
+            params,
+            options,
+            events,
+            ReconnectPolicy::no_retries(),
+            cancel,
+        )
+        .await
     }
 
-    async fn connect_and_start(
+    /// Opens a connection that can be aborted mid-flight (dial, handshake,
+    /// host-key prompt, authentication) by setting `cancel` to `true`.
+    /// No auto-reconnect: one attempt, then the error surfaces.
+    pub async fn open_cancellable(
         params: ConnectParams,
         options: SessionOptions,
         events: mpsc::Sender<SessionEvent>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<Session, SshError> {
+        Self::connect(
+            params,
+            options,
+            events,
+            ReconnectPolicy::no_retries(),
+            cancel,
+        )
+        .await
+    }
+
+    /// Like [`Session::open_cancellable`], but retries retriable failures
+    /// under `policy` (bounded backoff; see [`ReconnectPolicy`]). Cancellation
+    /// aborts both in-flight attempts and backoff waits.
+    pub async fn open_with_reconnect(
+        params: ConnectParams,
+        options: SessionOptions,
+        events: mpsc::Sender<SessionEvent>,
+        policy: ReconnectPolicy,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<Session, SshError> {
+        Self::connect(params, options, events, policy, cancel).await
+    }
+
+    async fn connect(
+        params: ConnectParams,
+        options: SessionOptions,
+        events: mpsc::Sender<SessionEvent>,
+        policy: ReconnectPolicy,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<Session, SshError> {
+        let session = crate::reconnect::connect_with_retry(
+            policy,
+            cancel.clone(),
+            &events,
+            |attempt_cancel| {
+                let params = params.clone();
+                let options = options.clone();
+                let events = events.clone();
+                async move {
+                    let mut attempt_cancel = attempt_cancel;
+                    Session::connect_and_start(params, options, events, &mut attempt_cancel).await
+                }
+            },
+        )
+        .await?;
+        Self::finish_open(session, &events, &cancel).await
+    }
+
+    /// Emits `Ready`, or aborts a connection that completed after cancellation.
+    async fn finish_open(
+        session: Session,
+        events: &mpsc::Sender<SessionEvent>,
+        cancel: &watch::Receiver<bool>,
+    ) -> Result<Session, SshError> {
+        if *cancel.borrow() {
+            let _ = session.close().await;
+            let _ = events
+                .send(SessionEvent::Status(SessionStatus::Closed {
+                    reason: "connection cancelled".to_string(),
+                }))
+                .await;
+            return Err(SshError::SessionClosing);
+        }
+        let _ = events
+            .send(SessionEvent::Status(SessionStatus::Ready))
+            .await;
+        Ok(session)
+    }
+
+    pub(crate) async fn connect_and_start(
+        params: ConnectParams,
+        options: SessionOptions,
+        events: mpsc::Sender<SessionEvent>,
+        cancel: &mut watch::Receiver<bool>,
     ) -> Result<Session, SshError> {
         let _ = events
             .send(SessionEvent::Status(SessionStatus::Connecting))
@@ -190,7 +264,7 @@ impl Session {
             Arc::new(std::sync::Mutex::new(None));
 
         // --- resolve + dial (explicit timeouts, precise DNS errors) ---
-        let stream = dial(&params.host, params.port, params.timeouts.connect).await?;
+        let stream = dial(&params.host, params.port, params.timeouts.connect, cancel).await?;
 
         // --- handshake (key exchange incl. host-key decision) ---
         let handler = ClientHandler {
@@ -203,8 +277,11 @@ impl Session {
             recorded: recorded.clone(),
         };
         let mut config = ClientConfig {
+            // `SshId::Standard` writes the value verbatim and appends `\r\n`;
+            // it MUST include the `SSH-2.0-` prefix or OpenSSH desyncs the
+            // banner exchange (caught by the sshd integration suite).
             client_id: russh::SshId::Standard(std::borrow::Cow::Owned(format!(
-                "Termru_{}",
+                "SSH-2.0-Termru_{}",
                 env!("CARGO_PKG_VERSION")
             ))),
             keepalive_interval: (params.keepalive_seconds > 0)
@@ -216,12 +293,10 @@ impl Session {
 
         let handle = connect_with_deadline(
             client::connect_stream(Arc::new(config), stream, handler),
-            &params.timeouts,
-            params.host_key_prompt.is_interactive(),
+            &params,
             prompt_seen,
             recorded,
-            &params.host,
-            params.port,
+            cancel,
         )
         .await?;
 
@@ -230,9 +305,12 @@ impl Session {
             .send(SessionEvent::Status(SessionStatus::Authenticating))
             .await;
         let mut handle = handle;
-        tokio::time::timeout(params.timeouts.auth, authenticate(&mut handle, &params))
-            .await
-            .map_err(|_| SshError::AuthTimeout)??;
+        tokio::select! {
+            result = tokio::time::timeout(params.timeouts.auth, authenticate(&mut handle, &params)) => {
+                result.map_err(|_| SshError::AuthTimeout)??
+            }
+            _ = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
+        }
 
         // --- interactive shell ---
         let channel = handle
@@ -309,7 +387,12 @@ impl Session {
 
 // ---------- dial ----------
 
-async fn dial(host: &str, port: u16, budget: Duration) -> Result<TcpStream, SshError> {
+async fn dial(
+    host: &str,
+    port: u16,
+    budget: Duration,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<TcpStream, SshError> {
     let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| SshError::DnsFailure {
@@ -328,10 +411,15 @@ async fn dial(host: &str, port: u16, budget: Duration) -> Result<TcpStream, SshE
     let mut last_io_error: Option<std::io::Error> = None;
     let mut saw_timeout = false;
     for addr in addrs {
-        match tokio::time::timeout_at(deadline, TcpStream::connect(addr)).await {
-            Ok(Ok(stream)) => return Ok(stream),
-            Ok(Err(e)) => last_io_error = Some(e),
-            Err(_) => saw_timeout = true,
+        tokio::select! {
+            result = tokio::time::timeout_at(deadline, TcpStream::connect(addr)) => {
+                match result {
+                    Ok(Ok(stream)) => return Ok(stream),
+                    Ok(Err(e)) => last_io_error = Some(e),
+                    Err(_) => saw_timeout = true,
+                }
+            }
+            _ = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
         }
     }
     if let Some(err) = last_io_error {
@@ -357,15 +445,18 @@ async fn dial(host: &str, port: u16, budget: Duration) -> Result<TcpStream, SshE
 
 // ---------- handshake with adaptive deadline ----------
 
+#[allow(clippy::too_many_arguments)]
 async fn connect_with_deadline(
     future: impl std::future::Future<Output = Result<Handle<ClientHandler>, russh::Error>>,
-    timeouts: &ConnectTimeouts,
-    interactive: bool,
+    params: &ConnectParams,
     prompt_seen: Arc<AtomicBool>,
     recorded: Arc<std::sync::Mutex<Option<SshError>>>,
-    host: &str,
-    port: u16,
+    cancel: &mut watch::Receiver<bool>,
 ) -> Result<Handle<ClientHandler>, SshError> {
+    let interactive = params.host_key_prompt.is_interactive();
+    let host = &params.host;
+    let port = params.port;
+    let timeouts = &params.timeouts;
     tokio::pin!(future);
     let mut deadline = Instant::now() + timeouts.connect;
     let mut extended = false;
@@ -378,6 +469,9 @@ async fn connect_with_deadline(
                         map_connect_error(err, host, port, timeouts.connect.as_secs())
                     })),
                 };
+            }
+            _ = crate::reconnect::cancelled(cancel) => {
+                return Err(SshError::SessionClosing);
             }
             _ = tokio::time::sleep_until(deadline) => {
                 if interactive && !extended && prompt_seen.load(Ordering::SeqCst) {
@@ -454,8 +548,8 @@ async fn authenticate(
             }
             Err(auth_rejected("publickey", &result))
         }
-        AuthChoice::Agent => {
-            let mut agent = connect_agent().await?;
+        AuthChoice::Agent { socket } => {
+            let mut agent = connect_agent(socket.as_deref()).await?;
             let identities = agent
                 .request_identities()
                 .await
@@ -550,16 +644,24 @@ fn classify_key_error(err: russh::keys::Error, path: &str, passphrase_given: boo
     }
 }
 
-async fn connect_agent() -> Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, SshError> {
+async fn connect_agent(
+    socket: Option<&std::path::Path>,
+) -> Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, SshError> {
     #[cfg(unix)]
     {
-        match AgentClient::connect_env().await {
+        let connected = match socket {
+            Some(path) => AgentClient::connect_uds(path).await,
+            None => AgentClient::connect_env().await,
+        };
+        match connected {
             Ok(client) => Ok(client.dynamic()),
             Err(_) => Err(SshError::AgentUnavailable),
         }
     }
     #[cfg(windows)]
     {
+        // Windows: pageant has no socket path; an explicit socket is ignored.
+        let _ = socket;
         match AgentClient::connect_pageant().await {
             Ok(client) => Ok(client.dynamic()),
             Err(_) => Err(SshError::AgentUnavailable),
@@ -567,6 +669,7 @@ async fn connect_agent() -> Result<AgentClient<Box<dyn AgentStream + Send + Unpi
     }
     #[cfg(not(any(unix, windows)))]
     {
+        let _ = socket;
         Err(SshError::AgentUnavailable)
     }
 }
@@ -762,11 +865,19 @@ impl Actor {
                     }
                 },
                 Tick::Message(None) => {
-                    let reason = self
-                        .exit_code
-                        .map(|c| format!("remote shell exited with status {c}"))
-                        .unwrap_or_else(|| "connection closed by remote host".to_string());
-                    self.finish(&reason).await;
+                    // No exit status: the transport or channel died under us.
+                    // Classified as a retriable network failure so the app can
+                    // auto-reconnect; a clean shell exit always arrives as
+                    // `ExitStatus` first.
+                    if self.exit_code.is_none() {
+                        self.fail(SshError::ConnectionClosed).await;
+                    } else {
+                        let reason = format!(
+                            "remote shell exited with status {}",
+                            self.exit_code.unwrap_or_default()
+                        );
+                        self.finish(&reason).await;
+                    }
                     break;
                 }
                 Tick::Message(Some(message)) => {
@@ -786,13 +897,19 @@ impl Actor {
                             signal_name,
                             lang_tag: _,
                         } => {
+                            // `ExitSignal` is never followed by an
+                            // `ExitStatus`, so by the invariant above this is
+                            // an abrupt session death: reported as a retriable
+                            // network failure (so the reconnect policy can act
+                            // on e.g. an sshd restart) with the signal detail
+                            // as the user-facing message.
                             self.exit_code = None;
                             self.emit_exit(None).await;
                             let note = format!(
                                 "remote process terminated by signal {signal_name:?}{}: {error_message}",
                                 if core_dumped { " (core dumped)" } else { "" }
                             );
-                            self.finish(&note).await;
+                            self.fail_with(SshError::ConnectionClosed, note).await;
                             break;
                         }
                         ChannelMsg::Eof => {
@@ -800,11 +917,15 @@ impl Actor {
                             // (e.g. exit status) may still arrive.
                         }
                         ChannelMsg::Close => {
-                            let reason = self
-                                .exit_code
-                                .map(|c| format!("remote shell exited with status {c}"))
-                                .unwrap_or_else(|| "channel closed".to_string());
-                            self.finish(&reason).await;
+                            if self.exit_code.is_none() {
+                                self.fail(SshError::ConnectionClosed).await;
+                            } else {
+                                let reason = format!(
+                                    "remote shell exited with status {}",
+                                    self.exit_code.unwrap_or_default()
+                                );
+                                self.finish(&reason).await;
+                            }
                             break;
                         }
                         _ => {}
@@ -874,8 +995,14 @@ impl Actor {
     }
 
     async fn fail(&mut self, error: SshError) {
-        let category = ErrorCategory::of(&error);
         let message = error.to_string();
+        self.fail_with(error, message).await;
+    }
+
+    /// Like [`Self::fail`], but with an explicit user-facing message (the
+    /// classification still comes from `error`).
+    async fn fail_with(&mut self, error: SshError, message: String) {
+        let category = ErrorCategory::of(&error);
         self.emit(SessionEvent::Status(SessionStatus::Failed {
             category,
             message: message.clone(),
@@ -923,6 +1050,7 @@ async fn keepalive_tick(keepalive: &mut Option<tokio::time::Interval>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConnectTimeouts;
 
     #[test]
     fn error_categories_are_stable() {
@@ -972,12 +1100,72 @@ mod tests {
 
     #[tokio::test]
     async fn dial_reports_dns_failure_for_invalid_name() {
-        let error = dial("definitely.invalid.invalid", 22, Duration::from_secs(3))
-            .await
-            .unwrap_err();
+        let (_tx, mut cancel) = watch::channel(false);
+        let error = dial(
+            "definitely.invalid.invalid",
+            22,
+            Duration::from_secs(3),
+            &mut cancel,
+        )
+        .await
+        .unwrap_err();
         assert!(
             matches!(error, SshError::DnsFailure { .. }),
             "got {error:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn dial_aborts_immediately_when_cancelled() {
+        let (_cancel_tx, mut cancel) = watch::channel(true);
+        let started = Instant::now();
+        // Unroutable test address: black-holes SYNs in most environments, so
+        // only cancellation can end this quickly.
+        let result = dial("10.255.255.1", 22, Duration::from_secs(60), &mut cancel).await;
+        assert!(matches!(result, Err(SshError::SessionClosing)));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "cancel must beat the 60s budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_without_network_fails_with_actionable_error() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let params = ConnectParams {
+            host: "127.0.0.1".into(),
+            // RFC 5737 TEST-NET-1 port 1: nothing listens; connect refused/timeout.
+            port: 1,
+            username: "nobody".into(),
+            auth: crate::config::AuthChoice::Password {
+                password: crate::config::SecretValue::new("x".to_string()),
+            },
+            term: "xterm-256color".into(),
+            keepalive_seconds: 0,
+            timeouts: ConnectTimeouts {
+                connect: Duration::from_secs(5),
+                auth: Duration::from_secs(5),
+                host_key_decision: Duration::from_secs(5),
+            },
+            known_hosts_path: std::path::PathBuf::from("/nonexistent/known_hosts"),
+            host_key_prompt: Arc::new(crate::config::RejectUnknownHostKeys),
+        };
+        let error = Session::open(params, SessionOptions::default(), tx)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, SshError::ConnectFailed { .. }),
+            "got {error:?}"
+        );
+        let mut saw_failed = false;
+        let mut saw_closed = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                SessionEvent::Status(SessionStatus::Failed { .. }) => saw_failed = true,
+                SessionEvent::Status(SessionStatus::Closed { .. }) => saw_closed = true,
+                _ => {}
+            }
+        }
+        assert!(saw_failed && saw_closed, "terminal statuses emitted");
     }
 }

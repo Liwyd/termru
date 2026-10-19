@@ -34,7 +34,10 @@ impl Workspaces<'_> {
     pub fn list(&self) -> Result<Vec<WorkspaceSummary>, StoreError> {
         self.store.with_conn(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, updated_at FROM workspaces ORDER BY updated_at DESC")
+                .prepare(
+                    "SELECT id, name, updated_at FROM workspaces \
+                     ORDER BY updated_at DESC, id",
+                )
                 .map_err(StoreError::Sqlite)?;
             let rows = stmt
                 .query_map([], row_summary)
