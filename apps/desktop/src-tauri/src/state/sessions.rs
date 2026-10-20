@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use termru_core::ids::HostId;
 use termru_ssh::{
@@ -36,7 +36,7 @@ const MAX_RECONNECT_CYCLES: u32 = 5;
 const STABLE_READY: Duration = Duration::from_secs(30);
 
 /// What the frontend receives on the per-session channel.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUpdate {
     Status { status: SessionStatusDto },
@@ -45,7 +45,7 @@ pub enum SessionUpdate {
 }
 
 /// Serde-friendly session status (mirrors `termru_ssh::SessionStatus`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionStatusDto {
     Connecting,
@@ -71,7 +71,7 @@ impl SessionStatusDto {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategoryDto {
     Auth,
@@ -368,7 +368,10 @@ fn should_auto_reconnect(
 }
 
 /// Spawns the background connection task for a registered session id.
-pub(crate) fn spawn_connection(
+///
+/// Public so the app-layer end-to-end test can drive a real connection
+/// through the same code path the Tauri commands use.
+pub fn spawn_connection(
     manager: Arc<SessionManager>,
     store: Arc<Store>,
     id: String,

@@ -5,7 +5,10 @@ mod state;
 use tauri::Manager;
 
 pub use app_error::CommandError;
-pub use state::{AppState, HostKeyPrompts, SessionManager};
+pub use state::sessions::spawn_connection;
+pub use state::{
+    AppState, HostKeyPrompts, SessionInfo, SessionManager, SessionStatusDto, SessionUpdate,
+};
 
 use tracing_subscriber::EnvFilter;
 
