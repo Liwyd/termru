@@ -7,8 +7,8 @@
 //! (never trust by default).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -52,7 +52,11 @@ impl PendingHostKeys {
     pub fn register(
         &self,
         request: HostKeyPromptRequest,
-    ) -> (String, HostKeyPromptMessage, tokio::sync::oneshot::Receiver<bool>) {
+    ) -> (
+        String,
+        HostKeyPromptMessage,
+        tokio::sync::oneshot::Receiver<bool>,
+    ) {
         let seq = self.next.fetch_add(1, Ordering::Relaxed);
         let id = format!("hk{seq}");
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -77,7 +81,8 @@ impl PendingHostKeys {
     /// `false` — a stale answer can never grant trust.
     pub fn resolve(&self, id: &str, trust: bool) -> bool {
         match self.lock().remove(id) {
-            Some((_, sender)) => sender.send(trust).unwrap_or(false),
+            // `send` fails only when the waiter is gone (timeout/closed).
+            Some((_, sender)) => sender.send(trust).is_ok(),
             None => false,
         }
     }
@@ -164,10 +169,7 @@ mod tests {
         let pending = PendingHostKeys::new();
         let (id, _, rx) = pending.register(sample_request("b"));
         assert!(pending.resolve(&id, true));
-        assert!(
-            !pending.resolve(&id, false),
-            "second answer has no waiter"
-        );
+        assert!(!pending.resolve(&id, false), "second answer has no waiter");
         assert!(futures_block(rx).unwrap_or(false));
     }
 
@@ -193,7 +195,7 @@ mod tests {
     #[test]
     fn message_serializes_prompt_state_for_frontend() {
         let pending = PendingHostKeys::new();
-        let (_, message, _rx) = pending.register(sample_request("x"));
+        let (_, message, _rx) = pending.register(sample_request("example.test"));
         let json = serde_json::to_string(&message).unwrap();
         assert!(json.contains("\"state\":\"unknown\""));
         assert!(json.contains("example.test"));

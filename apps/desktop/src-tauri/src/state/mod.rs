@@ -1,5 +1,5 @@
 mod host_keys;
-mod sessions;
+pub(crate) mod sessions;
 
 pub use host_keys::HostKeyPrompts;
 pub use sessions::{SessionInfo, SessionManager, SessionStatusDto, SessionUpdate};

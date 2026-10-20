@@ -1,61 +1,173 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
+  import { hosts } from './lib/stores/hosts.svelte';
+  import { prefs } from './lib/stores/prefs.svelte';
+  import { sessions } from './lib/stores/sessions.svelte';
+  import ConnectDialog from './lib/components/ConnectDialog.svelte';
+  import HostEditor from './lib/components/HostEditor.svelte';
+  import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
+  import Sidebar from './lib/components/Sidebar.svelte';
+  import TabBar from './lib/components/TabBar.svelte';
+  import Terminal from './lib/components/Terminal.svelte';
+  import Toasts from './lib/components/Toasts.svelte';
+  import type { Host, SessionSecrets } from './lib/types';
 
-  interface AppInfo {
-    name: string;
-    version: string;
+  let pendingHost = $state<Host | null>(null);
+
+  // Apply the preferred theme to the document (design tokens follow it).
+  $effect(() => {
+    const theme = prefs.prefs.theme;
+    document.documentElement.dataset.theme = theme === 'system' ? '' : theme;
+  });
+
+  onMount(() => {
+    void hosts.load();
+    void prefs.load();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key === 'Tab') {
+        event.preventDefault();
+        sessions.cycleActive(event.shiftKey ? -1 : 1);
+      }
+      if (event.ctrlKey && event.key === 'w') {
+        const active = sessions.active;
+        if (active) {
+          event.preventDefault();
+          void sessions.close(active);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
+
+  /** Hosts that need a secret prompt before the connection can start. */
+  function requestConnect(host: Host): void {
+    if (host.auth.type === 'agent') {
+      openTab(host, {});
+      return;
+    }
+    pendingHost = host;
   }
 
-  let info = $state<AppInfo | null>(null);
-  let ipcError = $state<string | null>(null);
-
-  onMount(async () => {
-    try {
-      info = await invoke<AppInfo>('app_info');
-    } catch (err) {
-      ipcError = String(err);
-    }
-  });
+  function openTab(host: Host, secrets: SessionSecrets): void {
+    sessions.open(host, secrets);
+    pendingHost = null;
+  }
 </script>
 
-<main class="shell">
-  {#if ipcError}
-    <p class="error" role="alert">IPC error: {ipcError}</p>
-  {:else if info}
-    <h1>{info.name}</h1>
-    <p class="muted">v{info.version} — connection manager coming in Phase 5.</p>
-  {:else}
-    <p class="muted">Starting…</p>
-  {/if}
-</main>
+<div class="app">
+  <Sidebar onconnect={requestConnect} />
+
+  <main>
+    <div class="tabbar" role="tablist" aria-label="Open sessions">
+      {#each sessions.tabs as tab (tab.id)}
+        <TabBar {tab} active={tab.id === sessions.activeId} />
+      {/each}
+    </div>
+
+    <div class="content">
+      {#if sessions.tabs.length === 0}
+        <div class="empty">
+          <h1>Termru</h1>
+          <p>Select a host on the left to start a terminal session.</p>
+        </div>
+      {:else}
+        {#each sessions.tabs as tab (tab.id)}
+          <div class="pane" class:hidden={tab.id !== sessions.activeId}>
+            <Terminal {tab} />
+          </div>
+        {/each}
+      {/if}
+    </div>
+  </main>
+</div>
+
+{#if pendingHost}
+  <ConnectDialog
+    host={pendingHost}
+    oncancel={() => (pendingHost = null)}
+    onsubmit={(secrets) => {
+      if (pendingHost) openTab(pendingHost, secrets);
+    }}
+  />
+{/if}
+
+<HostEditor />
+<HostKeyDialog />
+<Toasts />
+
+{#if hosts.error}
+  <p class="sr-only" role="status">{hosts.error}</p>
+{/if}
 
 <style>
-  .shell {
+  .app {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+  }
+
+  main {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    align-items: center;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .tabbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.2rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.4rem 0;
+    border-bottom: 1px solid var(--termru-border);
+    background: var(--termru-surface);
+    overflow-x: auto;
+  }
+
+  .content {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+
+  .pane {
+    position: absolute;
+    inset: 0;
+  }
+
+  .pane.hidden {
+    display: none;
+  }
+
+  .empty {
     height: 100%;
-    gap: 0.5rem;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-
-  .muted {
-    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
     color: var(--termru-muted);
-    font-size: 0.875rem;
   }
 
-  .error {
+  .empty h1 {
     margin: 0;
-    color: #f87171;
-    font-size: 0.875rem;
+    font-size: 1.3rem;
+    color: var(--termru-fg);
+  }
+
+  .empty p {
+    margin: 0;
+    font-size: 0.85rem;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
 </style>

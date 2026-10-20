@@ -286,7 +286,9 @@ impl SessionManager {
     /// Internal cleanup (frontend channel gone): tolerates a missing entry
     /// so races with `close` never error.
     async fn close_now(&self, id: &str) {
-        if let Some(entry) = self.lock().remove(id) {
+        // The lock guard must be released before awaiting.
+        let entry = { self.lock().remove(id) };
+        if let Some(entry) = entry {
             let _ = entry.cancel.send(true);
             if let Some(session) = entry.session {
                 let _ = session.close().await;
@@ -379,7 +381,6 @@ pub(crate) fn spawn_connection(
         let mut ever_ready = false;
         let mut cycles: u32 = 0;
         let mut ready_since: Option<Instant> = None;
-        let mut cancel = cancel;
 
         loop {
             if *cancel.borrow() {
@@ -434,6 +435,7 @@ pub(crate) fn spawn_connection(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn pump(
     id: &str,
     manager: &SessionManager,
@@ -570,7 +572,7 @@ mod tests {
             keepalive_seconds: 0,
             timeouts: termru_ssh::ConnectTimeouts::default(),
             known_hosts_path: std::path::PathBuf::from("/dev/null"),
-            host_key_prompt: std::sync::Arc::new(termru_ssh::RejectUnknownHostKeys),
+            host_key_prompt: std::sync::Arc::new(termru_ssh::config::RejectUnknownHostKeys),
         }
     }
 
@@ -631,7 +633,12 @@ mod tests {
         assert!(!should_auto_reconnect(true, auth, 0, false));
         assert!(!should_auto_reconnect(true, None, 0, false));
         // budget exhausted
-        assert!(!should_auto_reconnect(true, network, MAX_RECONNECT_CYCLES, false));
+        assert!(!should_auto_reconnect(
+            true,
+            network,
+            MAX_RECONNECT_CYCLES,
+            false
+        ));
         // user closed
         assert!(!should_auto_reconnect(true, network, 0, true));
     }
@@ -661,10 +668,12 @@ mod tests {
             last_error: "boom".into(),
         };
         assert!(!reconnecting.is_terminal());
-        assert!(SessionStatusDto::Closed {
-            reason: "done".into()
-        }
-        .is_terminal());
+        assert!(
+            SessionStatusDto::Closed {
+                reason: "done".into()
+            }
+            .is_terminal()
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ fn build() -> tauri::Result<tauri::App> {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let store = termru_store::Store::open(&data_dir.join("termru.sqlite"))
-                .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+                .map_err(Box::<dyn std::error::Error>::from)?;
             app.manage(AppState::new(store, handle, data_dir));
             Ok(())
         })

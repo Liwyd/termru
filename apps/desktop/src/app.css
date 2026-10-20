@@ -1,15 +1,51 @@
+/* Design tokens + base styles. Light/dark follow the OS unless the user
+   overrides the theme in preferences. */
+
 :root {
-  color-scheme: dark light;
-  --termru-bg: #0f172a;
-  --termru-fg: #e2e8f0;
-  --termru-muted: #94a3b8;
-  --termru-accent: #38bdf8;
+  color-scheme: light dark;
+
+  --termru-bg: #f8fafc;
+  --termru-surface: #ffffff;
+  --termru-fg: #0f172a;
+  --termru-muted: #64748b;
+  --termru-border: #d8dee9;
+  --termru-accent: #0284c7;
+  --termru-danger: #dc2626;
+  --termru-success: #16a34a;
+
+  --termru-radius: 6px;
+  --termru-radius-lg: 10px;
+
   font-family:
     system-ui,
     -apple-system,
     'Segoe UI',
     Roboto,
     sans-serif;
+}
+
+:root[data-theme='dark'] {
+  --termru-bg: #0f172a;
+  --termru-surface: #111c33;
+  --termru-fg: #e2e8f0;
+  --termru-muted: #94a3b8;
+  --termru-border: #26334d;
+  --termru-accent: #38bdf8;
+  --termru-danger: #f87171;
+  --termru-success: #4ade80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --termru-bg: #0f172a;
+    --termru-surface: #111c33;
+    --termru-fg: #e2e8f0;
+    --termru-muted: #94a3b8;
+    --termru-border: #26334d;
+    --termru-accent: #38bdf8;
+    --termru-danger: #f87171;
+    --termru-success: #4ade80;
+  }
 }
 
 * {
@@ -23,4 +59,46 @@ body,
   margin: 0;
   background: var(--termru-bg);
   color: var(--termru-fg);
+}
+
+button {
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--termru-radius);
+  border: 1px solid var(--termru-border);
+  background: var(--termru-surface);
+  color: var(--termru-fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--termru-accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--termru-accent);
+  border-color: var(--termru-accent);
+  color: #04121f;
+  font-weight: 600;
+}
+
+button.danger {
+  border-color: var(--termru-danger);
+  color: var(--termru-danger);
+}
+
+input,
+select {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--termru-accent);
+  outline-offset: 1px;
 }

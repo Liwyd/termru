@@ -9,15 +9,15 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use tauri::ipc::Channel;
 use tauri::State;
+use tauri::ipc::Channel;
 use termru_core::host::{AuthMethod, Host};
 use termru_core::ids::HostId;
 use termru_ssh::{AuthChoice, ConnectParams, ConnectTimeouts, SecretValue, SessionOptions};
 
 use crate::app_error::CommandError;
-use crate::state::sessions::{spawn_connection, SessionInfo, SessionUpdate};
-use crate::state::AppState;
+use crate::state::sessions::spawn_connection;
+use crate::state::{AppState, SessionInfo, SessionUpdate};
 
 const MAX_DIMENSION: u16 = 500;
 
@@ -34,7 +34,10 @@ impl std::fmt::Debug for SessionSecrets {
         // Never print secret material, even in logs.
         f.debug_struct("SessionSecrets")
             .field("password", &self.password.as_ref().map(|_| "[redacted]"))
-            .field("passphrase", &self.passphrase.as_ref().map(|_| "[redacted]"))
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }
@@ -85,7 +88,7 @@ impl std::fmt::Debug for SessionOpenOptions {
 }
 
 fn validate_geometry(cols: u16, rows: u16) -> Result<(), CommandError> {
-    if cols < 2 || cols > MAX_DIMENSION || rows < 1 || rows > MAX_DIMENSION {
+    if !(2..=MAX_DIMENSION).contains(&cols) || !(1..=MAX_DIMENSION).contains(&rows) {
         return Err(CommandError::new(format!(
             "invalid terminal size {cols}x{rows} (allowed: 2-500 columns, 1-500 rows)"
         )));
@@ -115,15 +118,12 @@ pub(crate) fn build_auth(
                 .identities()
                 .get(*identity_id)?
                 .ok_or_else(|| CommandError::new("identity no longer exists"))?;
-            let key_path = repos
-                .identities()
-                .binding(*identity_id)?
-                .ok_or_else(|| {
-                    CommandError::new(format!(
-                        "identity \"{}\" has no private key bound on this device",
-                        identity.name
-                    ))
-                })?;
+            let key_path = repos.identities().binding(*identity_id)?.ok_or_else(|| {
+                CommandError::new(format!(
+                    "identity \"{}\" has no private key bound on this device",
+                    identity.name
+                ))
+            })?;
             Ok(AuthChoice::PrivateKey {
                 key_path: PathBuf::from(key_path),
                 passphrase: secrets.passphrase.clone().map(SecretValue::new),
@@ -135,11 +135,7 @@ pub(crate) fn build_auth(
     }
 }
 
-fn build_params(
-    state: &AppState,
-    host: &Host,
-    auth: AuthChoice,
-) -> ConnectParams {
+fn build_params(state: &AppState, host: &Host, auth: AuthChoice) -> ConnectParams {
     ConnectParams {
         host: host.address.clone(),
         port: host.port,
@@ -268,10 +264,7 @@ pub async fn session_duplicate(
 }
 
 #[tauri::command]
-pub async fn session_close(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), CommandError> {
+pub async fn session_close(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
     state.sessions.close(&id).await
 }
 
@@ -313,8 +306,8 @@ pub fn host_key_prompt_resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termru_core::ids::IdentityId;
     use termru_core::identity::Identity;
+    use termru_core::ids::IdentityId;
 
     fn temp_store() -> (tempfile::TempDir, termru_store::Store) {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -379,7 +372,11 @@ mod tests {
         });
         let error = build_auth(&missing_identity, &store, &SessionSecrets::default())
             .expect_err("identity must exist");
-        assert!(error.message.contains("no longer exists"), "{}", error.message);
+        assert!(
+            error.message.contains("no longer exists"),
+            "{}",
+            error.message
+        );
 
         let mut identity = Identity::new("default key".into());
         store
@@ -392,7 +389,11 @@ mod tests {
         });
         let error =
             build_auth(&unbound, &store, &SessionSecrets::default()).expect_err("must be bound");
-        assert!(error.message.contains("no private key bound"), "{}", error.message);
+        assert!(
+            error.message.contains("no private key bound"),
+            "{}",
+            error.message
+        );
 
         store
             .repos()
@@ -414,10 +415,7 @@ mod tests {
                 passphrase,
             } => {
                 assert_eq!(key_path, PathBuf::from("/home/user/.ssh/id_ed25519"));
-                assert_eq!(
-                    passphrase.expect("passphrase").expose(),
-                    "open-sesame"
-                );
+                assert_eq!(passphrase.expect("passphrase").expose(), "open-sesame");
             }
             other => panic!("wrong variant: {}", other.method_name()),
         }

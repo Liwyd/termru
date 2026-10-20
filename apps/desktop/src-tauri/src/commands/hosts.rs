@@ -3,8 +3,8 @@
 
 use tauri::State;
 use termru_core::host::Host;
-use termru_core::ids::{HostId, IdentityId};
 use termru_core::identity::Identity;
+use termru_core::ids::{HostId, IdentityId};
 
 use crate::app_error::CommandError;
 use crate::state::AppState;
