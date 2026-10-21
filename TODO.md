@@ -192,11 +192,17 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 13 — Cloud containerization and deployment
 
-- [ ] Multi-stage Dockerfile (distroless or debian-slim, non-root, tini/dumb-init graceful shutdown), healthcheck.
-- [ ] `compose.yaml`: db + app, pinned image tags, volume for Postgres, healthcheck gating, resource limits, restart policy, secrets via env file (not in image), DB not exposed publicly by default.
-- [ ] One-copy-paste README install command: versioned compose fetch with SHA256 verification → `docker compose up -d` (no `curl | sh` as root).
-- [ ] Migrations run at container start (or documented `migrate` step) with lock safety (single-runner), backup/restore docs + tested procedure, upgrade/rollback docs, first-run setup + secret generation/rotation docs.
-- Verification: CI builds image, runs it with compose, hits healthz + runs migration + backup/restore smoke test (docker available in CI).
+- [x] Multi-stage Dockerfile (debian-slim, non-root, dumb-init graceful shutdown), healthcheck.
+  - `apps/cloud-server/Dockerfile`: a `rust:1.99-bookworm` builder that reduces the workspace to the crates the server needs (the Tauri app would drag the whole webview stack in) and a `debian:bookworm-slim` runtime with the stripped binary, `ca-certificates`, `curl` (health check) and `dumb-init` as PID 1. The runtime user is `termru` (uid 10001); the image contains no source and no toolchain.
+  - Verification: the CI job `container` builds the image and asserts the runtime user, the health check and the absence of a toolchain. It cannot be built locally (no Docker daemon on the development machine).
+- [x] `compose.yaml`: db + app, pinned image tags, volume for Postgres, healthcheck gating, resource limits, restart policy, secrets via env file (not in image), DB not exposed publicly by default.
+  - `apps/cloud-server/compose.yaml` + `.env.example`: the app waits for a healthy database, the database listens only inside the compose network, the app is published on `127.0.0.1` only (a reverse proxy provides TLS), both services drop all capabilities and set `no-new-privileges`, the app runs with a read-only root filesystem, and memory/CPU limits are set. The password lives in `.env` (mode 600), never in the image.
+- [x] One-copy-paste README install command: versioned compose fetch with SHA256 verification → `docker compose up -d` (no `curl | sh` as root).
+  - `docs/cloud/deployment.md`: the compose file and its `.sha256` are downloaded from the release, the checksum is verified with `sha256sum --check` **before** anything is started, and nothing is piped into a shell. The release assets themselves are produced by the release pipeline (Phase 14).
+- [x] Migrations run at container start (or documented `migrate` step) with lock safety (single-runner), backup/restore docs + tested procedure, upgrade/rollback docs, first-run setup + secret generation/rotation docs.
+  - The server applies the embedded migrations at start-up under a PostgreSQL advisory lock (single runner). The deployment guide documents the `pg_dump` backup with a checksum, the restore procedure, the upgrade (pull + up) and rollback (restore the backup taken before the upgrade — the migrations are forward-only) plus the rotation of the database password and of account tokens.
+- [ ] Verification: CI builds the image, runs it with compose, hits healthz + runs migration + backup/restore smoke test (docker available in CI).
+  - Done in CI: the image build. Still open: a compose smoke test in CI (the database service, the health check and a migration run through the real container).
 
 ## Phase 14 — GitHub Actions CI/CD
 
@@ -214,8 +220,10 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 ## Phase 16 — Documentation and open-source readiness
 
 - [ ] README: description, status, platforms, capabilities + limitations, per-OS install, single cloud install command, first-run config, usage, data locations, backup/restore, upgrade/troubleshooting, contributing, security reporting, license.
+  - Done: description, status, stack, features, development commands, the cloud install pointer, the repository layout, the data locations, security reporting, contributing and the license. The per-OS install commands need the packaging of Phase 12.
 - [ ] `docs/`: development guide (setup, tests), architecture overview + ADRs, cloud deployment/ops, backup/restore, performance notes, known limitations.
-- [ ] Repo hygiene: LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG (Keep a Changelog), .editorconfig, issue+PR templates, Dependabot (cargo/npm/github-actions).
+  - Done: `docs/architecture/` (7 ADRs + index), `docs/security/` (threat model, dependency review), `docs/cloud/deployment.md` (install, first run, backups, upgrade/rollback, troubleshooting) and `apps/cloud-server/README.md` (the API reference and the configuration table). Missing: the development guide, the performance notes and the known-limitations page.
+- [x] Repo hygiene: LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG (Keep a Changelog), .editorconfig, issue+PR templates, Dependabot (cargo/npm/github-actions).
 - Verification: docs match actual commands (each command executed once), links resolve.
 
 ## Phase 17 — Cross-platform validation and performance

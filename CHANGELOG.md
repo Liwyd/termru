@@ -17,3 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * SSH integration test suite against a real OpenSSH server.
 * Architecture decision records under `docs/architecture/`.
 * Desktop app scaffold: Tauri 2 + Svelte 5 + Vite 8 + TypeScript 5 + xterm 6.
+* Desktop app: host list and editor, connection and host-key dialogs, tabbed
+  terminal workspace over Tauri channels, command palette, keybinding
+  registry, OS keyring for secrets, file logging and panic hygiene.
+* Self-hosted cloud sync API (`apps/cloud-server`): accounts with argon2id
+  and rotating opaque tokens, device enrollment and revocation, and the
+  revision-based sync protocol (pull/push, tombstones, explicit conflicts,
+  idempotent retries) shared with the desktop client.
+* Container image and `compose.yaml` for the cloud server, with a
+  checksum-verified install command and a backup/restore procedure.
+
+### Changed
+
+* The cloud server uses `tokio-postgres`/`deadpool-postgres` instead of
+  `sqlx`: the `sqlx` facade can not share a workspace with `rusqlite`
+  because both would link the native library `sqlite3` (see ADR 0003).
+* The workspace `dev` profile keeps line tables only (`debug = 1`), so the
+  build artifacts stay small enough for constrained development machines.

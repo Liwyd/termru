@@ -1,0 +1,78 @@
+# Termru cloud server — self-hosted deployment.
+#
+# Copy this file next to a `.env` file (see `.env.example`), then:
+#
+#   docker compose up -d
+#
+# The database is not published to the host: only the app is reachable, and
+# only on the loopback interface. Put a reverse proxy with TLS in front of
+# it before you expose it to the internet.
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-termru}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-termru}
+      # The database only listens inside the compose network.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-termru} -d ${POSTGRES_DB:-termru}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  app:
+    image: ${TERMRU_CLOUD_IMAGE:-ghcr.io/liwyd/termru-cloud}:${TERMRU_CLOUD_VERSION:-0.1.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TERMRU_DATABASE_URL: postgres://${POSTGRES_USER:-termru}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-termru}
+      TERMRU_BIND_ADDR: 0.0.0.0:8787
+      TERMRU_ACCESS_TOKEN_TTL_SECS: ${TERMRU_ACCESS_TOKEN_TTL_SECS:-3600}
+      TERMRU_REFRESH_TOKEN_TTL_SECS: ${TERMRU_REFRESH_TOKEN_TTL_SECS:-2592000}
+      TERMRU_RATE_LIMIT_PER_MINUTE: ${TERMRU_RATE_LIMIT_PER_MINUTE:-120}
+      TERMRU_LOGIN_MAX_FAILURES: ${TERMRU_LOGIN_MAX_FAILURES:-5}
+      TERMRU_LOGIN_LOCKOUT_SECS: ${TERMRU_LOGIN_LOCKOUT_SECS:-900}
+      TERMRU_REQUEST_TIMEOUT_SECS: ${TERMRU_REQUEST_TIMEOUT_SECS:-30}
+      TERMRU_MAX_BODY_BYTES: ${TERMRU_MAX_BODY_BYTES:-4194304}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      # Bound to the loopback interface: a reverse proxy or a tunnel reaches
+      # the server, the internet does not.
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/readyz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+volumes:
+  db-data:

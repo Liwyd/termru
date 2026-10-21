@@ -149,6 +149,34 @@ jobs:
       - name: Compile the desktop binary
         run: cargo build -p termru-desktop
 
+  container:
+    name: Cloud server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The image is built, not published: the release pipeline does that.
+      - name: Build the cloud server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/cloud-server/Dockerfile
+          push: false
+          load: true
+          tags: termru-cloud:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect the image
+        run: |
+          docker image inspect termru-cloud:ci --format '{{ .Config.User }} {{ json .Config.Healthcheck }}'
+          # The image must not contain a build toolchain or the sources.
+          docker run --rm --entrypoint /bin/sh termru-cloud:ci -c \
+            'command -v cargo && exit 1 || true; command -v rustc && exit 1 || true; test -x /usr/local/bin/termru-cloud-server'
+
   supply-chain:
     name: Supply chain (deny, secrets)
     runs-on: ubuntu-latest
