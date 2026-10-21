@@ -43,7 +43,9 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Rust tooling: rustfmt config, clippy workspace lints (incl. unwrap/expect warns + allow-in-tests), `.editorconfig`, `.gitignore`, `cargo-deny` config (licenses + advisories).
 - [x] Root scripts for: dev, test, lint, format, typecheck — root `package.json` npm scripts delegating to the `apps/*` workspace (single source of truth; no separate `scripts/` duplicates).
 - [x] Base project files beyond LICENSE: README (stub), CONTRIBUTING, SECURITY (private advisory reporting), CODE_OF_CONDUCT (Contributor Covenant 2.1), CHANGELOG (Keep a Changelog), issue/PR templates (YAML forms), Dependabot config (cargo/npm/github-actions).
-- [ ] CI workflow for PRs: fmt, clippy, tests, tsc/svelte-check, vitest, cargo-deny. → Phase 14.
+- [x] CI workflow for PRs: fmt, clippy (-D warnings), cargo test (workspace, incl. the sshd integration tests), svelte-check + prettier, vitest, vite build, desktop compile check, cargo-deny, gitleaks.
+  - `.github/workflows/ci.yml`: four jobs (rust, frontend, desktop, supply-chain) with cargo/npm caches, least-privilege `contents: read`, concurrency groups. The cloud-server and container jobs arrive with Phase 9/13.
+  - Verification: the workflow is syntactically valid and mirrors the local commands; it runs on GitHub (not verifiable offline).
 - Verification: `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests) green; `npm run lint` (prettier + svelte-check 0 errors), `npm run test` (4 vitest), `npm run build` green; `cargo build -p termru-desktop` links; debug binary smoke-ran against vite dev without fatal output.
 
 ## Phase 3 — Core domain and local persistence
@@ -144,7 +146,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 11 — Security hardening
 
-- [ ] Threat model document (`docs/security/threat-model.md`) covering client, SSH, local storage, cloud API, sync, update, build pipeline, artifacts.
+- [x] Threat model document (`docs/security/threat-model.md`) covering client, SSH, local storage, cloud API, sync, update, build pipeline, artifacts.
+  - Documents the assets, the trust boundaries (webview ↔ Rust ↔ network ↔ OS), the per-surface mitigations, the **residual risks** (TOFU first use, unencrypted local DB, webview XSS, unpinned CI actions, no code signing) and the out-of-scope list.
 - [ ] `cargo deny` (licenses, advisories, duplicates-bans policy), `npm audit` gate in CI, secret scanning (gitleaks) in CI.
 - [ ] SQL injection: parameterized queries only (enforced by code review + tests), authz matrix tests on every endpoint.
 - [ ] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
@@ -212,6 +215,6 @@ Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architectu
 
 Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionManager` (116 workspace tests green, incl. an **app-layer E2E** against a real `sshd`) and the frontend foundation (layout shell, host list/editor, connection + host-key dialogs, xterm view over Tauri `Channel`, tabs with reordering + layout persistence, file logging + panic hygiene; `svelte-check` 0/0, 28 vitest tests, `vite build` green).
 
-**Environment note:** the dev machine ran out of disk (the `target/` tree was lost mid-build). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows.
+**Environment note:** the dev machine is close to full (the `target/` tree is ~6 GB). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows, and prefer `cargo clean -p <crate>` over a full clean.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7: keybindings, palette, search; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11: threat model and security documentation.
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7: keybindings, palette, search; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: dependency review, `npm audit` gate, CI action pinning by SHA; (6) first CI run on GitHub (the pipeline has never executed remotely).
