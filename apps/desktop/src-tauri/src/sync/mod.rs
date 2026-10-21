@@ -9,6 +9,7 @@
 //! SSH engine is never affected by the state of the cloud service.
 
 pub mod client;
+pub mod scheduler;
 pub mod tokens;
 
 use std::sync::{Arc, Mutex};
@@ -212,8 +213,50 @@ impl SyncEngine {
         Ok(())
     }
 
-    /// Runs one sync cycle: push the local changes, then pull the remote ones.
+    /// Runs one sync cycle.
+    ///
+    /// When the access token is expired (or about to expire), the cycle
+    /// refreshes it first; when the server refuses a request, the cycle
+    /// refreshes once and retries. A failure never changes the local data.
     pub async fn run_cycle(&self) -> Result<SyncOutcome, SyncError> {
+        match self.cycle().await {
+            Err(SyncError::Unauthorized(_)) => {
+                let settings = self.settings()?;
+                if settings.server_url.is_empty() {
+                    return Err(SyncError::NotSignedIn);
+                }
+                let Some(tokens) = self.tokens.get() else {
+                    return Err(SyncError::NotSignedIn);
+                };
+                let transport = self.transport_for(&settings.server_url).await?;
+                self.refresh(&transport, &tokens).await?;
+                self.cycle().await
+            }
+            other => other,
+        }
+    }
+
+    /// Exchanges the refresh token for a new token pair and stores it.
+    async fn refresh(
+        &self,
+        transport: &Arc<dyn SyncTransport>,
+        tokens: &AuthResponse,
+    ) -> Result<AuthResponse, SyncError> {
+        let response = transport.refresh(&tokens.refresh_token).await?;
+        self.tokens
+            .set(&response)
+            .map_err(|error| SyncError::Store(error.message))?;
+        Ok(response)
+    }
+
+    /// True when the access token expires within the next minute.
+    fn needs_refresh(&self, tokens: &AuthResponse) -> bool {
+        let now = Utc::now();
+        (tokens.access_expires_at - now).num_seconds() < 60
+    }
+
+    /// One sync cycle: push the local changes, then pull the remote ones.
+    async fn cycle(&self) -> Result<SyncOutcome, SyncError> {
         let settings = self.settings()?;
         if settings.server_url.is_empty() {
             return Err(SyncError::NotSignedIn);
@@ -223,6 +266,11 @@ impl SyncEngine {
         };
 
         let transport = self.transport_for(&settings.server_url).await?;
+        // Refresh before the token expires, so a cycle does not fail on a
+        // token that ran out in the meantime.
+        if self.needs_refresh(&tokens) {
+            self.refresh(&transport, &tokens).await?;
+        }
         let mut outcome = SyncOutcome::default();
 
         // --- push ---------------------------------------------------------
@@ -432,6 +480,10 @@ mod tests {
         pull_since: Mutex<Vec<i64>>,
         pull_page: Mutex<PullResponse>,
         accepted: Mutex<Vec<(uuid::Uuid, i64)>>,
+        /// How often the client refreshed the token pair.
+        refreshes: Mutex<usize>,
+        /// Refuse the next pull with "unauthorized".
+        refuse_next_pull: Mutex<bool>,
     }
 
     impl FakeTransport {
@@ -446,6 +498,8 @@ mod tests {
                     server_time: Utc::now(),
                 }),
                 accepted: Mutex::new(Vec::new()),
+                refreshes: Mutex::new(0),
+                refuse_next_pull: Mutex::new(false),
             }
         }
     }
@@ -487,7 +541,15 @@ mod tests {
         }
 
         async fn refresh(&self, _refresh_token: &str) -> Result<AuthResponse, SyncError> {
-            Err(SyncError::NotSignedIn)
+            *self.refreshes.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+            Ok(AuthResponse {
+                user_id: uuid::Uuid::nil(),
+                device_id: uuid::Uuid::nil(),
+                access_token: "access-2".to_string(),
+                refresh_token: "refresh-2".to_string(),
+                access_expires_at: Utc::now() + chrono::Duration::hours(1),
+                refresh_expires_at: Utc::now() + chrono::Duration::days(30),
+            })
         }
 
         async fn pull(
@@ -496,6 +558,15 @@ mod tests {
             since: i64,
             _limit: i64,
         ) -> Result<PullResponse, SyncError> {
+            let mut refuse = self
+                .refuse_next_pull
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *refuse {
+                *refuse = false;
+                return Err(SyncError::Unauthorized("token expired".to_string()));
+            }
+            drop(refuse);
             self.pull_since
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -572,8 +643,8 @@ mod tests {
             device_id: uuid::Uuid::nil(),
             access_token: "access".to_string(),
             refresh_token: "refresh".to_string(),
-            access_expires_at: Utc::now(),
-            refresh_expires_at: Utc::now(),
+            access_expires_at: Utc::now() + chrono::Duration::hours(1),
+            refresh_expires_at: Utc::now() + chrono::Duration::days(30),
         }
     }
 
@@ -909,6 +980,133 @@ mod tests {
         ))
         .expect_err("must be refused");
         assert!(error.to_string().contains("https"));
+    }
+
+    #[test]
+    fn an_expired_access_token_is_refreshed_before_the_cycle() {
+        let transport = Arc::new(FakeTransport::new());
+        let (_dir, store, engine, tokens) = engine_with(transport.clone());
+        configure(&store);
+
+        // A token pair that has already run out.
+        let mut expired = signed_in_tokens();
+        expired.access_expires_at = Utc::now() - chrono::Duration::minutes(1);
+        tokens.set(&expired).expect("store the tokens");
+
+        block_on(engine.run_cycle()).expect("the cycle must succeed");
+        assert_eq!(
+            *transport
+                .refreshes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            1,
+            "the token must be refreshed before the cycle"
+        );
+    }
+
+    #[test]
+    fn a_refused_request_refreshes_the_token_and_retries_once() {
+        let transport = Arc::new(FakeTransport::new());
+        let (_dir, store, engine, tokens) = engine_with(transport.clone());
+        configure(&store);
+        tokens.set(&signed_in_tokens()).expect("store the tokens");
+
+        // The first pull is refused, the second one works.
+        *transport
+            .refuse_next_pull
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = true;
+
+        block_on(engine.run_cycle()).expect("the cycle must succeed");
+        assert_eq!(
+            *transport
+                .refreshes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            1
+        );
+        let pulls = transport
+            .pull_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(pulls.len(), 1, "the cycle is retried exactly once");
+    }
+
+    #[test]
+    fn a_refused_request_without_a_valid_refresh_token_fails() {
+        struct AlwaysRefusing;
+        #[async_trait]
+        impl SyncTransport for AlwaysRefusing {
+            async fn register(
+                &self,
+                _email: &str,
+                _password: &str,
+                _device_id: &str,
+                _device_name: &str,
+            ) -> Result<AuthResponse, SyncError> {
+                Err(SyncError::Unauthorized("no".to_string()))
+            }
+
+            async fn sign_in(
+                &self,
+                _email: &str,
+                _password: &str,
+                _device_id: &str,
+                _device_name: &str,
+            ) -> Result<AuthResponse, SyncError> {
+                Err(SyncError::Unauthorized("no".to_string()))
+            }
+
+            async fn refresh(&self, _refresh_token: &str) -> Result<AuthResponse, SyncError> {
+                Err(SyncError::Unauthorized("no".to_string()))
+            }
+
+            async fn pull(
+                &self,
+                _access_token: &str,
+                _since: i64,
+                _limit: i64,
+            ) -> Result<PullResponse, SyncError> {
+                Err(SyncError::Unauthorized("token expired".to_string()))
+            }
+
+            async fn push(
+                &self,
+                _access_token: &str,
+                _request: PushRequest,
+            ) -> Result<PushResponse, SyncError> {
+                Err(SyncError::Unauthorized("token expired".to_string()))
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(Store::open(&dir.path().join("sync.sqlite")).expect("store"));
+        let tokens = Arc::new(MemoryTokens::new());
+        tokens.set(&signed_in_tokens()).expect("store the tokens");
+        let engine = SyncEngine::with_transport(store.clone(), Arc::new(AlwaysRefusing), tokens);
+        let mut prefs = store.repos().prefs().device_prefs().expect("prefs");
+        prefs.sync_url = "https://sync.example.com".to_string();
+        store
+            .repos()
+            .prefs()
+            .set_device_prefs(&prefs)
+            .expect("store the prefs");
+
+        let error = block_on(engine.run_cycle()).expect_err("the cycle must fail");
+        assert!(matches!(error, SyncError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn the_background_scheduler_stops_on_request() {
+        let transport = Arc::new(FakeTransport::new());
+        let (_dir, store, engine, _tokens) = engine_with(transport);
+        configure(&store);
+
+        // A long interval: the task must not run a cycle before it is asked
+        // to stop.
+        let scheduler =
+            crate::sync::scheduler::spawn(Arc::new(engine), std::time::Duration::from_secs(3600));
+        scheduler.shutdown();
     }
 
     #[test]

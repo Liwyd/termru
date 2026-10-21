@@ -108,9 +108,19 @@ impl Drop for TestServer {
         let database = self.database.clone();
         let admin_url = self.admin_url.clone();
         self.pool.close();
-        let handle = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = handle {
-            handle.spawn(async move {
+
+        // The drop has to finish before the process moves on: a task that is
+        // spawned on the test runtime would never run (the runtime is gone
+        // when the test ends), and every leaked database would eat disk.
+        // A separate thread with its own runtime avoids both problems.
+        let _ = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async move {
                 if let Some(admin) = connect_admin(&admin_url).await {
                     let _ = admin
                         .execute(
@@ -120,7 +130,8 @@ impl Drop for TestServer {
                         .await;
                 }
             });
-        }
+        })
+        .join();
     }
 }
 

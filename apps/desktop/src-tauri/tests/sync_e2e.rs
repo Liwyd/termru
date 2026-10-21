@@ -34,12 +34,34 @@ use uuid::Uuid;
 struct Server {
     child: Child,
     url: String,
+    database: String,
+    admin_url: Option<String>,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+
+        // The test database must not survive the test: a leaked database
+        // would eat disk on every run.
+        if let Some(admin_url) = &self.admin_url {
+            let database = self.database.clone();
+            let admin_url = admin_url.clone();
+            let _ = std::thread::spawn(move || {
+                let status = Command::new("psql")
+                    .arg(&admin_url)
+                    .arg("-c")
+                    .arg(format!(
+                        r#"DROP DATABASE IF EXISTS "{database}" WITH (FORCE)"#
+                    ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                let _ = status;
+            })
+            .join();
+        }
     }
 }
 
@@ -92,6 +114,8 @@ async fn start_server(admin_url: &str) -> Option<Server> {
     let server = Server {
         child,
         url: format!("http://127.0.0.1:{port}"),
+        database,
+        admin_url: Some(admin_url.to_string()),
     };
 
     // Wait for the readiness probe.

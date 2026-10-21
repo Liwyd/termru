@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent retries) shared with the desktop client.
 * Container image and `compose.yaml` for the cloud server, with a
   checksum-verified install command and a backup/restore procedure.
+* Automatic background sync: the app syncs every few minutes on its own,
+  refreshes the access token before it expires and retries a failure with a
+  bounded backoff.
 * Desktop sync client: sign in to a sync server, push and pull the host
   configuration, and resolve conflicts explicitly (keep the local or take the
   server copy). The tokens stay in the OS credential store; a secret is never

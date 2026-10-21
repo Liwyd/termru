@@ -30,6 +30,7 @@ pub fn run() {
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = handle.try_state::<AppState>() {
+                state.sync_scheduler.shutdown();
                 tauri::async_runtime::block_on(state.sessions.shutdown());
             }
         }
