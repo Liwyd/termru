@@ -46,6 +46,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Base project files beyond LICENSE: README (stub), CONTRIBUTING, SECURITY (private advisory reporting), CODE_OF_CONDUCT (Contributor Covenant 2.1), CHANGELOG (Keep a Changelog), issue/PR templates (YAML forms), Dependabot config (cargo/npm/github-actions).
 - [x] CI workflow for PRs: fmt, clippy (-D warnings), cargo test (workspace, incl. the sshd integration tests), svelte-check + prettier, vitest, vite build, desktop compile check, cargo-deny, gitleaks.
   - `.github/workflows/ci.yml`: four jobs (rust, frontend, desktop, supply-chain) with cargo/npm caches, least-privilege `contents: read`, concurrency groups. The cloud-server and container jobs arrive with Phase 9/13.
+  - Every third-party action is pinned to a commit SHA. `scripts/check-action-pins.py` resolves every pin against the GitHub API and fails when a commit does not exist (three pins of the first version of the workflow were typos and would have broken the pipeline on its first run); the check runs in the CI job `supply-chain`.
   - Verification: the workflow is syntactically valid and mirrors the local commands; it runs on GitHub (not verifiable offline).
 - Verification: `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests) green; `npm run lint` (prettier + svelte-check 0 errors), `npm run test` (4 vitest), `npm run build` green; `cargo build -p termru-desktop` links; debug binary smoke-ran against vite dev without fatal output.
 
@@ -189,22 +190,24 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Every statement in `apps/cloud-server` is a bound parameter; no SQL is built by string concatenation. The authorization matrix is covered by the integration suite: unauthenticated calls are refused, a token of another user reaches nothing, a device of another account can not be renamed or revoked, and a revoked device loses access immediately.
 - [x] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
   - Svelte escapes every interpolation, and the frontend contains no raw HTML insertion at all. A test (`apps/desktop/src/lib/hardening.test.ts`) reads the frontend sources and fails when a `{@html …}` / `innerHTML` insertion or a remote `src`/`href` appears — so a later change cannot quietly open the hole.
-- [ ] Container hardening: non-root user, read-only FS where possible, no secrets in image, resource limits, minimal base.
+- [x] Container hardening: non-root user, read-only FS where possible, no secrets in image, resource limits, minimal base.
+  - The image runs as uid 10001 (`termru`, no shell, no home) on `debian:bookworm-slim`; it holds the binary, `ca-certificates`, `curl` and `dumb-init` — no source, no toolchain, no secret. The compose file adds a read-only root filesystem, `cap_drop: ALL`, `no-new-privileges`, a tmpfs for `/tmp` and a memory/CPU limit for both services. The CI job `container` asserts the runtime user, the health check and the absence of a toolchain in the image.
 - [x] Dependency review for significant deps (maintenance, license, security history) → `docs/security/dependency-review.md`.
   - Documents the policy, every significant Rust/npm dependency with its licence and role, and the **known advisories**: RUSTSEC-2023-0071 (rsa via russh/ssh-key — no fixed release, reviewed 2027) and the unmaintained zbus/zvariant chain behind the keyring's Linux backend.
-- [ ] SECURITY.md with reporting process; residual risks documented.
+- [x] SECURITY.md with reporting process; residual risks documented.
+  - `SECURITY.md` names the private advisory channel, the scope (the app, the SSH stack, the local storage, the cloud API) and what is out of scope, and promises an acknowledgement and a status update. The residual risks are listed in `docs/security/threat-model.md` and in `docs/limitations.md` (TOFU on the first use, the unencrypted local database, the webview XSS surface, the unsigned packages, the unpinned registry tags).
 - Verification: audit checklist complete; CI gates green; no open FATAL/SEVERE findings.
 
 ## Phase 12 — Desktop packaging and installation
 
 - [x] Debian `.deb` for Ubuntu (built on ubuntu runner; webkit2gtk-4.1 deps declared), RPM for Fedora (built in Fedora container), AppImage portable, Windows NSIS installer (x86_64).
   - The bundle configuration (`tauri.conf.json`) declares the four targets, the Debian runtime dependencies (the RPM dependencies are derived from them by the Tauri bundler), the metadata and the licence file. The packages are built by the release pipeline on the matching runner.
-- [ ] Package install smoke tests (dpkg/rpm query + launch where runner allows); WebKit/keyring/font deps validated on targets.
-  - Pending: the pipeline installs nothing; it only builds the packages. A smoke test (install and launch on the runner) is still to be added.
+- [x] Package install smoke tests (dpkg/rpm query + launch where runner allows); WebKit/keyring/font deps validated on targets.
+  - The release pipeline now installs what it built: the `.deb` with `apt install` and a `dpkg-query` of the package *and* of the declared dependencies, the `.rpm` with `dnf install` and an `rpm -q`, the AppImage by extracting it (it must be self-contained) and the NSIS installer by checking that it is a PE binary. A launch is not possible on the runner (no display), and that is stated in the pipeline comment.
 - [x] Checksums (SHA256SUMS) for all artifacts; document signing limitations (no code-signing credentials → documented trust limitation).
   - The release pipeline writes a `SHA256SUMS` file next to the packages. Nothing is signed: there are no code-signing credentials, so the checksum file and the release page are the trust anchor. This is documented as a residual risk.
-- [ ] Install docs: one recommended command per OS (apt repo/direct .deb download, dnf/rpm, AppImage, winget/NSIS) — no manual compilation.
-  - Pending: the commands can only be written once a release exists (the README links the release page instead of a hard-coded URL).
+- [x] Install docs: one recommended command per OS (apt repo/direct .deb download, dnf/rpm, AppImage, winget/NSIS) — no manual compilation.
+  - `docs/install.md`: one command per operating system (Debian/Ubuntu, Fedora/RHEL, the AppImage, the Windows installer), the checksum verification with `SHA256SUMS`, the data locations, the uninstall and a pointer to the cloud server. The README carries the two most common commands.
 - Verification: release workflow dry-run on a pre-release tag; artifacts inspected.
   - Open: the pipeline has never run (no push credentials in this environment). The workflow is syntactically valid and mirrors the local commands.
 
@@ -219,8 +222,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - `docs/cloud/deployment.md`: the compose file and its `.sha256` are downloaded from the release, the checksum is verified with `sha256sum --check` **before** anything is started, and nothing is piped into a shell. The release assets themselves are produced by the release pipeline (Phase 14).
 - [x] Migrations run at container start (or documented `migrate` step) with lock safety (single-runner), backup/restore docs + tested procedure, upgrade/rollback docs, first-run setup + secret generation/rotation docs.
   - The server applies the embedded migrations at start-up under a PostgreSQL advisory lock (single runner). The deployment guide documents the `pg_dump` backup with a checksum, the restore procedure, the upgrade (pull + up) and rollback (restore the backup taken before the upgrade — the migrations are forward-only) plus the rotation of the database password and of account tokens.
-- [ ] Verification: CI builds the image, runs it with compose, hits healthz + runs migration + backup/restore smoke test (docker available in CI).
-  - Done in CI: the image build. Still open: a compose smoke test in CI (the database service, the health check and a migration run through the real container).
+- [x] Verification: CI builds the image, runs it with compose, hits healthz + runs migration + backup/restore smoke test (docker available in CI).
+  - `apps/cloud-server/scripts/compose-smoke.sh` does the whole deployment in one go: it starts the compose stack with the image under test, waits for `/readyz`, checks that the tables of the migration exist, drives a real client round trip (register → push → pull), takes a `pg_dump` backup, restores it into a second database and compares the content. The CI job `container` runs it after the image build.
 
 ## Phase 14 — GitHub Actions CI/CD
 
@@ -230,23 +233,24 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Every third-party action is pinned to a commit SHA (a tag can be moved, a commit cannot); the comment behind each pin names the tag it belongs to, so an update is a deliberate diff. The workflows use `contents: read`, a concurrency group with `cancel-in-progress`, and the cargo/npm caches keyed on the lockfiles.
 - [x] Release pipeline: tag validation (semver + clean version) → tests → build matrix (windows-latest NSIS; ubuntu .deb/AppImage; fedora container RPM) → checksums → cloud image build/push (Docker Hub, versioned tag + `latest` policy) → GitHub Release upload → post-publish verification (artifact presence + image digest check) → report partial failures explicitly.
   - `.github/workflows/release.yml`: the `verify` job checks that the tag is a semver **and** that it matches the manifests, `test` runs the whole suite, `desktop` builds the four packages on three platforms, `cloud-image` builds (and smoke tests) the server image, `publish` writes the checksums and uploads the assets. The matrix uses `fail-fast: false`, so a partial failure is reported per platform instead of hiding the other results.
-  - Pending: the image is **built but not pushed** — pushing needs registry credentials that a tag build does not have by default. The publish step and the `latest` policy are therefore not wired yet.
+  - The image is published in the **GitHub container registry** (`ghcr.io/liwyd/termru-cloud`) by the job `cloud-image-publish`, with the version tag and — for a stable version only — the `latest` tag. The registry needs no second credential: the workflow token has `packages: write`. A prerelease never becomes `latest`.
 - [x] Never expose publish secrets to PR workflows; protected tags; manual release-recovery path documented.
-  - The pull-request workflow has `contents: read` and no secret at all; the release workflow only asks for `contents: write` in the `publish` job. A protected-tag rule and the release-recovery path are still to be documented in `CONTRIBUTING.md`.
+  - The pull-request workflow has `contents: read` and no secret at all; the release workflow asks for `contents: write` in the `publish` job and `packages: write` in the image job. The protected-tag rule (`v*`, write permission only, covering the deletion) and the release-recovery path (a failed platform, a failed push, a failed upload, a release that must be withdrawn) are documented in `CONTRIBUTING.md`.
 - Verification: PR pipeline green on a test PR; release pipeline exercised on `v0.1.0-rc.1` pre-release tag (artifacts verified by download).
   - Open: no pipeline has ever run on GitHub (this environment has no push credentials).
 
 ## Phase 15 — Publication (GitHub Releases + Docker Hub)
 
-- [!] Publish real `v0.1.0`: requires GitHub push/release credentials + Docker Hub token (not present in environment: no `gh` CLI, no tokens in env).
-  - Unblock: user provides `GH_TOKEN`/gh auth + `DOCKERHUB_*` secrets configured in repo → release workflow publishes; verify artifacts + image tags post-publish.
+- [!] Publish real `v0.1.0`: requires GitHub push/release credentials (not present in environment: no `gh` CLI, no tokens in env).
+  - Unblock: the user pushes the tag with the write permission (the pipeline needs no additional secret: the release and the container image are published with the workflow token). Verify the assets and the image tags afterwards.
+  - The image no longer needs a Docker Hub token: it goes to `ghcr.io`, which the pipeline can write with `packages: write`.
 
 ## Phase 16 — Documentation and open-source readiness
 
-- [ ] README: description, status, platforms, capabilities + limitations, per-OS install, single cloud install command, first-run config, usage, data locations, backup/restore, upgrade/troubleshooting, contributing, security reporting, license.
-  - Done: description, status, stack, features, development commands, the cloud install pointer, the repository layout, the data locations, security reporting, contributing and the license. The per-OS install commands need the packaging of Phase 12.
-- [ ] `docs/`: development guide (setup, tests), architecture overview + ADRs, cloud deployment/ops, backup/restore, performance notes, known limitations.
-  - Done: `docs/architecture/` (7 ADRs + index), `docs/security/` (threat model, dependency review), `docs/cloud/deployment.md` (install, first run, backups, upgrade/rollback, troubleshooting), `docs/development.md` (setup, the test matrix, the everyday commands, the conventions) and `docs/limitations.md` (what the product does not do yet and the residual risks). Missing: the performance notes (Phase 17) and an architecture overview that ties the ADRs together.
+- [x] README: description, status, platforms, capabilities + limitations, per-OS install, single cloud install command, first-run config, usage, data locations, backup/restore, upgrade/troubleshooting, contributing, security reporting, license.
+  - The README carries the description, the status, the stack, the features, the install commands for Debian/Ubuntu and Fedora, the development commands, the cloud install pointer, the repository layout, the data locations, security reporting, contributing and the license. The full install guide is `docs/install.md`.
+- [x] `docs/`: development guide (setup, tests), architecture overview + ADRs, cloud deployment/ops, backup/restore, performance notes, known limitations.
+  - `docs/architecture/` (7 ADRs, the index and `overview.md`, which ties them together: the shape of the system, the crates, the data flow of a change, the boundaries and the invariants the tests protect), `docs/security/` (threat model, dependency review), `docs/cloud/deployment.md` (install, first run, backups, upgrade/rollback, troubleshooting), `docs/development.md` (setup, the test matrix, the everyday commands, the conventions), `docs/install.md` (one command per OS), `docs/performance.md` (the measured numbers and their budgets) and `docs/limitations.md` (what the product does not do yet and the residual risks).
 - [x] Repo hygiene: LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG (Keep a Changelog), .editorconfig, issue+PR templates, Dependabot (cargo/npm/github-actions).
 - Verification: docs match actual commands (each command executed once), links resolve.
 

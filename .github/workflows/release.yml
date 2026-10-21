@@ -39,6 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      image_tags: ${{ steps.version.outputs.image_tags }}
+    env:
+      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/termru-cloud
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -64,6 +68,25 @@ jobs:
             fi
           done
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # A prerelease never becomes the 'latest' tag: the stable tag
+          # points at the last stable release only.
+          if printf '%s' "$version" | grep -q -- '-'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "image_tags<<EOF"
+              echo "$IMAGE_REPO:$version"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "image_tags<<EOF"
+              echo "$IMAGE_REPO:$version"
+              echo "$IMAGE_REPO:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
           echo "the tag $tag is valid"
 
   test:
@@ -93,7 +116,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
 
@@ -148,7 +171,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
 
@@ -178,15 +201,73 @@ jobs:
         working-directory: apps/desktop
         run: npm run tauri build ${{ matrix.args }} -- --ci
 
+      # The bundler writes into the target directory of the cargo workspace.
+      # It is located by searching instead of by a fixed path, so the pipeline
+      # does not depend on where the bundler decides to put the files.
+      - name: Locate the packages
+        id: packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-artifacts
+          find . -path '*/target/release/bundle/*' \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.exe' \) \
+            -exec cp -v {} dist-artifacts/ \;
+          ls -l dist-artifacts
+          test -n "$(ls -A dist-artifacts)" || { echo "no package was built"; exit 1; }
+
+      # The package has to be installable, not only buildable. The smoke
+      # test installs it, queries the package manager and checks the
+      # dependencies the package declares are the ones the system provides.
+      - name: Install and query the package (${{ matrix.label }})
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.label }}" in
+            deb)
+              package="$(ls dist-artifacts/*.deb)"
+              sudo apt-get update
+              sudo apt-get install -y "$package"
+              dpkg-query -W -f='${Package} ${Version}\n' termru
+              # The declared dependencies must be satisfiable on the target.
+              for dependency in libwebkit2gtk-4.1-0 libgtk-3-0; do
+                dpkg-query -W -f='${Package} ${Status}\n' "$dependency"
+              done
+              ;;
+            rpm)
+              package="$(ls dist-artifacts/*.rpm)"
+              sudo dnf install -y "$package"
+              rpm -q termru
+              ;;
+            appimage)
+              appimage="$(ls dist-artifacts/*.AppImage)"
+              chmod +x "$appimage"
+              # The AppImage must be self-contained: it extracts without a
+              # system installation.
+              "$appimage" --appimage-extract >/dev/null
+              test -x squashfs-root/AppRun
+              rm -rf squashfs-root
+              ;;
+          esac
+
+      - name: Check the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist-artifacts/*.exe
+          if (-not $installer) { throw "no NSIS installer was built" }
+          # The installer is an unsigned executable; check that it is a PE
+          # binary and that it is not empty.
+          $bytes = [System.IO.File]::ReadAllBytes($installer.FullName)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "the installer is not a PE binary" }
+          Write-Host "the installer is a PE binary of $($installer.Length) bytes"
+
       - name: Collect the artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.label }}
-          path: |
-            apps/desktop/src-tauri/target/release/bundle/deb/*.deb
-            apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm
-            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+          path: dist-artifacts/*
           if-no-files-found: error
           retention-days: 7
 
@@ -219,9 +300,52 @@ jobs:
           docker run --rm --entrypoint /bin/sh termru-cloud:${{ needs.verify.outputs.version }} -c \
             'test -x /usr/local/bin/termru-cloud-server && /usr/local/bin/termru-cloud-server --help >/dev/null 2>&1 || true'
 
+  cloud-image-publish:
+    name: Publish the cloud server image
+    needs: [verify, test, cloud-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The image is published in the GitHub container registry, so the
+      # pipeline needs no second set of credentials.
+      packages: write
+    env:
+      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/termru-cloud
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to the GitHub container registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/cloud-server/Dockerfile
+          push: true
+          tags: ${{ needs.verify.outputs.image_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify that the image is in the registry
+        run: |
+          set -euo pipefail
+          for tag in ${{ needs.verify.outputs.image_tags }}; do
+            digest="$(docker buildx imagetools inspect "$tag" --format '{{ .Manifest.Digest }}')"
+            test -n "$digest" || { echo "the image $tag has no digest"; exit 1; }
+            echo "$tag -> $digest"
+          done
+
   publish:
     name: Publish the release
-    needs: [verify, test, desktop]
+    needs: [verify, test, desktop, cloud-image-publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -235,6 +359,19 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # The deployment files are released next to the packages: the install
+      # guide downloads the compose file and verifies its checksum before it
+      # starts anything.
+      - name: Add the deployment files
+        run: |
+          set -euo pipefail
+          cp apps/cloud-server/compose.yaml artifacts/compose.yaml
+          # Not '.env.example': the upload action skips hidden files.
+          cp apps/cloud-server/.env.example artifacts/env.example
+          cd artifacts
+          sha256sum compose.yaml > compose.yaml.sha256
+          cat compose.yaml.sha256
 
       - name: Write the checksums
         run: |
@@ -253,5 +390,8 @@ jobs:
       - name: Verify that the release is complete
         run: |
           set -euo pipefail
-          gh release view "${{ needs.verify.outputs.version }}" --json assets --jq '.assets | length' \
+          count="$(gh release view "${{ needs.verify.outputs.version }}" --json assets --jq '.assets | length')" \
             || { echo "the release was not created"; exit 1; }
+          echo "the release holds $count assets"
+          test "$count" -ge 5 || { echo "the release is missing assets"; exit 1; }
+          gh release view "${{ needs.verify.outputs.version }}" --json assets --jq '.assets[].name'

@@ -35,7 +35,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
 
@@ -84,7 +84,7 @@ jobs:
           components: clippy
 
       - name: Cache
-        uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
 
@@ -142,7 +142,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
 
@@ -206,6 +206,19 @@ jobs:
           docker run --rm --entrypoint /bin/sh termru-cloud:ci -c \
             'command -v cargo && exit 1 || true; command -v rustc && exit 1 || true; test -x /usr/local/bin/termru-cloud-server'
 
+      - name: Install the PostgreSQL client (for the backup step)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # The deployment itself: the compose stack is started with the image
+      # under test, the server becomes ready, the migration ran, a client can
+      # register and sync, and the database can be backed up and restored.
+      - name: Compose smoke test
+        env:
+          TERMRU_CLOUD_IMAGE: termru-cloud:ci
+        run: ./apps/cloud-server/scripts/compose-smoke.sh
+
   supply-chain:
     name: Supply chain (deny, secrets)
     runs-on: ubuntu-latest
@@ -215,9 +228,17 @@ jobs:
           fetch-depth: 0
 
       - name: cargo-deny (licenses, advisories, bans)
-        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
 
       - name: gitleaks (secret scanning)
-        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A typo in a commit SHA is only noticed by GitHub when the workflow
+      # runs, which is after the pull request was merged. The check resolves
+      # every pin beforehand.
+      - name: Check the action pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check-action-pins.py

@@ -9,6 +9,22 @@ UI and the optional cloud sync API are implemented and tested; packaging and
 release automation are not finished yet. See [TODO.md](TODO.md) for the
 authoritative plan and the open items.
 
+## Install
+
+```bash
+# Debian / Ubuntu
+curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.0/termru_0.1.0_amd64.deb
+sudo apt install ./termru_0.1.0_amd64.deb
+
+# Fedora
+curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.0/termru-0.1.0-1.x86_64.rpm
+sudo dnf install ./termru-0.1.0-1.x86_64.rpm
+```
+
+Windows, the AppImage and the details are in
+[the install guide](docs/install.md). The packages are not signed: the
+`SHA256SUMS` file of the release is the trust anchor.
+
 ## Stack
 
 * **Desktop shell**: Tauri 2 (Rust) — see [ADR 0001](docs/architecture/0001-desktop-stack.md)
@@ -69,7 +85,7 @@ apps/cloud-server/     Self-hosted sync API (Axum + PostgreSQL)
 crates/termru-core/    Domain models, validation, sync payload types
 crates/termru-store/   SQLite persistence
 crates/termru-ssh/     SSH engine (russh): sessions, known-hosts, reconnect
-docs/architecture/     ADRs (accepted decisions)
+docs/architecture/     ADRs (accepted decisions) and the overview
 docs/cloud/            Cloud deployment and operations
 docs/security/         Threat model and dependency review
 ```
@@ -95,7 +111,9 @@ model and the known residual risks are documented in
 
 ## Documentation
 
+* [Install guide](docs/install.md) — one command per operating system
 * [Development guide](docs/development.md) — setup, tests, commands
+* [Architecture overview](docs/architecture/overview.md) — how the pieces fit together
 * [Architecture decisions](docs/architecture/README.md)
 * [Cloud deployment and operations](docs/cloud/deployment.md)
 * [Known limitations](docs/limitations.md)

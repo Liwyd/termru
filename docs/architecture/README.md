@@ -14,5 +14,9 @@ exact paths.
 | [0006](0006-multi-window-session-ownership.md) | Session ownership: single Rust-side `SessionManager` across windows | Accepted |
 | [0007](0007-licensing.md) | Licensing: Apache-2.0 code, permissive dependency policy | Accepted |
 
+[The architecture overview](overview.md) ties the decisions together: the
+shape of the system, the crates, the data flow of a change and the
+invariants the tests protect.
+
 Conventions: ADRs are immutable once accepted; superseding a decision means
 adding a new ADR and marking the old one *Superseded by NNNN*.
