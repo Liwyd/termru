@@ -24,7 +24,12 @@ export type CommandId =
   | 'view.increaseFont'
   | 'view.decreaseFont'
   | 'sync.open'
-  | 'settings.open';
+  | 'settings.open'
+  | 'pane.splitRight'
+  | 'pane.splitDown'
+  | 'pane.close'
+  | 'pane.next'
+  | 'pane.previous';
 
 export interface Command {
   id: CommandId;
@@ -100,6 +105,21 @@ export const COMMANDS: Command[] = [
   { id: 'view.decreaseFont', title: 'Decrease font size', accelerator: 'Mod+Minus', group: 'View' },
   { id: 'sync.open', title: 'Cloud sync', accelerator: 'Mod+Shift+S', group: 'Sync' },
   { id: 'settings.open', title: 'Settings', accelerator: 'Mod+,', group: 'View' },
+  {
+    id: 'pane.splitRight',
+    title: 'Split the pane to the right',
+    accelerator: 'Mod+Shift+E',
+    group: 'Panes',
+  },
+  {
+    id: 'pane.splitDown',
+    title: 'Split the pane below',
+    accelerator: 'Mod+Shift+O',
+    group: 'Panes',
+  },
+  { id: 'pane.close', title: 'Close the pane', accelerator: 'Mod+Shift+W', group: 'Panes' },
+  { id: 'pane.next', title: 'Next pane', accelerator: 'Mod+Alt+ArrowRight', group: 'Panes' },
+  { id: 'pane.previous', title: 'Previous pane', accelerator: 'Mod+Alt+ArrowLeft', group: 'Panes' },
 ];
 
 /**

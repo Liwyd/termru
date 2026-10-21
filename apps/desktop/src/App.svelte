@@ -23,7 +23,7 @@
   import Sidebar from './lib/components/Sidebar.svelte';
   import SyncPanel from './lib/components/SyncPanel.svelte';
   import TabBar from './lib/components/TabBar.svelte';
-  import Terminal from './lib/components/Terminal.svelte';
+  import SplitView from './lib/components/SplitView.svelte';
   import Toasts from './lib/components/Toasts.svelte';
   import type { Host, SessionSecrets } from './lib/types';
 
@@ -131,6 +131,23 @@
       case 'settings.open':
         settingsOpen = true;
         break;
+      case 'pane.splitRight':
+        sessions.splitActive('columns');
+        break;
+      case 'pane.splitDown':
+        sessions.splitActive('rows');
+        break;
+      case 'pane.close': {
+        const pane = sessions.activePane;
+        if (pane) void sessions.closePane(pane);
+        break;
+      }
+      case 'pane.next':
+        sessions.cyclePane(1);
+        break;
+      case 'pane.previous':
+        sessions.cyclePane(-1);
+        break;
     }
   }
 
@@ -218,7 +235,7 @@
       {:else}
         {#each sessions.tabs as tab (tab.id)}
           <div class="pane" class:hidden={tab.id !== sessions.activeId}>
-            <Terminal {tab} />
+            <SplitView node={tab.root} {tab} />
           </div>
         {/each}
       {/if}

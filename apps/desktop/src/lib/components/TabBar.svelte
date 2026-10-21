@@ -5,6 +5,9 @@
 
   let { tab, active }: { tab: Tab; active: boolean } = $props();
 
+  /** The pane that carries the tab: its status is the status of the tab. */
+  const pane = $derived(sessions.activePaneOf(tab));
+
   let renaming = $state(false);
   let draftTitle = $state('');
   let dragIndex = $state<number | null>(null);
@@ -81,13 +84,16 @@
     </button>
   {/if}
 
-  <StatusBadge status={tab.status} />
+  {#if pane}
+    <StatusBadge status={pane.status} />
+  {/if}
 
   <button
     type="button"
     class="close"
     aria-label={`Duplicate ${tab.title}`}
     title="Duplicate session"
+    disabled={!pane?.sessionId}
     onclick={() => sessions.duplicate(tab)}
   >
     ⧉
@@ -98,7 +104,7 @@
     class="close"
     aria-label={`Move ${tab.title} to a new window`}
     title="Move to a new window"
-    disabled={!tab.sessionId}
+    disabled={!pane?.sessionId}
     onclick={() => void sessions.moveToNewWindow(tab)}
   >
     ↗

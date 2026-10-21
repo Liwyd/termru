@@ -10,10 +10,10 @@
   import { sessions } from '../stores/sessions.svelte';
   import { decodeBase64, encodeUtf8 } from '../terminal/codec';
   import { terminalTheme } from '../terminal/theme';
-  import type { Tab } from '../stores/sessions.svelte';
+  import type { Pane } from '../stores/sessions.svelte';
   import type { SessionUpdate } from '../types';
 
-  let { tab }: { tab: Tab } = $props();
+  let { pane }: { pane: Pane } = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let term = $state<Terminal | null>(null);
@@ -46,7 +46,7 @@
     }
 
     instance.onData((data) => {
-      const sessionId = tab.sessionId;
+      const sessionId = pane.sessionId;
       if (!sessionId) return;
       void api.sessionWrite(sessionId, encodeUtf8(data)).catch(() => {
         // The session ended between the keystroke and the write; the status
@@ -99,22 +99,25 @@
     instance.options.theme = terminalTheme(prefs.isDark);
   });
 
-  // (Re)connect whenever the tab asks for a new connection attempt.
+  // (Re)connect whenever the pane asks for a new connection attempt.
   // `untrack` keeps the effect bound to `generation` only: reading
-  // `tab.sessionId` inside `connect` must not re-trigger it.
+  // `pane.sessionId` inside `connect` must not re-trigger it.
   $effect(() => {
-    const generation = tab.generation;
+    const generation = pane.generation;
     untrack(() => {
       void connect(generation);
     });
   });
 
   async function connect(generation: number): Promise<void> {
+    // An empty pane has no host: there is nothing to connect to.
+    if (!pane.host) return;
+
     // A previous attempt may still own a backend session: close it so the
     // backend never keeps an orphaned session.
-    if (tab.sessionId) {
-      const previous = tab.sessionId;
-      tab.sessionId = null;
+    if (pane.sessionId) {
+      const previous = pane.sessionId;
+      pane.sessionId = null;
       try {
         await api.sessionClose(previous);
       } catch {
@@ -128,35 +131,35 @@
         term?.write(decodeBase64(update.base64));
         return;
       }
-      sessions.applyUpdate(tab, update);
+      sessions.applyUpdate(pane, update);
     };
 
     const geometry = currentGeometry();
     try {
-      if (tab.attachTo) {
+      if (pane.attachTo) {
         // The session lives in another window: attach to it (the backend
         // sends the replay buffer, then the live stream).
-        await api.sessionAttach(tab.attachTo, channel);
-        if (tab.generation !== generation) return;
-        tab.sessionId = tab.attachTo;
+        await api.sessionAttach(pane.attachTo, channel);
+        if (pane.generation !== generation) return;
+        pane.sessionId = pane.attachTo;
         return;
       }
-      const id = tab.duplicateFrom
-        ? await api.sessionDuplicate(tab.duplicateFrom, geometry, channel)
+      const id = pane.duplicateFrom
+        ? await api.sessionDuplicate(pane.duplicateFrom, geometry, channel)
         : await api.sessionOpen(
-            tab.host.id,
-            { cols: geometry.cols, rows: geometry.rows, secrets: tab.secrets },
+            pane.host.id,
+            { cols: geometry.cols, rows: geometry.rows, secrets: pane.secrets },
             channel,
           );
-      if (tab.generation !== generation) {
+      if (pane.generation !== generation) {
         // Superseded by a newer attempt: drop this session immediately.
         void api.sessionClose(id).catch(() => {});
         return;
       }
-      tab.sessionId = id;
+      pane.sessionId = id;
     } catch (err) {
-      if (tab.generation === generation) {
-        sessions.fail(tab, errorMessage(err));
+      if (pane.generation === generation) {
+        sessions.fail(pane, errorMessage(err));
       }
     }
   }
@@ -172,7 +175,7 @@
       if (!fitAddon || !term) return;
       const element = container as HTMLDivElement | undefined;
       if (!element || element.offsetWidth === 0 || element.offsetHeight === 0) {
-        // Hidden tab: nothing to fit (xterm would compute a 0x0 grid).
+        // Hidden pane: nothing to fit (xterm would compute a 0x0 grid).
         return;
       }
       try {
@@ -180,7 +183,7 @@
       } catch {
         return;
       }
-      const sessionId = tab.sessionId;
+      const sessionId = pane.sessionId;
       if (!sessionId) return;
       void api.sessionResize(sessionId, term.cols, term.rows).catch(() => {
         // Resize failures are transient (session closing).
@@ -192,36 +195,36 @@
 <div class="terminal-wrap">
   <div class="terminal" bind:this={container}></div>
 
-  {#if tab.status.state === 'connecting' || tab.status.state === 'authenticating'}
+  {#if pane.status.state === 'connecting' || pane.status.state === 'authenticating'}
     <div class="overlay" role="status">
       <span class="spinner" aria-hidden="true"></span>
-      <span>Connecting to {tab.host.address}…</span>
+      <span>Connecting to {pane.host?.address ?? 'the host'}…</span>
     </div>
-  {:else if tab.status.state === 'reconnecting'}
+  {:else if pane.status.state === 'reconnecting'}
     <div class="overlay" role="status">
       <span class="spinner" aria-hidden="true"></span>
       <span>
-        Reconnecting (attempt {tab.status.attempt}) in {Math.round(tab.status.delay_ms / 1000)}s…
+        Reconnecting (attempt {pane.status.attempt}) in {Math.round(pane.status.delay_ms / 1000)}s…
       </span>
     </div>
-  {:else if tab.awaitingReconnect}
+  {:else if pane.awaitingReconnect}
     <div class="overlay" role="status">
       <span class="spinner" aria-hidden="true"></span>
       <span>Connection lost — retrying…</span>
     </div>
-  {:else if tab.dead}
+  {:else if pane.dead}
     <div class="overlay dead" role="alert">
       <p class="dead-title">
-        {#if tab.exitCode !== null}
-          Process exited with code {tab.exitCode}
+        {#if pane.exitCode !== null}
+          Process exited with code {pane.exitCode}
         {:else}
           Connection closed
         {/if}
       </p>
-      {#if tab.errorMessage}
-        <p class="dead-detail">{tab.errorMessage}</p>
+      {#if pane.errorMessage}
+        <p class="dead-detail">{pane.errorMessage}</p>
       {/if}
-      <button type="button" onclick={() => sessions.retry(tab)}>Reconnect</button>
+      <button type="button" onclick={() => sessions.retry(pane)}>Reconnect</button>
     </div>
   {/if}
 </div>

@@ -340,6 +340,45 @@ describe('desktop UI ↔ Tauri contract', () => {
     expect(prefs?.terminal.cursor_style).toBe('block');
   });
 
+  it('splits a pane and saves the split layout', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    setTimeout(() => console.log('RAW TIMER FIRED', Date.now()), 100);
+    setTimeout(() => console.log('RAW TIMER 750 FIRED', Date.now()), 750);
+
+    // The split command of the registry.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'E',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('No session in this pane');
+    });
+    // The empty pane offers the hosts.
+    expect(target.textContent).toContain('web-1');
+
+    // The layout that is saved holds the split (the save is debounced).
+    await vi.waitFor(
+      () => {
+        const saves = invokeCalls.filter((call) => call.cmd === 'layout_save');
+        const last = saves.pop();
+        const doc = last?.args?.doc as
+          { windows: { tabs: { root: { split?: unknown } }[] }[] } | undefined;
+        const tabs = doc?.windows?.[0]?.tabs ?? [];
+        // The pane that was split is the one that had the focus.
+        expect(tabs.some((tab) => tab.root.split !== undefined)).toBe(true);
+      },
+      { timeout: 3000 },
+    );
+  });
+
   it('binds a key file to an identity with the native picker', async () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('web-1');
