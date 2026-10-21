@@ -68,6 +68,31 @@ pub fn identity_delete(state: State<'_, AppState>, id: IdentityId) -> Result<(),
     Ok(())
 }
 
+/// The device-local key bindings: which key file each identity uses on this
+/// machine. The paths never leave the device (they are not part of the sync
+/// payload), but the user has to see them to know which key an identity
+/// refers to.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityBinding {
+    pub identity_id: IdentityId,
+    pub key_path: String,
+}
+
+#[tauri::command]
+pub fn identity_bindings(state: State<'_, AppState>) -> Result<Vec<IdentityBinding>, CommandError> {
+    let bindings = hosts(&state).identities().bindings()?;
+    let mut out: Vec<IdentityBinding> = bindings
+        .into_iter()
+        .map(|(identity_id, key_path)| IdentityBinding {
+            identity_id,
+            key_path,
+        })
+        .collect();
+    out.sort_by(|a, b| a.identity_id.to_string().cmp(&b.identity_id.to_string()));
+    Ok(out)
+}
+
 /// Binds an identity to a device-local private key path (the key file is
 /// never copied into the database).
 #[tauri::command]

@@ -10,5 +10,13 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',
+    server: {
+      deps: {
+        // The Tauri plugins are externalized by default, and a mock of the
+        // IPC layer does not reach an externalized module. Inlining them
+        // makes the contract test see the real plugin call.
+        inline: ['@tauri-apps/plugin-dialog'],
+      },
+    },
   },
 });

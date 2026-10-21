@@ -3,6 +3,12 @@
   import { toasts } from '../stores/toasts.svelte';
   import type { AuthMethod, Host } from '../types';
 
+  let {
+    onmanageidentities,
+  }: {
+    onmanageidentities: () => void;
+  } = $props();
+
   const AUTH_TYPES: { value: AuthMethod['type']; label: string }[] = [
     { value: 'password', label: 'Password' },
     { value: 'private_key', label: 'Private key' },
@@ -164,6 +170,8 @@
           {#if hosts.identities.length === 0}
             <p class="hint">No identities yet — create one and bind a key file to it.</p>
           {/if}
+          <button type="button" class="link" onclick={onmanageidentities}>Manage identities…</button
+          >
         {/if}
 
         <div class="row">
@@ -268,6 +276,17 @@
     margin: 0;
     font-size: 0.75rem;
     color: var(--termru-muted);
+  }
+
+  .link {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--termru-accent);
+    text-decoration: underline;
+    font-size: 0.78rem;
+    cursor: pointer;
   }
 
   .error {

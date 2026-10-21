@@ -19,6 +19,7 @@ interface InvokeCall {
 }
 
 const invokeCalls: InvokeCall[] = [];
+let identities: unknown[] = [];
 let sessionChannel: { onmessage?: (update: SessionUpdate) => void } | null = null;
 let terminalWrites: Uint8Array[] = [];
 
@@ -55,7 +56,11 @@ vi.mock('@tauri-apps/api/core', () => {
         case 'recent_list':
           return [];
         case 'identity_list':
-          return [];
+          return identities;
+        case 'identity_bindings':
+          return [{ identityId: 'identity-1', keyPath: '/home/user/.ssh/id_ed25519' }];
+        case 'plugin:dialog|open':
+          return '/home/user/.ssh/id_ed25519';
         case 'prefs_get':
           return {
             theme: 'dark',
@@ -158,6 +163,17 @@ describe('desktop UI ↔ Tauri contract', () => {
 
   beforeEach(() => {
     invokeCalls.length = 0;
+    identities = [
+      {
+        id: 'identity-1',
+        name: 'work laptop',
+        comment: null,
+        fingerprint: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        deleted: false,
+      },
+    ];
     terminalWrites = [];
     sessionChannel = null;
     target = document.createElement('div');
@@ -322,6 +338,60 @@ describe('desktop UI ↔ Tauri contract', () => {
     // what the user edits.
     expect(prefs?.theme).toBe('dark');
     expect(prefs?.terminal.cursor_style).toBe('block');
+  });
+
+  it('binds a key file to an identity with the native picker', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    click(findButton(target, 'Identities'));
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('work laptop');
+    });
+
+    // The bound path is shown, and it comes from the backend.
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('/home/user/.ssh/id_ed25519');
+    });
+
+    click(findButton(target, 'Choose key…'));
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'plugin:dialog|open')).toBe(true);
+    });
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'identity_bind')).toBe(true);
+    });
+
+    const bind = invokeCalls.find((call) => call.cmd === 'identity_bind');
+    expect(bind?.args).toEqual({
+      id: 'identity-1',
+      keyPath: '/home/user/.ssh/id_ed25519',
+    });
+  });
+
+  it('creates an identity with the documented shape', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    click(findButton(target, 'Identities'));
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('New identity');
+    });
+
+    const inputs = target.querySelectorAll('.dialog form input');
+    type(inputs[0] as HTMLInputElement, 'backup key');
+    click(findButton(target, 'Create'));
+
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'identity_save')).toBe(true);
+    });
+
+    const save = invokeCalls.find((call) => call.cmd === 'identity_save');
+    const identity = save?.args?.identity as { name: string; comment: string | null } | undefined;
+    expect(identity?.name).toBe('backup key');
+    expect(identity?.comment).toBeNull();
   });
 
   it('rebinds a command and refuses a combination that is already taken', async () => {

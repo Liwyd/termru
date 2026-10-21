@@ -32,6 +32,15 @@ export interface Identity {
   deleted: boolean;
 }
 
+/**
+ * A device-local key binding: which key file an identity uses on this
+ * machine. The path is never synced.
+ */
+export interface IdentityBinding {
+  identityId: string;
+  keyPath: string;
+}
+
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CursorStyle = 'block' | 'bar' | 'underline';
 

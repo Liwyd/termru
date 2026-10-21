@@ -50,6 +50,9 @@ fn build() -> tauri::Result<tauri::App> {
                 let _ = window.set_focus();
             }
         }))
+        // The native file picker: the user chooses the private key file
+        // instead of typing its path.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = app.path().app_data_dir()?;
@@ -71,6 +74,7 @@ fn build() -> tauri::Result<tauri::App> {
             commands::hosts::identity_list,
             commands::hosts::identity_save,
             commands::hosts::identity_delete,
+            commands::hosts::identity_bindings,
             commands::hosts::identity_bind,
             commands::hosts::identity_unbind,
             commands::prefs::prefs_get,

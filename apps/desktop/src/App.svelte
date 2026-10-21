@@ -18,6 +18,7 @@
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
   import HostEditor from './lib/components/HostEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
+  import IdentityEditor from './lib/components/IdentityEditor.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import SyncPanel from './lib/components/SyncPanel.svelte';
@@ -30,6 +31,7 @@
   let pendingSecretStored = $state(false);
   let syncOpen = $state(false);
   let settingsOpen = $state(false);
+  let identitiesOpen = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
   $effect(() => {
@@ -194,7 +196,11 @@
 </script>
 
 <div class="app">
-  <Sidebar onconnect={requestConnect} onopensync={() => (syncOpen = true)} />
+  <Sidebar
+    onconnect={requestConnect}
+    onopensync={() => (syncOpen = true)}
+    onopenidentities={() => (identitiesOpen = true)}
+  />
 
   <main>
     <div class="tabbar" role="tablist" aria-label="Open sessions">
@@ -231,8 +237,9 @@
   />
 {/if}
 
-<HostEditor />
+<HostEditor onmanageidentities={() => (identitiesOpen = true)} />
 <HostKeyDialog />
+<IdentityEditor bind:open={identitiesOpen} />
 <SyncPanel bind:open={syncOpen} />
 <SettingsPanel bind:open={settingsOpen} />
 <CommandPalette />

@@ -6,8 +6,15 @@
   import HostCard from './HostCard.svelte';
   import type { Host } from '../types';
 
-  let { onconnect, onopensync }: { onconnect: (host: Host) => void; onopensync: () => void } =
-    $props();
+  let {
+    onconnect,
+    onopensync,
+    onopenidentities,
+  }: {
+    onconnect: (host: Host) => void;
+    onopensync: () => void;
+    onopenidentities: () => void;
+  } = $props();
 
   function edit(host: Host | null): void {
     hosts.editing = host;
@@ -75,6 +82,9 @@
   {/if}
 
   <footer>
+    <button type="button" class="identities" onclick={onopenidentities}>
+      <span>Identities</span>
+    </button>
     <button type="button" class="sync" onclick={onopensync}>
       <span>Sync</span>
       {#if sync.conflictCount > 0}

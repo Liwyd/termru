@@ -5,6 +5,7 @@ import type {
   Host,
   HostKeyPromptRequest,
   Identity,
+  IdentityBinding,
   Preferences,
   SessionGeometry,
   SessionInfo,
@@ -28,8 +29,11 @@ export const api = {
     invoke<void>('host_set_favorite', { id, favorite }),
 
   identityList: () => invoke<Identity[]>('identity_list'),
+  identitySave: (identity: Identity) => invoke<Identity>('identity_save', { identity }),
+  identityDelete: (id: string) => invoke<void>('identity_delete', { id }),
   identityBind: (id: string, keyPath: string) => invoke<void>('identity_bind', { id, keyPath }),
   identityUnbind: (id: string) => invoke<void>('identity_unbind', { id }),
+  identityBindings: () => invoke<IdentityBinding[]>('identity_bindings'),
 
   prefsGet: () => invoke<Preferences>('prefs_get'),
   prefsSet: (prefs: Preferences) => invoke<void>('prefs_set', { prefs }),
