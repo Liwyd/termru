@@ -52,6 +52,8 @@ vi.mock('@tauri-apps/api/core', () => {
       switch (cmd) {
         case 'host_list':
           return [HOST];
+        case 'recent_list':
+          return [];
         case 'identity_list':
           return [];
         case 'prefs_get':
@@ -90,12 +92,17 @@ vi.mock('@xterm/xterm', () => {
   class Terminal {
     cols = 80;
     rows = 24;
+    options: Record<string, unknown> = {};
     onData(_handler: (data: string) => void) {}
     loadAddon(_addon: unknown) {}
     open(_element: HTMLElement) {}
     write(data: Uint8Array) {
       terminalWrites.push(data);
     }
+    getSelection() {
+      return '';
+    }
+    paste(_text: string) {}
     dispose() {}
   }
   return { Terminal };

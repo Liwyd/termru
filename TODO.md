@@ -101,11 +101,22 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 ## Phase 7 — Keyboard, palette, search, theming, preferences
 
 - [ ] Global + terminal-aware keybinding system (platform defaults, conflict detection, remapping UI, works when terminal focused without stealing input).
-- [ ] Command palette (fuzzy, discoverable, shows bindings).
+  - Done: command registry with platform-aware accelerators (`Mod` → Ctrl/Cmd), conflict detection (unit-tested), a global key dispatcher that never shadows the terminal's own keys, and per-command bindings shown in the palette.
+  - Pending: a remapping UI (the registry supports user overrides; the UI does not exist yet).
+- [x] Command palette (fuzzy, discoverable, shows bindings).
+  - `Ctrl/Cmd+K` opens it; fuzzy subsequence matching with word-boundary and consecutive-character bonuses; arrows/Enter/Escape; shows the accelerator of every entry and offers the hosts as entries ("Connect to …").
 - [ ] Global search across hosts/tags/snippets.
+  - Done: host search in the sidebar (name, address, username) + a "Recent" section (most recently connected hosts, from the recents table).
+  - Pending: tags/snippets do not exist yet (no snippet model in the store), so the search cannot cover them.
 - [ ] Appearance settings: fonts, sizes, terminal theme overrides, cursor style, reduced motion respected.
+  - Done: font family/size, cursor style/blink and the light/dark theme are preferences and apply live to the running terminal; the palette can change the theme and the font size; the UI honours `prefers-reduced-motion` (spinner).
+  - Pending: a settings dialog (the values are stored, but there is no UI for them yet).
 - [ ] Context menus, tooltips, drag-and-drop (host → tab), recent hosts, favorites, tags, folders.
+  - Done: recent hosts (sidebar section), favorites (star toggle + sorting), host → tab via drag-free "Connect"/palette entries.
+  - Pending: context menus, tooltips, drag-and-drop of hosts onto tabs, tags/folders in the tree.
 - Verification: unit tests for keybinding conflict detection and command registry; `svelte-check` clean; manual keyboard-only walkthrough of core journeys.
+  - Automated: 44 frontend tests (keybinding normalization/conflicts/event matching, fuzzy ranking, the tab state machine, the layout document, and the jsdom UI↔Tauri contract test) + `svelte-check` 0/0.
+  - Manual: the keyboard-only walkthrough still needs a desktop session (no window manager on this machine).
 
 ## Phase 8 — Local security (desktop)
 
@@ -217,4 +228,4 @@ Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionMa
 
 **Environment note:** the dev machine is close to full (the `target/` tree is ~6 GB). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows, and prefer `cargo clean -p <crate>` over a full clean.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7: keybindings, palette, search; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: dependency review, `npm audit` gate, CI action pinning by SHA; (6) first CI run on GitHub (the pipeline has never executed remotely).
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: dependency review, `npm audit` gate, CI action pinning by SHA; (6) first CI run on GitHub (the pipeline has never executed remotely).

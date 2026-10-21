@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from './lib/ipc';
+  import { commandEntries, palette } from './lib/stores/palette.svelte';
+  import { COMMANDS, eventMatches, expandAccelerator, type CommandId } from './lib/keybindings';
   import { errorMessage, hosts } from './lib/stores/hosts.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
   import { sessions } from './lib/stores/sessions.svelte';
   import { toasts } from './lib/stores/toasts.svelte';
+  import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
   import HostEditor from './lib/components/HostEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
@@ -39,21 +42,88 @@
     void prefs.load();
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.key === 'Tab') {
+      // The palette owns the keyboard while it is open.
+      if (palette.open) return;
+      for (const command of COMMANDS) {
+        if (!eventMatches(event, command.accelerator)) continue;
         event.preventDefault();
-        sessions.cycleActive(event.shiftKey ? -1 : 1);
-      }
-      if (event.ctrlKey && event.key === 'w') {
-        const active = sessions.active;
-        if (active) {
-          event.preventDefault();
-          void sessions.close(active);
-        }
+        runCommand(command.id);
+        return;
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   });
+
+  /** Runs a command from the registry (keyboard or palette). */
+  function runCommand(id: CommandId): void {
+    const active = sessions.active;
+    switch (id) {
+      case 'palette.open':
+        openPalette();
+        break;
+      case 'tab.new':
+        openPalette('hosts');
+        break;
+      case 'tab.close':
+        if (active) void sessions.close(active);
+        break;
+      case 'tab.next':
+        sessions.cycleActive(1);
+        break;
+      case 'tab.previous':
+        sessions.cycleActive(-1);
+        break;
+      case 'tab.duplicate':
+        if (active) sessions.duplicate(active);
+        break;
+      case 'host.new':
+        hosts.editorOpen = true;
+        hosts.editing = null;
+        break;
+      case 'host.search':
+        document.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+        break;
+      case 'view.toggleTheme': {
+        const next = prefs.prefs.theme === 'dark' ? 'light' : 'dark';
+        void prefs.update({ ...prefs.prefs, theme: next });
+        break;
+      }
+      case 'view.increaseFont': {
+        const size = Math.min(72, prefs.prefs.terminal.font_size + 1);
+        void prefs.update({
+          ...prefs.prefs,
+          terminal: { ...prefs.prefs.terminal, font_size: size },
+        });
+        break;
+      }
+      case 'view.decreaseFont': {
+        const size = Math.max(6, prefs.prefs.terminal.font_size - 1);
+        void prefs.update({
+          ...prefs.prefs,
+          terminal: { ...prefs.prefs.terminal, font_size: size },
+        });
+        break;
+      }
+    }
+  }
+
+  /** Opens the command palette with the current commands and hosts. */
+  function openPalette(scope: 'all' | 'hosts' = 'all'): void {
+    const entries =
+      scope === 'hosts'
+        ? []
+        : commandEntries(runCommand, (command) => expandAccelerator(command.accelerator));
+    for (const host of hosts.visible) {
+      entries.push({
+        id: `host:${host.id}`,
+        title: `Connect to ${host.name}`,
+        group: 'Hosts',
+        run: () => void requestConnect(host),
+      });
+    }
+    palette.show(entries);
+  }
 
   /** Attaches this window to a session that another window moved here. */
   async function attachToSession(sessionId: string): Promise<void> {
@@ -136,6 +206,7 @@
 
 <HostEditor />
 <HostKeyDialog />
+<CommandPalette />
 <Toasts />
 
 {#if hosts.error}

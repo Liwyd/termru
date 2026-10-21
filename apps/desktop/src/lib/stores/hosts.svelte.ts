@@ -5,6 +5,7 @@ import type { Host, Identity } from '../types';
 export class HostsStore {
   hosts = $state<Host[]>([]);
   identities = $state<Identity[]>([]);
+  recents = $state<Host[]>([]);
   loading = $state(false);
   error = $state<string | null>(null);
   query = $state('');
@@ -37,9 +38,14 @@ export class HostsStore {
     this.loading = true;
     this.error = null;
     try {
-      const [hosts, identities] = await Promise.all([api.hostList(), api.identityList()]);
-      this.hosts = hosts.filter((host) => !host.deleted);
-      this.identities = identities.filter((identity) => !identity.deleted);
+      const [hosts, identities, recents] = await Promise.all([
+        api.hostList(),
+        api.identityList(),
+        api.recentList(),
+      ]);
+      this.hosts = (hosts ?? []).filter((host) => !host.deleted);
+      this.identities = (identities ?? []).filter((identity) => !identity.deleted);
+      this.recents = (recents ?? []).filter((host) => !host.deleted);
     } catch (err) {
       this.error = errorMessage(err);
     } finally {

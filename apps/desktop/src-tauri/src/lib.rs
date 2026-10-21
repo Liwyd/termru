@@ -53,6 +53,7 @@ fn build() -> tauri::Result<tauri::App> {
             commands::hosts::host_list,
             commands::hosts::host_save,
             commands::hosts::host_delete,
+            commands::hosts::recent_list,
             commands::hosts::host_set_favorite,
             commands::hosts::identity_list,
             commands::hosts::identity_save,

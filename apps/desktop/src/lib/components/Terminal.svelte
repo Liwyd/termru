@@ -87,6 +87,18 @@
     };
   });
 
+  // Appearance changes (font size, theme) apply to the live terminal.
+  $effect(() => {
+    const instance = term;
+    if (!instance) return;
+    const { font_family, font_size, cursor_blink, cursor_style } = prefs.prefs.terminal;
+    instance.options.fontFamily = font_family;
+    instance.options.fontSize = font_size;
+    instance.options.cursorBlink = cursor_blink;
+    instance.options.cursorStyle = cursor_style;
+    instance.options.theme = terminalTheme(prefs.isDark);
+  });
+
   // (Re)connect whenever the tab asks for a new connection attempt.
   // `untrack` keeps the effect bound to `generation` only: reading
   // `tab.sessionId` inside `connect` must not re-trigger it.

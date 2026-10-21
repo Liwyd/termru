@@ -25,6 +25,12 @@ pub fn host_save(state: State<'_, AppState>, mut host: Host) -> Result<Host, Com
     Ok(host)
 }
 
+/// Recently connected hosts (most recent first).
+#[tauri::command]
+pub fn recent_list(state: State<'_, AppState>) -> Result<Vec<Host>, CommandError> {
+    Ok(hosts(&state).recents().list()?)
+}
+
 #[tauri::command]
 pub fn host_delete(state: State<'_, AppState>, id: HostId) -> Result<(), CommandError> {
     hosts(&state).hosts().soft_delete(id)?;

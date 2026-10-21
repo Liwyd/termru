@@ -18,6 +18,7 @@ import type {
  */
 export const api = {
   hostList: () => invoke<Host[]>('host_list'),
+  recentList: () => invoke<Host[]>('recent_list'),
   hostSave: (host: Host) => invoke<Host>('host_save', { host }),
   hostDelete: (id: string) => invoke<void>('host_delete', { id }),
   hostSetFavorite: (id: string, favorite: boolean) =>

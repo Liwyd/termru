@@ -56,6 +56,22 @@
     </ul>
   {/if}
 
+  {#if hosts.recents.length > 0 && hosts.query.length === 0}
+    <section>
+      <h3>Recent</h3>
+      <ul class="recent">
+        {#each hosts.recents.slice(0, 5) as host (host.id)}
+          <li>
+            <button type="button" class="recent-item" onclick={() => onconnect(host)}>
+              <span class="recent-name">{host.name}</span>
+              <span class="recent-target">{host.username}@{host.address}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
   {#if sessions.tabs.length > 0}
     <footer>
       <span>{sessions.tabs.length} open session(s)</span>
@@ -104,6 +120,51 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+  }
+
+  section h3 {
+    margin: 0.2rem 0 0.2rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--termru-muted);
+  }
+
+  .recent {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .recent-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    width: 100%;
+    border: none;
+    background: none;
+    color: var(--termru-fg);
+    padding: 0.2rem 0.3rem;
+    text-align: left;
+  }
+
+  .recent-item:hover {
+    background: var(--termru-bg);
+    border: none;
+  }
+
+  .recent-name {
+    font-size: 0.82rem;
+  }
+
+  .recent-target {
+    font-size: 0.72rem;
+    color: var(--termru-muted);
   }
 
   .hint {
