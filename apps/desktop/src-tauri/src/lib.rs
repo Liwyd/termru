@@ -2,6 +2,7 @@ mod app_error;
 mod commands;
 mod secrets;
 mod state;
+pub mod sync;
 
 use std::sync::OnceLock;
 
@@ -78,6 +79,12 @@ fn build() -> tauri::Result<tauri::App> {
             commands::secrets::secret_set,
             commands::secrets::secret_delete,
             commands::secrets::secret_has,
+            commands::sync::sync_status,
+            commands::sync::sync_sign_in,
+            commands::sync::sync_sign_out,
+            commands::sync::sync_now,
+            commands::sync::sync_conflicts,
+            commands::sync::sync_resolve_conflict,
         ])
         .build(tauri::generate_context!())
 }

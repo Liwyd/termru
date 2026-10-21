@@ -150,6 +150,8 @@ impl Groups<'_> {
     pub fn save(&self, group: &mut Group) -> Result<(), StoreError> {
         group.validate()?;
         group.updated_at = chrono::Utc::now();
+        // A local edit marks the row dirty (see the host repository).
+        group.dirty = true;
         let id = group.id;
         self.store.with_tx(move |conn| {
             validate_parent(conn, group.parent_id, id)?;

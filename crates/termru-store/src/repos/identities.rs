@@ -109,6 +109,8 @@ impl Identities<'_> {
     pub fn save(&self, identity: &mut Identity) -> Result<(), StoreError> {
         identity.validate()?;
         identity.updated_at = chrono::Utc::now();
+        // A local edit marks the row dirty (see the host repository).
+        identity.dirty = true;
         let id = identity.id;
         self.store.with_tx(move |conn| {
             upsert_identity_row(conn, identity)?;

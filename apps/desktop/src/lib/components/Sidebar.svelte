@@ -1,11 +1,13 @@
 <script lang="ts">
   import { hosts } from '../stores/hosts.svelte';
   import { sessions } from '../stores/sessions.svelte';
+  import { sync } from '../stores/sync.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import HostCard from './HostCard.svelte';
   import type { Host } from '../types';
 
-  let { onconnect }: { onconnect: (host: Host) => void } = $props();
+  let { onconnect, onopensync }: { onconnect: (host: Host) => void; onopensync: () => void } =
+    $props();
 
   function edit(host: Host | null): void {
     hosts.editing = host;
@@ -72,11 +74,21 @@
     </section>
   {/if}
 
-  {#if sessions.tabs.length > 0}
-    <footer>
+  <footer>
+    <button type="button" class="sync" onclick={onopensync}>
+      <span>Sync</span>
+      {#if sync.conflictCount > 0}
+        <span class="badge danger" title="unresolved conflicts">{sync.conflictCount}</span>
+      {:else if sync.pending > 0}
+        <span class="badge" title="changes waiting to be pushed">{sync.pending}</span>
+      {:else if sync.signedIn}
+        <span class="dot" title="signed in"></span>
+      {/if}
+    </button>
+    {#if sessions.tabs.length > 0}
       <span>{sessions.tabs.length} open session(s)</span>
-    </footer>
-  {/if}
+    {/if}
+  </footer>
 </aside>
 
 <style>
@@ -179,7 +191,51 @@
 
   footer {
     margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
     font-size: 0.75rem;
     color: var(--termru-muted);
+  }
+
+  .sync {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--termru-border);
+    border-radius: var(--termru-radius);
+    background: var(--termru-bg);
+    color: var(--termru-fg);
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .sync:hover {
+    border-color: var(--termru-accent);
+  }
+
+  .badge {
+    margin-left: auto;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: var(--termru-accent);
+    color: var(--termru-bg);
+    font-size: 0.68rem;
+    font-weight: 600;
+  }
+
+  .badge.danger {
+    background: var(--termru-danger);
+    color: #fff;
+  }
+
+  .dot {
+    margin-left: auto;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--termru-success);
   }
 </style>

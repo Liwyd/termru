@@ -308,6 +308,24 @@ impl Sync<'_> {
         conn: &rusqlite::Connection,
         wire: &WireRecord,
     ) -> Result<ApplyOutcome, StoreError> {
+        Self::apply_remote_with(conn, wire, false)
+    }
+
+    /// Applies the server's copy **over** the local one, ignoring the local
+    /// modification. Used when the user resolves a conflict in favour of the
+    /// server ("take remote").
+    pub(crate) fn apply_remote_force_in_tx(
+        conn: &rusqlite::Connection,
+        wire: &WireRecord,
+    ) -> Result<ApplyOutcome, StoreError> {
+        Self::apply_remote_with(conn, wire, true)
+    }
+
+    fn apply_remote_with(
+        conn: &rusqlite::Connection,
+        wire: &WireRecord,
+        force: bool,
+    ) -> Result<ApplyOutcome, StoreError> {
         if id_exists_in_other_kind(conn, wire.kind, &wire.id)? {
             return Ok(ApplyOutcome::KindMismatch);
         }
@@ -327,7 +345,7 @@ impl Sync<'_> {
             return store_payload(conn, decoded, wire.rev).map(|_| ApplyOutcome::Applied);
         }
 
-        if local.dirty {
+        if local.dirty && !force {
             let base = local.server_rev.unwrap_or(-1);
             if wire.rev > base {
                 // Both sides changed: record the conflict, remember the server
@@ -340,7 +358,7 @@ impl Sync<'_> {
                 Ok(ApplyOutcome::Ignored)
             }
         } else {
-            if wire.rev <= local.server_rev.unwrap_or(-1) {
+            if !force && wire.rev <= local.server_rev.unwrap_or(-1) {
                 return Ok(ApplyOutcome::Ignored);
             }
             if wire.deleted {
@@ -361,6 +379,25 @@ impl Sync<'_> {
             remove_queued(conn, &wire.id)?;
             Ok(ApplyOutcome::Applied)
         }
+    }
+
+    /// The local copy of a record as a sync payload.
+    ///
+    /// Used by the conflict view, which shows the local and the remote copy
+    /// side by side so the user can decide which one to keep.
+    pub fn local_payload(
+        &self,
+        kind: RecordKind,
+        record_id: &str,
+    ) -> Result<Option<serde_json::Value>, StoreError> {
+        self.store.with_conn(|conn| {
+            let Some(record) =
+                materialize(conn, kind, &uuid::Uuid::new_v4().to_string(), record_id)?
+            else {
+                return Ok(None);
+            };
+            Ok(record.payload)
+        })
     }
 
     /// Marks a pushed record as accepted at `rev`: clears dirtiness, updates
@@ -398,6 +435,41 @@ impl Sync<'_> {
     /// Stores a push-time conflict observation (server returned its copy).
     pub fn observe_push_conflict(&self, wire: &WireRecord) -> Result<ApplyOutcome, StoreError> {
         self.apply_remote(wire)
+    }
+
+    /// Resolves a conflict in favour of the **local** copy.
+    ///
+    /// The server revision that was observed becomes the new base revision, so
+    /// the next push overwrites the server's copy with the local state. The
+    /// record stays dirty and is queued again.
+    pub fn resolve_keep_local(&self, record_id: &str) -> Result<(), StoreError> {
+        let id = record_id.to_string();
+        self.store.with_tx(move |conn| {
+            let Some(conflict) = Conflicts::get_in_conn(conn, &id)? else {
+                return Err(StoreError::NotFound("the record has no open conflict"));
+            };
+            set_row_meta(conn, conflict.kind, &id, Some(conflict.server_rev), true)?;
+            Conflicts::remove(conn, &id)?;
+            crate::repos::enqueue_mutation(conn, &id, conflict.kind)?;
+            Ok(())
+        })
+    }
+
+    /// Resolves a conflict in favour of the **server** copy.
+    ///
+    /// The server's record replaces the local one, the local modification is
+    /// dropped and the queue entry is removed.
+    pub fn resolve_take_remote(&self, record_id: &str) -> Result<ApplyOutcome, StoreError> {
+        let id = record_id.to_string();
+        self.store.with_tx(move |conn| {
+            let Some(conflict) = Conflicts::get_in_conn(conn, &id)? else {
+                return Err(StoreError::NotFound("the record has no open conflict"));
+            };
+            let outcome = Self::apply_remote_force_in_tx(conn, &conflict.server_record)?;
+            Conflicts::remove(conn, &id)?;
+            remove_queued(conn, &id)?;
+            Ok(outcome)
+        })
     }
 }
 
@@ -639,4 +711,420 @@ fn hard_delete(conn: &rusqlite::Connection, kind: RecordKind, id: &str) -> Resul
     conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [id])
         .map_err(StoreError::Sqlite)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Store;
+    use termru_core::Host;
+
+    fn store() -> Store {
+        Store::open_in_memory().expect("in-memory store")
+    }
+
+    fn host(name: &str) -> Host {
+        Host::new(
+            name.to_string(),
+            format!("{name}.example.com"),
+            "deploy".to_string(),
+        )
+    }
+
+    /// A wire record that carries the given host.
+    fn wire(host: &Host, rev: i64, deleted: bool) -> WireRecord {
+        WireRecord {
+            id: host.id.to_string(),
+            kind: RecordKind::Host,
+            rev,
+            updated_at: chrono::Utc::now(),
+            deleted,
+            payload: if deleted {
+                None
+            } else {
+                Some(serde_json::to_value(host).expect("serialize the host"))
+            },
+        }
+    }
+
+    #[test]
+    fn a_local_edit_is_queued_and_materialized() {
+        let store = store();
+        let mut host = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut host)
+            .expect("save the host");
+
+        let pending = store.repos().sync().pending().expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].record_id, host.id.to_string());
+        assert_eq!(pending[0].kind, RecordKind::Host);
+
+        let push = store.repos().sync().build_push().expect("build the push");
+        assert_eq!(push.len(), 1);
+        assert_eq!(push[0].record_id, host.id.to_string());
+        assert!(!push[0].deleted);
+        assert!(
+            push[0].base_rev.is_none(),
+            "a new record has no base revision"
+        );
+        assert!(push[0].payload.is_some());
+    }
+
+    #[test]
+    fn acknowledging_clears_the_queue_and_the_dirtiness() {
+        let store = store();
+        let mut host = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut host)
+            .expect("save the host");
+
+        store
+            .repos()
+            .sync()
+            .acknowledge(&host.id.to_string(), RecordKind::Host, 7)
+            .expect("acknowledge");
+
+        assert!(store.repos().sync().pending().expect("pending").is_empty());
+        let stored = store
+            .repos()
+            .hosts()
+            .get(host.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.server_rev, Some(7));
+        assert!(!stored.dirty);
+    }
+
+    #[test]
+    fn a_remote_record_replaces_a_clean_local_copy() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+
+        let mut remote = local.clone();
+        remote.name = "web-1-renamed".to_string();
+        let outcome = store
+            .repos()
+            .sync()
+            .apply_remote(&wire(&remote, 8, false))
+            .expect("apply");
+        assert_eq!(outcome, ApplyOutcome::Applied);
+
+        let stored = store
+            .repos()
+            .hosts()
+            .get(local.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.name, "web-1-renamed");
+        assert_eq!(stored.server_rev, Some(8));
+        assert!(!stored.dirty);
+    }
+
+    #[test]
+    fn a_remote_tombstone_deletes_the_local_row() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+
+        let outcome = store
+            .repos()
+            .sync()
+            .apply_remote(&wire(&local, 5, true))
+            .expect("apply");
+        assert_eq!(outcome, ApplyOutcome::RemoteDeleted);
+        assert!(store.repos().hosts().get(local.id).expect("get").is_none());
+    }
+
+    #[test]
+    fn a_remote_change_to_a_modified_record_becomes_a_conflict() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+
+        // The local copy changes again (dirty).
+        local.name = "local-name".to_string();
+        local.server_rev = Some(3);
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+
+        // The server changes the same record.
+        let mut remote = local.clone();
+        remote.name = "remote-name".to_string();
+        let outcome = store
+            .repos()
+            .sync()
+            .apply_remote(&wire(&remote, 4, false))
+            .expect("apply");
+        assert_eq!(outcome, ApplyOutcome::Conflict);
+
+        // The local copy is untouched and the conflict is recorded.
+        let stored = store
+            .repos()
+            .hosts()
+            .get(local.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.name, "local-name");
+        assert!(stored.dirty);
+
+        let conflicts = store.repos().conflicts().list().expect("conflicts");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].record_id, local.id.to_string());
+        assert_eq!(conflicts[0].server_rev, 4);
+
+        // A record with an open conflict is never pushed.
+        let push = store.repos().sync().build_push().expect("build the push");
+        assert!(push.is_empty(), "a conflicted record must not be pushed");
+    }
+
+    #[test]
+    fn keeping_the_local_copy_queues_it_against_the_server_revision() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+        local.name = "local-name".to_string();
+        local.server_rev = Some(3);
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+
+        let mut remote = local.clone();
+        remote.name = "remote-name".to_string();
+        store
+            .repos()
+            .sync()
+            .apply_remote(&wire(&remote, 4, false))
+            .expect("apply");
+
+        store
+            .repos()
+            .sync()
+            .resolve_keep_local(&local.id.to_string())
+            .expect("resolve");
+
+        // The conflict is gone, the record is queued again and the base
+        // revision is the one the server reported.
+        assert!(
+            store
+                .repos()
+                .conflicts()
+                .list()
+                .expect("conflicts")
+                .is_empty()
+        );
+        let push = store.repos().sync().build_push().expect("build the push");
+        assert_eq!(push.len(), 1);
+        assert_eq!(push[0].base_rev, Some(4));
+
+        let stored = store
+            .repos()
+            .hosts()
+            .get(local.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.name, "local-name");
+        assert!(stored.dirty);
+    }
+
+    #[test]
+    fn taking_the_remote_copy_replaces_the_local_one() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+        local.name = "local-name".to_string();
+        local.server_rev = Some(3);
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+
+        let mut remote = local.clone();
+        remote.name = "remote-name".to_string();
+        store
+            .repos()
+            .sync()
+            .apply_remote(&wire(&remote, 4, false))
+            .expect("apply");
+
+        store
+            .repos()
+            .sync()
+            .resolve_take_remote(&local.id.to_string())
+            .expect("resolve");
+
+        assert!(
+            store
+                .repos()
+                .conflicts()
+                .list()
+                .expect("conflicts")
+                .is_empty()
+        );
+        assert!(store.repos().sync().pending().expect("pending").is_empty());
+
+        let stored = store
+            .repos()
+            .hosts()
+            .get(local.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.name, "remote-name");
+        assert_eq!(stored.server_rev, Some(4));
+        assert!(!stored.dirty);
+    }
+
+    #[test]
+    fn resolving_an_unknown_conflict_is_an_error() {
+        let store = store();
+        let error = store
+            .repos()
+            .sync()
+            .resolve_keep_local("no-such-record")
+            .expect_err("must fail");
+        assert!(matches!(error, StoreError::NotFound(_)));
+    }
+
+    #[test]
+    fn an_invalid_remote_payload_is_rejected() {
+        let store = store();
+        let mut local = host("web-1");
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+        store
+            .repos()
+            .sync()
+            .acknowledge(&local.id.to_string(), RecordKind::Host, 3)
+            .expect("acknowledge");
+
+        let mut broken = wire(&local, 4, false);
+        broken.payload = Some(serde_json::json!({ "name": "" }));
+        // A payload that does not validate is rejected; nothing is written.
+        let error = store
+            .repos()
+            .sync()
+            .apply_remote(&broken)
+            .expect_err("the payload must be rejected");
+        assert!(matches!(error, StoreError::Validation(_)));
+        let stored = store
+            .repos()
+            .hosts()
+            .get(local.id)
+            .expect("get")
+            .expect("the host is still there");
+        assert_eq!(stored.name, "web-1", "the local copy must be untouched");
+    }
+
+    #[test]
+    fn the_push_payload_never_contains_a_secret() {
+        let store = store();
+        let mut local = host("web-1");
+        // The host references an identity; the key itself lives in the
+        // credential store and must never reach the sync payload.
+        local.auth = termru_core::AuthMethod::PrivateKey {
+            identity_id: termru_core::ids::IdentityId::new(),
+        };
+        store
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .expect("save the host");
+
+        let push = store.repos().sync().build_push().expect("build the push");
+        assert_eq!(push.len(), 1);
+        let payload = push[0].payload.as_ref().expect("a payload");
+
+        // No field of the payload may carry a secret.
+        fn assert_no_secret_fields(value: &serde_json::Value, path: &str) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, child) in map {
+                        let lower = key.to_lowercase();
+                        assert!(
+                            !["password", "passphrase", "secret", "privatekey", "key"]
+                                .contains(&lower.as_str()),
+                            "the sync payload must not contain the field '{path}{key}'"
+                        );
+                        assert_no_secret_fields(child, &format!("{path}{key}."));
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        assert_no_secret_fields(item, path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_no_secret_fields(payload, "");
+
+        // The private key auth method carries a *reference* to an identity,
+        // never key material.
+        let auth = payload.get("auth").expect("the auth method");
+        assert_eq!(
+            auth.get("type").and_then(|v| v.as_str()),
+            Some("private_key")
+        );
+        assert!(auth.get("identity_id").is_some());
+        assert_eq!(auth.as_object().expect("an object").len(), 2);
+    }
 }

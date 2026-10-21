@@ -208,6 +208,10 @@ impl Hosts<'_> {
     pub fn save(&self, host: &mut Host) -> Result<(), StoreError> {
         host.validate()?;
         host.updated_at = chrono::Utc::now();
+        // A local edit marks the row dirty: the sync layer needs that flag to
+        // detect that both sides changed the record (a conflict) instead of
+        // silently overwriting the local change.
+        host.dirty = true;
         let id = host.id;
         self.store.with_tx(move |conn| {
             ensure_group_exists(conn, host.group_id)?;
@@ -334,7 +338,9 @@ mod tests {
         let listed = store.repos().hosts().list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "web-1");
-        assert!(!listed[0].dirty);
+        // A local edit marks the record dirty so that the sync layer can
+        // detect a conflict instead of overwriting the local change.
+        assert!(listed[0].dirty);
         assert_eq!(listed[0].server_rev, None);
     }
 

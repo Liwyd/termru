@@ -123,3 +123,44 @@ export interface WorkspaceDoc {
   windows: WindowLayout[];
   active_window?: string | null;
 }
+
+/** The kind of a synced record (mirrors `termru_core::sync::RecordKind`). */
+export type RecordKind = 'host' | 'identity' | 'group' | 'tag' | 'preferences';
+
+/** The sync settings (no secrets — the tokens live in the credential store). */
+export interface SyncSettings {
+  server_url: string;
+  email: string;
+  device_name: string;
+  device_id: string;
+}
+
+/** The state of the sync feature. */
+export interface SyncStatus {
+  settings: SyncSettings;
+  signed_in: boolean;
+  pending: number;
+  conflicts: number;
+  cursor: number;
+  last_sync_at: string | null;
+  last_error: string | null;
+}
+
+/** The result of one sync cycle. */
+export interface SyncOutcome {
+  pushed: number;
+  pulled: number;
+  applied: number;
+  conflicts: number;
+  cursor: number;
+}
+
+/** A conflict between the local and the remote copy of a record. */
+export interface ConflictView {
+  record_id: string;
+  kind: RecordKind;
+  server_rev: number;
+  observed_at: string;
+  local: unknown | null;
+  remote: unknown | null;
+}

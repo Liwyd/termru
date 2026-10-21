@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.12.4", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
@@ -28,6 +30,15 @@ termru-store = { workspace = true }
 termru-ssh = { workspace = true }
 async-trait = "0.1"
 base64 = "0.22"
+# HTTP client for the cloud sync API. The rustls backend with the native
+# trust store: a self-hosted server with a private certificate works, and no
+# OpenSSL or cmake is needed to build it.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls-native-roots",
+    "json",
+    "charset",
+    "system-proxy",
+] }
 uuid = { workspace = true }
 keyring = "4"
 

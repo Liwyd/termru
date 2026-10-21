@@ -14,7 +14,7 @@ use keyring::{Entry, Error as KeyringError};
 use crate::app_error::CommandError;
 
 /// Service name used in the platform credential store.
-const SERVICE: &str = "com.liwyd.termru";
+pub(crate) const SERVICE: &str = "com.liwyd.termru";
 
 /// The kind of secret a host needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

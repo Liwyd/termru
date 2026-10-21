@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Channel } from '@tauri-apps/api/core';
 import type {
+  ConflictView,
   Host,
   HostKeyPromptRequest,
   Identity,
@@ -9,6 +10,8 @@ import type {
   SessionInfo,
   SessionSecrets,
   SessionUpdate,
+  SyncOutcome,
+  SyncStatus,
   WorkspaceDoc,
 } from './types';
 
@@ -64,6 +67,15 @@ export const api = {
     invoke<void>('secret_delete', { hostId, kind }),
   secretHas: (hostId: string, kind: 'password' | 'passphrase') =>
     invoke<boolean>('secret_has', { hostId, kind }),
+
+  syncStatus: () => invoke<SyncStatus>('sync_status'),
+  syncSignIn: (serverUrl: string, email: string, password: string, deviceName: string) =>
+    invoke<SyncStatus>('sync_sign_in', { serverUrl, email, password, deviceName }),
+  syncSignOut: () => invoke<void>('sync_sign_out'),
+  syncNow: () => invoke<SyncOutcome>('sync_now'),
+  syncConflicts: () => invoke<ConflictView[]>('sync_conflicts'),
+  syncResolveConflict: (recordId: string, keepLocal: boolean) =>
+    invoke<void>('sync_resolve_conflict', { recordId, keepLocal }),
 };
 
 export type { HostKeyPromptRequest };

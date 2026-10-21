@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent retries) shared with the desktop client.
 * Container image and `compose.yaml` for the cloud server, with a
   checksum-verified install command and a backup/restore procedure.
+* Desktop sync client: sign in to a sync server, push and pull the host
+  configuration, and resolve conflicts explicitly (keep the local or take the
+  server copy). The tokens stay in the OS credential store; a secret is never
+  part of a sync payload.
+
+### Fixed
+
+* A local edit did not mark the record dirty, so a change from another device
+  silently overwrote the local copy instead of raising a conflict. Local
+  edits now mark the record dirty in every repository, and the conflict
+  resolution ("keep local" / "take remote") is implemented in the store.
 
 ### Changed
 

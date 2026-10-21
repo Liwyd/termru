@@ -91,6 +91,8 @@ impl Tags<'_> {
     pub fn save(&self, tag: &mut Tag) -> Result<(), StoreError> {
         tag.validate()?;
         tag.updated_at = chrono::Utc::now();
+        // A local edit marks the row dirty (see the host repository).
+        tag.dirty = true;
         let id = tag.id;
         self.store.with_tx(move |conn| {
             upsert_tag_row(conn, tag)?;

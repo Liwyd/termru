@@ -61,6 +61,10 @@ pub struct DevicePrefs {
     pub sync_url: String,
     /// Display name for this device during enrollment.
     pub device_name: String,
+    /// The account email of the sync server (not a secret).
+    pub sync_email: String,
+    /// The stable id of this installation, used to enroll the device.
+    pub sync_device_id: String,
     /// Active workspace id.
     pub active_workspace: Option<termru_core::ids::WorkspaceId>,
     /// Last successful sync cursor (informational mirror of sync_meta).

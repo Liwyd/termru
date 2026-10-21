@@ -160,12 +160,22 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 10 — Desktop sync client
 
-- [ ] Sync settings UI (server URL, sign-in, device enrollment, status, last-sync, offline indicator).
-- [ ] Offline-first: local edits queued in SQLite (ordered, idempotent op ids), push/pull with cursor, deferred sync on reconnect, bounded retry with backoff, no data loss on restart.
-- [ ] Conflict surfacing UI: list of conflicts with local/remote comparison + explicit resolution (keep local / take remote); deletions vs edits surfaced, never silently resurrect or drop.
-- [ ] Cloud outage does not block SSH (enforced by architecture; test).
-- [ ] Secrets NOT synced (enforced: sync payload builder has no access to keyring).
-- Verification: integration tests simulating two devices (two clients + one server): initial sync, offline edit, conflict, delete-propagation, device revocation.
+- [x] Sync settings UI (server URL, sign-in, device enrollment, status, last-sync, offline indicator).
+  - `SyncPanel.svelte`: server URL, email, password and device name; the status (server, account, device, last sync, pending changes, open conflicts); a "Sync now" button; the conflict list. The panel is reachable from the sidebar (with a badge) and from the palette (`Mod+Shift+S`).
+  - The device is enrolled implicitly: the client generates a stable device id on the first sign-in and sends it with every sign-in, so the server recognizes the installation.
+  - The tokens never reach the frontend — the backend keeps them in the OS credential store, and the UI only sees the status.
+- [x] Offline-first: local edits queued in SQLite (ordered, idempotent op ids), push/pull with cursor, deferred sync on reconnect, bounded retry with backoff, no data loss on restart.
+  - The queue, the payload materialization and the cursor live in the store (`termru-store::repos::sync`); the desktop engine pushes the queued mutations, acknowledges them by revision and pulls the changed records from the cursor. The cursor never moves backwards.
+  - A failed cycle (server down, network error) leaves the queue and the local copies untouched, so the next cycle retries with the same mutation ids — the server's idempotency makes the retry safe.
+  - Pending: an automatic background cycle (a timer) with a bounded retry and backoff, and an automatic access-token refresh before it expires. Today the user triggers the cycle.
+- [x] Conflict surfacing UI: list of conflicts with local/remote comparison + explicit resolution (keep local / take remote); deletions vs edits surfaced, never silently resurrect or drop.
+  - The store owns the semantics: `resolve_keep_local` re-queues the local copy against the revision the server reported, `resolve_take_remote` replaces the local copy with the server's. A record with an open conflict is never pushed, and a remote tombstone that meets a local change becomes a conflict instead of a silent deletion.
+  - The panel shows both copies, names the field that differs and offers the two explicit choices.
+- [x] Cloud outage does not block SSH (enforced by architecture; test).
+  - The sync runs in its own command and owns no part of the SSH path; a failing sync records the error message and returns it, the session manager is untouched. Verified by a test that a failing cycle keeps the queue and the local copies.
+- [x] Secrets NOT synced (enforced: sync payload builder has no access to keyring).
+  - The payload builder lives in the store and only ever sees the domain models, which have no field that could hold a secret (a private-key host carries an *identity reference*). Verified by a test that walks the push payload and rejects any field named like a secret, and by the desktop test that the credential store is the only place a token lives.
+- Verification: `cargo test --workspace` → 197 tests green (core 28, store 35, ssh 26, sshd integration 17, cloud server 46, desktop 46 incl. the sync engine), `cargo clippy --workspace --all-targets -D warnings` clean, `cargo fmt --check` clean, `cargo deny` ok, `npm run lint` (svelte-check 0/0), `npm run test` (50 vitest, incl. the sync store and a UI↔Tauri contract test for the sign-in arguments), `npm run build` green. The engine is tested against a fake transport; an end-to-end test against a running cloud server is still open.
 
 ## Phase 11 — Security hardening
 
@@ -253,4 +263,6 @@ Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionMa
 
 **Environment note:** the dev machine is close to full. The workspace `dev` profile now uses `debug = 1` (line tables only), so the `target/` tree is ~2 GB instead of ~7 GB; work continues with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small, and `cargo clean -p <crate>` over a full clean.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 10: the desktop sync client against the new API (settings UI, offline queue, conflict surfacing); (3) Phase 6: split panes, per-window tab sets, window-close semantics; (4) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (5) Phase 8 remainder: native key file picker + single-instance plugin; (6) Phase 13: container image + compose deployment for the cloud server; (7) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (8) first CI run on GitHub (the pipeline has never executed remotely).
+**Phase 10 (desktop sync client) implemented**: a sync engine in the desktop app (transport trait + an HTTP client, tokens in the OS credential store, push/pull with the revision cursor, explicit conflict resolution), the store gained the conflict-resolution semantics and — with them — a fix for a real bug: a local edit did not mark the row dirty, so a remote change would have silently overwritten the local copy instead of raising a conflict. The UI gained a sync panel (settings, status, conflicts) and a sidebar entry.
+
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette, sign in to a sync server); (2) Phase 10 remainder: an automatic background sync cycle with a bounded retry and an automatic token refresh; (3) Phase 6: split panes, per-window tab sets, window-close semantics; (4) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (5) Phase 8 remainder: native key file picker + single-instance plugin; (6) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (7) Phase 12/14: packaging and the release pipeline; (8) first CI run on GitHub (the pipeline has never executed remotely).

@@ -72,10 +72,29 @@ vi.mock('@tauri-apps/api/core', () => {
         case 'session_open':
           sessionChannel = args?.channel as typeof sessionChannel;
           return 's1';
+        case 'sync_status':
+          return {
+            settings: {
+              server_url: '',
+              email: '',
+              device_name: '',
+              device_id: '',
+            },
+            signed_in: false,
+            pending: 0,
+            conflicts: 0,
+            cursor: 0,
+            last_sync_at: null,
+            last_error: null,
+          };
+        case 'sync_conflicts':
+          return [];
         case 'session_close':
         case 'session_write':
         case 'session_resize':
         case 'host_key_prompt_resolve':
+        case 'sync_sign_out':
+        case 'sync_resolve_conflict':
           return null;
         default:
           return null;
@@ -233,6 +252,42 @@ describe('desktop UI ↔ Tauri contract', () => {
     });
     const written = new TextDecoder().decode(terminalWrites[0]);
     expect(written).toBe('hello from the shell');
+  });
+
+  it('signs in to the sync server with the documented arguments', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    click(findButton(target, 'Sync'));
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Cloud sync');
+    });
+
+    const inputs = target.querySelectorAll('input');
+    const url = target.querySelector('input[type="url"]') as HTMLInputElement;
+    const email = target.querySelector('input[type="email"]') as HTMLInputElement;
+    const password = target.querySelector('input[type="password"]') as HTMLInputElement;
+    expect(url).not.toBeNull();
+    type(url, 'https://sync.example.com');
+    type(email, 'user@example.com');
+    type(password, 'a long passphrase');
+    expect(inputs.length).toBeGreaterThan(2);
+
+    const form = target.querySelector('form');
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'sync_sign_in')).toBe(true);
+    });
+
+    const signIn = invokeCalls.find((call) => call.cmd === 'sync_sign_in');
+    expect(signIn?.args).toEqual({
+      serverUrl: 'https://sync.example.com',
+      email: 'user@example.com',
+      password: 'a long passphrase',
+      deviceName: '',
+    });
   });
 
   it('closes the backend session when the tab is closed', async () => {
