@@ -159,11 +159,13 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 - [x] Threat model document (`docs/security/threat-model.md`) covering client, SSH, local storage, cloud API, sync, update, build pipeline, artifacts.
   - Documents the assets, the trust boundaries (webview ↔ Rust ↔ network ↔ OS), the per-surface mitigations, the **residual risks** (TOFU first use, unencrypted local DB, webview XSS, unpinned CI actions, no code signing) and the out-of-scope list.
-- [ ] `cargo deny` (licenses, advisories, duplicates-bans policy), `npm audit` gate in CI, secret scanning (gitleaks) in CI.
+- [x] `cargo deny` (licenses, advisories, duplicates-bans policy), `npm audit` gate in CI, secret scanning (gitleaks) in CI.
+  - The policy is defined in `deny.toml`: lockfile-pinned versions (wildcard requirements are warnings), unmaintained-crate advisories are fatal only for direct dependencies, and every ignore carries a reason + review date. Verified locally with cargo-deny 0.20: advisories/bans/licenses/sources **all ok**. `npm audit`: 0 vulnerabilities.
 - [ ] SQL injection: parameterized queries only (enforced by code review + tests), authz matrix tests on every endpoint.
 - [ ] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
 - [ ] Container hardening: non-root user, read-only FS where possible, no secrets in image, resource limits, minimal base.
-- [ ] Dependency review for significant deps (maintenance, license, security history) → `docs/security/dependency-review.md`.
+- [x] Dependency review for significant deps (maintenance, license, security history) → `docs/security/dependency-review.md`.
+  - Documents the policy, every significant Rust/npm dependency with its licence and role, and the **known advisories**: RUSTSEC-2023-0071 (rsa via russh/ssh-key — no fixed release, reviewed 2027) and the unmaintained zbus/zvariant chain behind the keyring's Linux backend.
 - [ ] SECURITY.md with reporting process; residual risks documented.
 - Verification: audit checklist complete; CI gates green; no open FATAL/SEVERE findings.
 
@@ -228,4 +230,4 @@ Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionMa
 
 **Environment note:** the dev machine is close to full (the `target/` tree is ~6 GB). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows, and prefer `cargo clean -p <crate>` over a full clean.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: dependency review, `npm audit` gate, CI action pinning by SHA; (6) first CI run on GitHub (the pipeline has never executed remotely).
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (6) first CI run on GitHub (the pipeline has never executed remotely).
