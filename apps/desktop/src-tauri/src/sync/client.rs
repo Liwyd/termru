@@ -60,6 +60,10 @@ pub enum SyncError {
     #[error("the sync server rejected the credentials: {0}")]
     Unauthorized(String),
 
+    /// The account already exists (the client then signs in instead).
+    #[error("{0}")]
+    Conflict(String),
+
     /// The answer could not be understood.
     #[error("the sync server sent an unexpected answer: {0}")]
     Protocol(String),
@@ -86,6 +90,15 @@ impl From<termru_store::StoreError> for SyncError {
 /// The operations the sync engine needs from the server.
 #[async_trait]
 pub trait SyncTransport: Send + Sync {
+    /// Creates an account and returns the token pair.
+    async fn register(
+        &self,
+        email: &str,
+        password: &str,
+        device_id: &str,
+        device_name: &str,
+    ) -> Result<AuthResponse, SyncError>;
+
     /// Signs in and returns the token pair.
     async fn sign_in(
         &self,
@@ -209,10 +222,11 @@ impl HttpTransport {
             }
         });
 
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(SyncError::Unauthorized(message));
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED => Err(SyncError::Unauthorized(message)),
+            reqwest::StatusCode::CONFLICT => Err(SyncError::Conflict(message)),
+            _ => Err(SyncError::Server(message)),
         }
-        Err(SyncError::Server(message))
     }
 }
 
@@ -243,6 +257,28 @@ struct RefreshBody<'a> {
 
 #[async_trait]
 impl SyncTransport for HttpTransport {
+    async fn register(
+        &self,
+        email: &str,
+        password: &str,
+        device_id: &str,
+        device_name: &str,
+    ) -> Result<AuthResponse, SyncError> {
+        let body = Credentials {
+            email,
+            password,
+            device_id,
+            device_name,
+        };
+        self.send(
+            reqwest::Method::POST,
+            "/v1/auth/register",
+            None,
+            Some(&body),
+        )
+        .await
+    }
+
     async fn sign_in(
         &self,
         email: &str,

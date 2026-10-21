@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Desktop sync client: sign in to a sync server, push and pull the host
   configuration, and resolve conflicts explicitly (keep the local or take the
   server copy). The tokens stay in the OS credential store; a secret is never
-  part of a sync payload.
+  part of a sync payload. An end-to-end test drives the client against the
+  real cloud server.
 
 ### Fixed
 

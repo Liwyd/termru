@@ -124,6 +124,17 @@ impl SyncEngine {
         }
     }
 
+    /// Creates an engine that talks to the configured server URL but keeps
+    /// the tokens in the given store instead of the credential store. Used by
+    /// the end-to-end test, which has no credential store.
+    pub fn with_token_store(store: Arc<Store>, tokens: Arc<dyn TokenStorage>) -> Self {
+        Self {
+            store,
+            tokens,
+            transport: Mutex::new(None),
+        }
+    }
+
     /// Creates an engine with an injected transport and token store. Used by
     /// the tests to exercise the cycle without a network.
     pub fn with_transport(
@@ -166,9 +177,22 @@ impl SyncEngine {
 
         let device_id = self.device_id()?;
         let transport = self.transport_for(&server_url).await?;
-        let response = transport
-            .sign_in(email.trim(), password, &device_id, device_name)
-            .await?;
+        // The server answers a login for an unknown account exactly like a
+        // wrong password (it must not reveal which accounts exist), so the
+        // client creates the account first and only signs in when the server
+        // says the account is already there.
+        let response = match transport
+            .register(email.trim(), password, &device_id, device_name)
+            .await
+        {
+            Ok(response) => response,
+            Err(SyncError::Conflict(_)) => {
+                transport
+                    .sign_in(email.trim(), password, &device_id, device_name)
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
 
         self.tokens
             .set(&response)
@@ -428,6 +452,23 @@ mod tests {
 
     #[async_trait]
     impl SyncTransport for FakeTransport {
+        async fn register(
+            &self,
+            _email: &str,
+            _password: &str,
+            _device_id: &str,
+            _device_name: &str,
+        ) -> Result<AuthResponse, SyncError> {
+            Ok(AuthResponse {
+                user_id: uuid::Uuid::nil(),
+                device_id: uuid::Uuid::nil(),
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                access_expires_at: Utc::now(),
+                refresh_expires_at: Utc::now(),
+            })
+        }
+
         async fn sign_in(
             &self,
             _email: &str,
@@ -665,6 +706,16 @@ mod tests {
         struct FailingTransport;
         #[async_trait]
         impl SyncTransport for FailingTransport {
+            async fn register(
+                &self,
+                _email: &str,
+                _password: &str,
+                _device_id: &str,
+                _device_name: &str,
+            ) -> Result<AuthResponse, SyncError> {
+                Err(SyncError::Network("connection refused".to_string()))
+            }
+
             async fn sign_in(
                 &self,
                 _email: &str,

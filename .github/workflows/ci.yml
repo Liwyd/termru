@@ -114,8 +114,25 @@ jobs:
         run: npm run build
 
   desktop:
-    name: Desktop app (compile check)
+    name: Desktop app (compile check, sync end-to-end)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: termru
+          POSTGRES_PASSWORD: termru
+          POSTGRES_DB: termru
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U termru -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TERMRU_TEST_DATABASE_URL: postgres://termru:termru@127.0.0.1:5432/postgres
+      TERMRU_CLOUD_SERVER_BIN: ${{ github.workspace }}/target/debug/termru-cloud-server
     steps:
       - uses: actions/checkout@v4
 
@@ -148,6 +165,14 @@ jobs:
 
       - name: Compile the desktop binary
         run: cargo build -p termru-desktop
+
+      - name: Build the cloud server binary
+        run: cargo build -p termru-cloud-server --bin termru-cloud-server
+
+      # The desktop sync client against the real cloud server: register, push
+      # a host, pull it back on a second device.
+      - name: Sync end-to-end test
+        run: cargo test -p termru-desktop --test sync_e2e
 
   container:
     name: Cloud server image
