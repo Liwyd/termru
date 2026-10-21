@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMMANDS,
+  acceleratorFor,
+  conflictFor,
   defaultBindings,
+  effectiveBindings,
   eventMatches,
+  eventToAccelerator,
   expandAccelerator,
   findConflicts,
   normalizeAccelerator,
@@ -92,5 +96,72 @@ describe('event matching', () => {
 
   it('does not match a bare key press', () => {
     expect(eventMatches(keyEvent({ key: 'k' }), 'Mod+K')).toBe(false);
+  });
+});
+
+describe('user overrides', () => {
+  it('replace the default of a command', () => {
+    const bindings = effectiveBindings({ 'palette.open': 'Mod+Shift+P' });
+    expect(bindings.find((binding) => binding.commandId === 'palette.open')?.accelerator).toBe(
+      'Mod+Shift+P',
+    );
+    // The other commands keep their default.
+    expect(bindings.find((binding) => binding.commandId === 'tab.new')?.accelerator).toBe(
+      COMMANDS.find((command) => command.id === 'tab.new')?.accelerator,
+    );
+  });
+
+  it('ignore an override for an unknown command', () => {
+    const bindings = effectiveBindings({ 'does.not.exist': 'Mod+Q' });
+    expect(bindings).toHaveLength(COMMANDS.length);
+    expect(bindings.some((binding) => binding.accelerator === 'Mod+Q')).toBe(false);
+  });
+
+  it('report the accelerator of a command', () => {
+    expect(acceleratorFor('tab.new')).toBe('Mod+T');
+    expect(acceleratorFor('tab.new', { 'tab.new': 'Mod+Shift+N' })).toBe('Mod+Shift+N');
+  });
+
+  it('find the command that already uses an accelerator', () => {
+    const bindings = defaultBindings();
+    expect(conflictFor('Mod+T', bindings)).toBe('tab.new');
+    expect(conflictFor('Mod+Shift+Q', bindings)).toBeNull();
+    // A command may keep its own accelerator.
+    expect(conflictFor('Mod+T', bindings, 'tab.new')).toBeNull();
+  });
+
+  it('see a conflict that an override creates', () => {
+    const bindings = effectiveBindings({ 'tab.new': 'Mod+K' });
+    expect(conflictFor('Mod+K', bindings)).toBe('palette.open');
+  });
+});
+
+describe('recording a combination', () => {
+  const key = (init: KeyboardEventInit): KeyboardEvent =>
+    ({
+      key: '',
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      ...init,
+    }) as KeyboardEvent;
+
+  it('builds an accelerator from a key event', () => {
+    expect(eventToAccelerator(key({ key: 'k', ctrlKey: true }))).toBe('Ctrl+K');
+    expect(eventToAccelerator(key({ key: 'k', ctrlKey: true, shiftKey: true }))).toBe(
+      'Ctrl+Shift+K',
+    );
+    expect(eventToAccelerator(key({ key: 'ArrowLeft', altKey: true }))).toBe('Alt+ArrowLeft');
+  });
+
+  it('ignores a modifier pressed on its own', () => {
+    expect(eventToAccelerator(key({ key: 'Control', ctrlKey: true }))).toBeNull();
+    expect(eventToAccelerator(key({ key: 'Shift', shiftKey: true }))).toBeNull();
+  });
+
+  it('keeps a named key as it is and a character in upper case', () => {
+    expect(eventToAccelerator(key({ key: 'F5' }))).toBe('F5');
+    expect(eventToAccelerator(key({ key: 'a' }))).toBe('A');
   });
 });

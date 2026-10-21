@@ -2,10 +2,16 @@
   import { onMount } from 'svelte';
   import { api } from './lib/ipc';
   import { commandEntries, palette } from './lib/stores/palette.svelte';
-  import { COMMANDS, eventMatches, expandAccelerator, type CommandId } from './lib/keybindings';
+  import {
+    effectiveBindings,
+    eventMatches,
+    expandAccelerator,
+    type CommandId,
+  } from './lib/keybindings';
   import { errorMessage, hosts } from './lib/stores/hosts.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
   import { sessions } from './lib/stores/sessions.svelte';
+  import { shortcuts } from './lib/stores/shortcuts.svelte';
   import { sync } from './lib/stores/sync.svelte';
   import { toasts } from './lib/stores/toasts.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
@@ -33,6 +39,9 @@
 
   onMount(() => {
     void (async () => {
+      // The preferences come first: the settings dialog copies them when it
+      // opens, and a slow load would show the defaults.
+      await prefs.load();
       await hosts.load();
       // A window opened for a moved session attaches to it instead of
       // restoring the saved layout.
@@ -44,16 +53,18 @@
       // Restored tabs reference hosts, so the layout is restored after them.
       await sessions.restoreLayout();
     })();
-    void prefs.load();
     void sync.load();
 
     const onKeyDown = (event: KeyboardEvent) => {
       // The palette owns the keyboard while it is open.
       if (palette.open) return;
-      for (const command of COMMANDS) {
-        if (!eventMatches(event, command.accelerator)) continue;
+      // So does the recorder of a new keybinding.
+      if (shortcuts.recording !== null) return;
+      // The user's overrides are applied on top of the defaults.
+      for (const binding of effectiveBindings(prefs.prefs.keybindings)) {
+        if (!eventMatches(event, binding.accelerator)) continue;
         event.preventDefault();
-        runCommand(command.id);
+        runCommand(binding.commandId);
         return;
       }
     };
@@ -123,10 +134,13 @@
 
   /** Opens the command palette with the current commands and hosts. */
   function openPalette(scope: 'all' | 'hosts' = 'all'): void {
+    const overrides = prefs.prefs.keybindings;
     const entries =
       scope === 'hosts'
         ? []
-        : commandEntries(runCommand, (command) => expandAccelerator(command.accelerator));
+        : commandEntries(runCommand, (command) =>
+            expandAccelerator(overrides[command.id] ?? command.accelerator),
+          );
     for (const host of hosts.visible) {
       entries.push({
         id: `host:${host.id}`,

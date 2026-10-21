@@ -1,8 +1,19 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+  import { COMMANDS, effectiveBindings, type CommandId } from '../keybindings';
   import { prefs } from '../stores/prefs.svelte';
+  import { shortcuts } from '../stores/shortcuts.svelte';
   import { toasts } from '../stores/toasts.svelte';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
+
+  // The dialog element: it takes the focus while a key combination is
+  // being recorded, so the keydown reaches it.
+  let dialog = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (shortcuts.recording !== null) dialog?.focus();
+  });
 
   // A copy of the preferences, so a change is only applied when the user
   // saves it.
@@ -14,20 +25,50 @@
     cursor_blink: true,
     cursor_style: 'block' as 'block' | 'bar' | 'underline',
     copy_on_select: false,
+    keybindings: {} as Record<string, string>,
   });
 
+  // The draft is filled when the dialog opens. The preferences are read
+  // untracked: a later change of the preferences (the theme is also changed
+  // by the palette) must not wipe what the user is editing.
   $effect(() => {
     if (!open) return;
+    const current = untrack(() => prefs.prefs);
     draft = {
-      theme: prefs.prefs.theme,
-      font_family: prefs.prefs.terminal.font_family,
-      font_size: prefs.prefs.terminal.font_size,
-      scrollback: prefs.prefs.terminal.scrollback,
-      cursor_blink: prefs.prefs.terminal.cursor_blink,
-      cursor_style: prefs.prefs.terminal.cursor_style,
-      copy_on_select: prefs.prefs.terminal.copy_on_select,
+      theme: current.theme,
+      font_family: current.terminal.font_family,
+      font_size: current.terminal.font_size,
+      scrollback: current.terminal.scrollback,
+      cursor_blink: current.terminal.cursor_blink,
+      cursor_style: current.terminal.cursor_style,
+      copy_on_select: current.terminal.copy_on_select,
+      keybindings: { ...current.keybindings },
     };
   });
+
+  // The accelerator of a command, with the pending changes applied.
+  const bindings = $derived(effectiveBindings(draft.keybindings));
+
+  function acceleratorOf(commandId: CommandId): string {
+    return bindings.find((binding) => binding.commandId === commandId)?.accelerator ?? '';
+  }
+
+  /** Captures the next key combination. */
+  function onKeyDown(event: KeyboardEvent): void {
+    if (shortcuts.recording === null) return;
+    // The dialog owns the keyboard while a combination is being recorded.
+    event.preventDefault();
+    event.stopPropagation();
+    shortcuts.record(event, draft.keybindings);
+  }
+
+  function resetBinding(commandId: CommandId): void {
+    delete draft.keybindings[commandId];
+  }
+
+  function resetBindings(): void {
+    draft.keybindings = {};
+  }
 
   async function save(): Promise<void> {
     await prefs.update({
@@ -42,6 +83,7 @@
         cursor_style: draft.cursor_style,
         copy_on_select: draft.copy_on_select,
       },
+      keybindings: { ...draft.keybindings },
     });
     toasts.success('Settings saved.');
     open = false;
@@ -55,6 +97,7 @@
     draft.cursor_blink = true;
     draft.cursor_style = 'block';
     draft.copy_on_select = false;
+    draft.keybindings = {};
   }
 </script>
 
@@ -64,7 +107,15 @@
     role="presentation"
     onclick={(e) => e.target === e.currentTarget && (open = false)}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Settings">
+    <div
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+      tabindex="-1"
+      bind:this={dialog}
+      onkeydown={onKeyDown}
+    >
       <header>
         <h2>Settings</h2>
         <button type="button" class="ghost" onclick={() => (open = false)} aria-label="Close"
@@ -121,6 +172,40 @@
           <input type="checkbox" bind:checked={draft.copy_on_select} />
           <span>Copy the selection automatically</span>
         </label>
+      </section>
+
+      <section>
+        <h3>Shortcuts</h3>
+
+        <ul class="shortcuts">
+          {#each COMMANDS as command (command.id)}
+            <li>
+              <span class="title">{command.title}</span>
+              <span class="group">{command.group}</span>
+              <kbd class:recording={shortcuts.recording === command.id}>
+                {shortcuts.recording === command.id ? 'press a key…' : acceleratorOf(command.id)}
+              </kbd>
+              {#if shortcuts.recording === command.id}
+                <button type="button" onclick={() => shortcuts.cancel()}>Cancel</button>
+              {:else}
+                <button type="button" onclick={() => shortcuts.start(command.id)}>Change</button>
+                {#if draft.keybindings[command.id]}
+                  <button type="button" class="ghost" onclick={() => resetBinding(command.id)}
+                    >Reset</button
+                  >
+                {/if}
+              {/if}
+            </li>
+          {/each}
+        </ul>
+
+        {#if shortcuts.conflict}
+          <p class="conflict" role="alert">{shortcuts.conflict}</p>
+        {/if}
+
+        {#if Object.keys(draft.keybindings).length > 0}
+          <button type="button" onclick={resetBindings}>Reset all shortcuts</button>
+        {/if}
       </section>
 
       <p class="hint">
@@ -220,6 +305,53 @@
     margin: 0;
     font-size: 0.78rem;
     color: var(--termru-muted);
+  }
+
+  .shortcuts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .shortcuts li {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+  }
+
+  .shortcuts .title {
+    flex: 1;
+  }
+
+  .shortcuts .group {
+    font-size: 0.7rem;
+    color: var(--termru-muted);
+  }
+
+  kbd {
+    font-family: monospace;
+    font-size: 0.72rem;
+    padding: 0.12rem 0.35rem;
+    border-radius: var(--termru-radius);
+    border: 1px solid var(--termru-border);
+    background: var(--termru-bg);
+    min-width: 5.5rem;
+    text-align: center;
+  }
+
+  kbd.recording {
+    border-color: var(--termru-accent);
+    color: var(--termru-accent);
+  }
+
+  .conflict {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--termru-danger);
   }
 
   code {

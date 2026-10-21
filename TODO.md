@@ -103,9 +103,9 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 7 — Keyboard, palette, search, theming, preferences
 
-- [ ] Global + terminal-aware keybinding system (platform defaults, conflict detection, remapping UI, works when terminal focused without stealing input).
-  - Done: command registry with platform-aware accelerators (`Mod` → Ctrl/Cmd), conflict detection (unit-tested), a global key dispatcher that never shadows the terminal's own keys, and per-command bindings shown in the palette.
-  - Pending: a remapping UI (the registry supports user overrides; the UI does not exist yet).
+- [x] Global + terminal-aware keybinding system (platform defaults, conflict detection, remapping UI, works when terminal focused without stealing input).
+  - Done: command registry with platform-aware accelerators (`Mod` → Ctrl/Cmd), conflict detection (unit-tested), a global key dispatcher that never shadows the terminal's own keys, per-command bindings shown in the palette, and **a remapping UI** in the settings dialog: "Change" records the next combination, a combination that another command already uses is refused with the name of the command that owns it, Escape cancels, and every binding can be reset individually or all at once. The overrides are stored in the portable `preferences` record, so they follow the user to the other devices, and the dispatcher and the palette use the effective binding.
+  - The recorder takes the keyboard: the global dispatcher ignores the keys while a combination is being recorded, so the command that is being rebound does not run instead of being captured.
 - [x] Command palette (fuzzy, discoverable, shows bindings).
   - `Ctrl/Cmd+K` opens it; fuzzy subsequence matching with word-boundary and consecutive-character bonuses; arrows/Enter/Escape; shows the accelerator of every entry and offers the hosts as entries ("Connect to …").
 - [ ] Global search across hosts/tags/snippets.
@@ -118,7 +118,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Done: recent hosts (sidebar section), favorites (star toggle + sorting), host → tab via drag-free "Connect"/palette entries.
   - Pending: context menus, tooltips, drag-and-drop of hosts onto tabs, tags/folders in the tree.
 - Verification: unit tests for keybinding conflict detection and command registry; `svelte-check` clean; manual keyboard-only walkthrough of core journeys.
-  - Automated: 53 frontend tests (keybinding normalization/conflicts/event matching, fuzzy ranking, the tab state machine, the layout document, the sync store, the webview hardening scan, and the jsdom UI↔Tauri contract test) + `svelte-check` 0/0.
+  - Automated: 62 frontend tests (keybinding normalization/conflicts/event matching, the overrides and the recorder, fuzzy ranking, the tab state machine, the layout document, the sync store, the webview hardening scan, and the jsdom UI↔Tauri contract tests) + `svelte-check` 0/0.
   - Manual: the keyboard-only walkthrough still needs a desktop session (no window manager on this machine).
 
 ## Phase 8 — Local security (desktop)

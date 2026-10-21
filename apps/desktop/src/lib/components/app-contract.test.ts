@@ -324,6 +324,59 @@ describe('desktop UI ↔ Tauri contract', () => {
     expect(prefs?.terminal.cursor_style).toBe('block');
   });
 
+  it('rebinds a command and refuses a combination that is already taken', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: ',', ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Settings');
+    });
+
+    // Rebind the command palette.
+    const change = findButton(target, 'Change');
+    click(change);
+
+    // A combination that another command already uses is refused.
+    target.querySelector('.dialog')?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 't',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Already used by');
+    });
+
+    // A free combination is accepted.
+    target.querySelector('.dialog')?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'F8',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Ctrl+Shift+F8');
+    });
+
+    click(findButton(target, 'Save'));
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'prefs_set')).toBe(true);
+    });
+
+    const call = invokeCalls.find((entry) => entry.cmd === 'prefs_set');
+    const prefs = call?.args?.prefs as { keybindings: Record<string, string> } | undefined;
+    expect(prefs?.keybindings['palette.open']).toBe('Ctrl+Shift+F8');
+  });
+
   it('closes the backend session when the tab is closed', async () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('web-1');

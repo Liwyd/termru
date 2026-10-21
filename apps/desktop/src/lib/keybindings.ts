@@ -133,6 +133,79 @@ export function defaultBindings(): Keybinding[] {
   }));
 }
 
+/**
+ * The bindings in effect: the defaults, with the user's overrides on top.
+ *
+ * An override for a command that does not exist is ignored — the map is
+ * synced between devices, and a device may know more commands than another.
+ */
+export function effectiveBindings(overrides: Record<string, string> = {}): Keybinding[] {
+  const known = new Set(COMMANDS.map((command) => command.id));
+  return COMMANDS.map((command) => ({
+    commandId: command.id,
+    accelerator:
+      known.has(command.id) && overrides[command.id] ? overrides[command.id] : command.accelerator,
+  }));
+}
+
+/** The accelerator of one command, with the overrides applied. */
+export function acceleratorFor(
+  commandId: CommandId,
+  overrides: Record<string, string> = {},
+): string {
+  return overrides[commandId] ?? COMMANDS.find((c) => c.id === commandId)?.accelerator ?? '';
+}
+
+/**
+ * The command that already uses an accelerator, if any.
+ *
+ * `except` leaves one command out of the search, so a command can keep its
+ * own accelerator.
+ */
+export function conflictFor(
+  accelerator: string,
+  bindings: Keybinding[],
+  except?: CommandId,
+): CommandId | null {
+  const wanted = normalizeAccelerator(accelerator);
+  for (const binding of bindings) {
+    if (binding.commandId === except) continue;
+    if (normalizeAccelerator(binding.accelerator) === wanted) return binding.commandId;
+  }
+  return null;
+}
+
+/** The title of a command, for a message about a conflict. */
+export function commandTitle(commandId: CommandId): string {
+  return COMMANDS.find((command) => command.id === commandId)?.title ?? commandId;
+}
+
+/** The keys that are modifiers on their own and carry no binding. */
+const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock']);
+
+/**
+ * Turns a key event into an accelerator (`Ctrl+Shift+K`).
+ *
+ * Returns null when the event carries no key (a modifier pressed on its
+ * own), so the recorder can wait for a real combination.
+ */
+export function eventToAccelerator(event: KeyboardEvent): string | null {
+  const key = event.key;
+  if (!key || MODIFIER_KEYS.has(key)) return null;
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('Ctrl');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+  if (event.metaKey) parts.push('Cmd');
+
+  // A single character is stored in upper case, a named key (F5, ArrowLeft)
+  // as it is.
+  const name = key.length === 1 ? key.toUpperCase() : key;
+  parts.push(name);
+  return parts.join('+');
+}
+
 /** A key event matches an accelerator. */
 export function eventMatches(event: KeyboardEvent, accelerator: string): boolean {
   const parts = expandAccelerator(accelerator)
