@@ -84,7 +84,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Pending: scrollback restore after a re-attach (belongs with the Phase 6 re-attach work, which uses the `termru-ssh` replay buffer).
 - [ ] Tabs: create/close/rename/reorder, keyboard navigation, session indicators (activity/error), unsaved-layout persistence.
   - Done: create/close, rename (double-click), drag & drop reordering, keyboard navigation (`Ctrl+Tab` / `Ctrl+Shift+Tab`, `Ctrl+W`), per-tab status badge, **layout persistence** (tabs + order + hosts saved through the `workspaces` repository; restored on launch as *disconnected placeholders* — secrets are never stored, so a restored tab reconnects only on request).
-- Verification: `cargo test --workspace` → 118 tests pass (core 28, store 25, ssh 26, sshd integration 17 incl. a replay-snapshot test, desktop 19 + 3 app-layer E2E incl. the two-view attach case), `cargo clippy --workspace --all-targets` 0 warnings, `cargo fmt --check` clean, `npm run lint` (svelte-check 0/0), `npm run test` (28 vitest, incl. a jsdom contract test that asserts the UI calls the Tauri commands with the documented argument shapes), `npm run build` green. **Pending: a visual UI pass — this machine's X session has no window manager, so the app window cannot be shown or driven here; it must be done on a real desktop session.**
+- Verification: `cargo test --workspace` → 122 tests pass (core 28, store 25, ssh 26, sshd integration 17 incl. a replay-snapshot test, desktop 23 incl. 3 app-layer E2E with the two-view attach case + the logging audit), `cargo clippy --workspace --all-targets` 0 warnings, `cargo fmt --check` clean, `npm run lint` (svelte-check 0/0), `npm run test` (28 vitest, incl. a jsdom contract test that asserts the UI calls the Tauri commands with the documented argument shapes), `npm run build` green. **Pending: a visual UI pass — this machine's X session has no window manager, so the app window cannot be shown or driven here; it must be done on a real desktop session.**
 
 ## Phase 6 — Splits, multiple windows, workspaces
 
@@ -107,10 +107,17 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 8 — Local security (desktop)
 
-- [ ] Secrets in OS keyring via `keyring` crate (Secret Service / Windows Credential Manager / macOS Keychain); no plaintext secrets in SQLite; secret values zeroized where feasible; never logged.
+- [x] Secrets in OS keyring via `keyring` crate (Secret Service / Windows Credential Manager / macOS Keychain); no plaintext secrets in SQLite; secret values zeroized where feasible; never logged.
+  - `secrets.rs`: secrets are stored under `com.liwyd.termru` in the platform credential store; the app degrades gracefully when no credential store exists (the secret is asked for per connection); the frontend drops its in-memory copy once the credential store holds it; the connection path falls back to the stored secret, so "remembered" hosts connect without prompting.
+  - The database schema has no field that could hold a secret, and the sync payload never contains one.
 - [ ] Host editor: key file picker (path validation, no copy of private key into DB), passphrase never persisted unless stored in keyring (user choice, explicit).
+  - Done: key paths are validated (absolute, non-empty) and only the *path* is stored (never the key); passphrases are persisted only in the credential store and only when the user explicitly opts in.
+  - Pending: a native file picker for the key path (the path is currently typed).
 - [ ] Webview hardening: CSP, no remote content loading in webview, single-instance plugin, secure IPC (input validation on every command: sizes, ids, path sanity).
-- [ ] Logging audit: grep-based test asserting no secret material patterns in log files.
+  - Done: CSP set, capabilities limited to `core:default` (+ the session windows), no remote content, command inputs validated (terminal geometry bounds, host/identity validation, secret kind whitelist, key path checks).
+  - Pending: the single-instance plugin (a second launch should focus the running window).
+- [x] Logging audit: grep-based test asserting no secret material patterns in log files.
+  - `termru_desktop_lib::tests::log_files_never_contain_secret_material` initializes the real logging setup, exercises the credential-handling paths and greps the produced log file for the secret values (they must be absent, redacted placeholders present).
 - Verification: unit tests for keyring abstraction (mock backend), CSP in prod config, command input validation tests.
 
 ## Phase 9 — Cloud API (self-hosted manager)
@@ -207,4 +214,4 @@ Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionMa
 
 **Environment note:** the dev machine ran out of disk (the `target/` tree was lost mid-build). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7: keybindings, palette, search; (4) Phase 8: OS keyring for secrets (passwords currently live only in memory).
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7: keybindings, palette, search; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11: threat model and security documentation.

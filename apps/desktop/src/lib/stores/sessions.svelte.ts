@@ -32,6 +32,8 @@ export interface Tab {
   restored: boolean;
   /** Set when the view renders a session owned by another window. */
   attachTo: string | null;
+  /** Store the secret in the OS credential store once connected. */
+  rememberSecret: boolean;
 }
 
 /** How long we wait for an expected auto-reconnect before showing "dead". */
@@ -53,7 +55,7 @@ export class SessionStore {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? null;
   }
 
-  open(host: Host, secrets: SessionSecrets): Tab {
+  open(host: Host, secrets: SessionSecrets, rememberSecret = false): Tab {
     const tab: Tab = {
       id: newTabId(),
       sessionId: null,
@@ -71,6 +73,7 @@ export class SessionStore {
       duplicateFrom: null,
       restored: false,
       attachTo: null,
+      rememberSecret,
     };
     this.tabs = [...this.tabs, tab];
     this.scheduleLayoutSave();
@@ -99,6 +102,7 @@ export class SessionStore {
       duplicateFrom: tab.sessionId,
       restored: false,
       attachTo: null,
+      rememberSecret: false,
     };
     this.tabs = [...this.tabs, clone];
     this.scheduleLayoutSave();
@@ -234,6 +238,7 @@ export class SessionStore {
         duplicateFrom: null,
         restored: true,
         attachTo: null,
+        rememberSecret: false,
       });
     }
     if (restored.length === 0) return;
@@ -263,6 +268,7 @@ export class SessionStore {
       duplicateFrom: null,
       restored: false,
       attachTo: sessionId,
+      rememberSecret: false,
     };
     this.tabs = [...this.tabs, tab];
     this.activeId = tab.id;
@@ -299,6 +305,7 @@ export class SessionStore {
         tab.dead = false;
         tab.awaitingReconnect = false;
         tab.lastFailure = null;
+        void this.rememberSecret(tab);
         break;
       case 'connecting':
       case 'authenticating':
@@ -364,6 +371,29 @@ export class SessionStore {
     tab.exitCode = null;
     tab.status = { state: 'connecting' };
     tab.generation += 1;
+  }
+
+  /**
+   * Stores the secret in the OS credential store and drops the in-memory
+   * copy. Called once the connection is established.
+   */
+  async rememberSecret(tab: Tab): Promise<void> {
+    if (!tab.rememberSecret) return;
+    const password = tab.secrets.password;
+    const passphrase = tab.secrets.passphrase;
+    if (!password && !passphrase) return;
+    const kind = password ? 'password' : 'passphrase';
+    const value = password ?? passphrase;
+    if (!value) return;
+    try {
+      await api.secretSet(tab.host.id, kind, value);
+      // The credential store holds it now: do not keep it in the frontend.
+      if (password) tab.secrets.password = undefined;
+      if (passphrase) tab.secrets.passphrase = undefined;
+      toasts.success('The secret was stored in your system credential store.');
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    }
   }
 
   /** Local failure (e.g. the backend refused to start the connection). */

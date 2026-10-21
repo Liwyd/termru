@@ -5,14 +5,17 @@
     host,
     oncancel,
     onsubmit,
+    secretStored = false,
   }: {
     host: Host;
     oncancel: () => void;
-    onsubmit: (secrets: SessionSecrets) => void;
+    onsubmit: (secrets: SessionSecrets, remember: boolean) => void;
+    secretStored?: boolean;
   } = $props();
 
   let password = $state('');
   let passphrase = $state('');
+  let remember = $state(false);
   let busy = $state(false);
 
   const needsPassword = $derived(host.auth.type === 'password');
@@ -24,7 +27,7 @@
     const secrets: SessionSecrets = {};
     if (needsPassword) secrets.password = password;
     if (needsPassphrase) secrets.passphrase = passphrase.length > 0 ? passphrase : undefined;
-    onsubmit(secrets);
+    onsubmit(secrets, remember);
   }
 </script>
 
@@ -52,6 +55,16 @@
           Passphrase for the private key
           <input type="password" bind:value={passphrase} autocomplete="off" />
         </label>
+      {/if}
+
+      {#if needsPassword || needsPassphrase}
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={remember} />
+          <span>Remember in the system credential store</span>
+        </label>
+        {#if secretStored}
+          <p class="hint">A secret is already stored for this host.</p>
+        {/if}
       {/if}
 
       <p class="hint">
@@ -124,6 +137,14 @@
     background: var(--termru-bg);
     color: var(--termru-fg);
     font: inherit;
+  }
+
+  .checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--termru-fg);
+    font-size: 0.8rem;
   }
 
   .hint {

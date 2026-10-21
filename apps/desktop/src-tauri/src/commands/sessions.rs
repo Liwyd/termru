@@ -16,6 +16,7 @@ use termru_core::ids::HostId;
 use termru_ssh::{AuthChoice, ConnectParams, ConnectTimeouts, SecretValue, SessionOptions};
 
 use crate::app_error::CommandError;
+use crate::secrets::{SecretKind, SecretStore};
 use crate::state::sessions::spawn_connection;
 use crate::state::{AppState, SessionInfo, SessionUpdate};
 
@@ -105,7 +106,13 @@ pub(crate) fn build_auth(
 ) -> Result<AuthChoice, CommandError> {
     match &host.auth {
         AuthMethod::Password => {
-            let password = secrets.password.clone().ok_or_else(|| {
+            // Prefer the secret the user just typed; otherwise fall back to
+            // the OS credential store; otherwise ask.
+            let password = match secrets.password.clone() {
+                Some(password) => Some(password),
+                None => SecretStore::get(&host.id.to_string(), SecretKind::Password),
+            }
+            .ok_or_else(|| {
                 CommandError::new(format!("host \"{}\" requires a password", host.name))
             })?;
             Ok(AuthChoice::Password {
@@ -124,9 +131,13 @@ pub(crate) fn build_auth(
                     identity.name
                 ))
             })?;
+            let passphrase = match secrets.passphrase.clone() {
+                Some(passphrase) => Some(passphrase),
+                None => SecretStore::get(&host.id.to_string(), SecretKind::Passphrase),
+            };
             Ok(AuthChoice::PrivateKey {
                 key_path: PathBuf::from(key_path),
-                passphrase: secrets.passphrase.clone().map(SecretValue::new),
+                passphrase: passphrase.map(SecretValue::new),
             })
         }
         AuthMethod::Agent => Ok(AuthChoice::Agent {

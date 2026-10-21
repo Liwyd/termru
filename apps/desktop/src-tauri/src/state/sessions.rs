@@ -145,12 +145,16 @@ struct Managed {
     /// owner that opened it; additional ones are attached later (a tab
     /// moved to another window). The session itself lives in the manager —
     /// views come and go without dropping the SSH connection.
-    views: Vec<Channel<SessionUpdate>>,
+    ///
+    /// Each view carries an id so that a view attached *while* an event is
+    /// being forwarded is never dropped by the cleanup of dead views.
+    views: Vec<(u64, Channel<SessionUpdate>)>,
 }
 
 pub struct SessionManager {
     entries: Mutex<HashMap<String, Managed>>,
     next_id: AtomicU64,
+    next_view_id: AtomicU64,
 }
 
 impl SessionManager {
@@ -158,6 +162,7 @@ impl SessionManager {
         Self {
             entries: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            next_view_id: AtomicU64::new(1),
         }
     }
 
@@ -187,7 +192,7 @@ impl SessionManager {
                 session: None,
                 params,
                 task_alive: true,
-                views: vec![view],
+                views: vec![(self.next_view_id.fetch_add(1, Ordering::Relaxed), view)],
             },
         );
         (id, cancel_rx)
@@ -229,9 +234,10 @@ impl SessionManager {
     /// Adds a view to a session without touching its transport (used when a
     /// view (re)connects to an existing session).
     pub fn add_view(&self, id: &str, view: Channel<SessionUpdate>) {
+        let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.lock();
         if let Some(entry) = guard.get_mut(id) {
-            entry.views.push(view);
+            entry.views.push((view_id, view));
         }
     }
 
@@ -265,9 +271,10 @@ impl SessionManager {
         }
         let _ = view.send(SessionUpdate::Status { status });
 
+        let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.lock();
         if let Some(entry) = guard.get_mut(id) {
-            entry.views.push(view);
+            entry.views.push((view_id, view));
         }
         Ok(())
     }
@@ -281,18 +288,18 @@ impl SessionManager {
     }
 
     /// Snapshot of the views rendering a session.
-    fn views(&self, id: &str) -> Vec<Channel<SessionUpdate>> {
+    fn views(&self, id: &str) -> Vec<(u64, Channel<SessionUpdate>)> {
         self.lock()
             .get(id)
             .map(|entry| entry.views.clone())
             .unwrap_or_default()
     }
 
-    /// Keeps only the views that still accept events (a closed window drops
-    /// its view).
-    fn retain_views(&self, id: &str, alive: Vec<Channel<SessionUpdate>>) {
+    /// Removes the views whose window disappeared. Views attached in the
+    /// meantime are kept (they are not part of `dead`).
+    fn remove_views(&self, id: &str, dead: &[u64]) {
         if let Some(entry) = self.lock().get_mut(id) {
-            entry.views = alive;
+            entry.views.retain(|(view_id, _)| !dead.contains(view_id));
         }
     }
 
@@ -444,14 +451,16 @@ fn forward(manager: &SessionManager, id: &str, update: SessionUpdate) -> bool {
     if views.is_empty() {
         return false;
     }
-    let mut alive = Vec::with_capacity(views.len());
-    for view in views {
+    let mut dead: Vec<u64> = Vec::new();
+    let mut any_alive = false;
+    for (view_id, view) in views {
         if view.send(update.clone()).is_ok() {
-            alive.push(view);
+            any_alive = true;
+        } else {
+            dead.push(view_id);
         }
     }
-    let any_alive = !alive.is_empty();
-    manager.retain_views(id, alive);
+    manager.remove_views(id, &dead);
     any_alive
 }
 

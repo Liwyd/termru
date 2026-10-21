@@ -15,6 +15,7 @@
   import type { Host, SessionSecrets } from './lib/types';
 
   let pendingHost = $state<Host | null>(null);
+  let pendingSecretStored = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
   $effect(() => {
@@ -75,16 +76,22 @@
   }
 
   /** Hosts that need a secret prompt before the connection can start. */
-  function requestConnect(host: Host): void {
+  async function requestConnect(host: Host): Promise<void> {
     if (host.auth.type === 'agent') {
       openTab(host, {});
       return;
     }
+    const kind = host.auth.type === 'password' ? 'password' : 'passphrase';
+    try {
+      pendingSecretStored = await api.secretHas(host.id, kind);
+    } catch {
+      pendingSecretStored = false;
+    }
     pendingHost = host;
   }
 
-  function openTab(host: Host, secrets: SessionSecrets): void {
-    sessions.open(host, secrets);
+  function openTab(host: Host, secrets: SessionSecrets, remember = false): void {
+    sessions.open(host, secrets, remember);
     pendingHost = null;
   }
 </script>
@@ -119,9 +126,10 @@
 {#if pendingHost}
   <ConnectDialog
     host={pendingHost}
+    secretStored={pendingSecretStored}
     oncancel={() => (pendingHost = null)}
-    onsubmit={(secrets) => {
-      if (pendingHost) openTab(pendingHost, secrets);
+    onsubmit={(secrets, remember) => {
+      if (pendingHost) openTab(pendingHost, secrets, remember);
     }}
   />
 {/if}

@@ -1,5 +1,6 @@
 mod app_error;
 mod commands;
+mod secrets;
 mod state;
 
 use std::sync::OnceLock;
@@ -73,6 +74,9 @@ fn build() -> tauri::Result<tauri::App> {
             commands::layout::layout_load,
             commands::windows::window_open_session,
             commands::windows::window_close,
+            commands::secrets::secret_set,
+            commands::secrets::secret_delete,
+            commands::secrets::secret_has,
         ])
         .build(tauri::generate_context!())
 }
@@ -84,11 +88,15 @@ static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLo
 /// Logs to stderr **and** to a daily rotating file in the app data dir.
 /// Secrets never reach the log: credential values are never formatted.
 fn init_logging(data_dir: &std::path::Path) {
+    init_logging_in(&data_dir.join("logs"));
+}
+
+/// Initializes logging into `log_dir` (stderr + a daily rotating file).
+fn init_logging_in(log_dir: &std::path::Path) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,termru=debug"));
 
-    let log_dir = data_dir.join("logs");
-    if std::fs::create_dir_all(&log_dir).is_err() {
+    if std::fs::create_dir_all(log_dir).is_err() {
         // Logging to a file is best-effort; stderr keeps working.
         tracing_subscriber::registry()
             .with(filter)
@@ -97,7 +105,7 @@ fn init_logging(data_dir: &std::path::Path) {
         return;
     }
 
-    let appender = tracing_appender::rolling::daily(&log_dir, "termru.log");
+    let appender = tracing_appender::rolling::daily(log_dir, "termru.log");
     let (writer, guard) = tracing_appender::non_blocking(appender);
     let _ = LOG_GUARD.set(guard);
 
@@ -120,4 +128,78 @@ fn install_panic_hook() {
         );
         default_hook(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termru_ssh::SecretValue;
+
+    const PASSWORD: &str = "audit-password-4f2c9a";
+    const PASSPHRASE: &str = "audit-passphrase-8b71de";
+
+    fn log_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_file())
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
+    }
+
+    /// The app's log files must never contain secret material.
+    #[test]
+    fn log_files_never_contain_secret_material() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+
+        // The real logging setup (stderr + daily rotating file).
+        init_logging_in(&log_dir);
+
+        // Exercise the paths that touch credentials: both values are wrapped
+        // in the redacting `SecretValue`, and `AuthChoice`'s `Debug` is
+        // redacted as well.
+        let password = SecretValue::new(PASSWORD.to_string());
+        let passphrase = SecretValue::new(PASSPHRASE.to_string());
+        let auth = termru_ssh::AuthChoice::PrivateKey {
+            key_path: std::path::PathBuf::from("/home/user/.ssh/id_ed25519"),
+            passphrase: Some(passphrase),
+        };
+        tracing::info!("connecting with {auth:?} and password {password:?}");
+        tracing::warn!("retrying the connection for the same host");
+
+        // The non-blocking writer flushes asynchronously: wait for the
+        // expected line to appear before auditing the file.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut content = String::new();
+        while std::time::Instant::now() < deadline {
+            content = log_files(&log_dir)
+                .iter()
+                .filter_map(|file| std::fs::read_to_string(file).ok())
+                .collect::<Vec<_>>()
+                .join("");
+            if content.contains("SecretValue([redacted])") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert!(
+            !content.contains(PASSWORD),
+            "the log file contains the password:\n{content}"
+        );
+        assert!(
+            !content.contains(PASSPHRASE),
+            "the log file contains the passphrase:\n{content}"
+        );
+        assert!(
+            content.contains("SecretValue([redacted])"),
+            "expected a redacted secret in the log:\n{content}"
+        );
+    }
 }

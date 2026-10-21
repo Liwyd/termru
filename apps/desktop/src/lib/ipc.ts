@@ -56,6 +56,13 @@ export const api = {
   windowOpenSession: (id: string, title: string) =>
     invoke<string>('window_open_session', { id, title }),
   windowClose: (label: string) => invoke<void>('window_close', { label }),
+
+  secretSet: (hostId: string, kind: 'password' | 'passphrase', value: string) =>
+    invoke<void>('secret_set', { hostId, kind, value }),
+  secretDelete: (hostId: string, kind: 'password' | 'passphrase') =>
+    invoke<void>('secret_delete', { hostId, kind }),
+  secretHas: (hostId: string, kind: 'password' | 'passphrase') =>
+    invoke<boolean>('secret_has', { hostId, kind }),
 };
 
 export type { HostKeyPromptRequest };
