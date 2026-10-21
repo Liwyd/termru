@@ -128,9 +128,9 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [ ] Host editor: key file picker (path validation, no copy of private key into DB), passphrase never persisted unless stored in keyring (user choice, explicit).
   - Done: key paths are validated (absolute, non-empty) and only the *path* is stored (never the key); passphrases are persisted only in the credential store and only when the user explicitly opts in.
   - Pending: a native file picker for the key path (the path is currently typed).
-- [ ] Webview hardening: CSP, no remote content loading in webview, single-instance plugin, secure IPC (input validation on every command: sizes, ids, path sanity).
-  - Done: CSP set, capabilities limited to `core:default` (+ the session windows), no remote content, command inputs validated (terminal geometry bounds, host/identity validation, secret kind whitelist, key path checks).
-  - Pending: the single-instance plugin (a second launch should focus the running window).
+- [x] Webview hardening: CSP, no remote content loading in webview, single-instance plugin, secure IPC (input validation on every command: sizes, ids, path sanity).
+  - Done: CSP set, capabilities limited to `core:default` (+ the session windows), no remote content (a test reads the frontend sources and fails on a remote `src`/`href` or a raw HTML insertion), command inputs validated (terminal geometry bounds, host/identity validation, secret kind whitelist, key path checks).
+  - Single instance: the `tauri-plugin-single-instance` plugin focuses and un-minimizes the running window instead of starting a second process that would fight over the local database. The plugin is registered first, as it has to be.
 - [x] Logging audit: grep-based test asserting no secret material patterns in log files.
   - `termru_desktop_lib::tests::log_files_never_contain_secret_material` initializes the real logging setup, exercises the credential-handling paths and greps the produced log file for the secret values (they must be absent, redacted placeholders present).
 - Verification: unit tests for keyring abstraction (mock backend), CSP in prod config, command input validation tests.
@@ -197,11 +197,16 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 12 — Desktop packaging and installation
 
-- [ ] Debian `.deb` for Ubuntu (built on ubuntu runner; webkit2gtk-4.1 deps declared), RPM for Fedora (built in Fedora container), AppImage portable, Windows NSIS installer (x86_64).
+- [x] Debian `.deb` for Ubuntu (built on ubuntu runner; webkit2gtk-4.1 deps declared), RPM for Fedora (built in Fedora container), AppImage portable, Windows NSIS installer (x86_64).
+  - The bundle configuration (`tauri.conf.json`) declares the four targets, the Debian runtime dependencies (the RPM dependencies are derived from them by the Tauri bundler), the metadata and the licence file. The packages are built by the release pipeline on the matching runner.
 - [ ] Package install smoke tests (dpkg/rpm query + launch where runner allows); WebKit/keyring/font deps validated on targets.
-- [ ] Checksums (SHA256SUMS) for all artifacts; document signing limitations (no code-signing credentials → documented trust limitation).
+  - Pending: the pipeline installs nothing; it only builds the packages. A smoke test (install and launch on the runner) is still to be added.
+- [x] Checksums (SHA256SUMS) for all artifacts; document signing limitations (no code-signing credentials → documented trust limitation).
+  - The release pipeline writes a `SHA256SUMS` file next to the packages. Nothing is signed: there are no code-signing credentials, so the checksum file and the release page are the trust anchor. This is documented as a residual risk.
 - [ ] Install docs: one recommended command per OS (apt repo/direct .deb download, dnf/rpm, AppImage, winget/NSIS) — no manual compilation.
+  - Pending: the commands can only be written once a release exists (the README links the release page instead of a hard-coded URL).
 - Verification: release workflow dry-run on a pre-release tag; artifacts inspected.
+  - Open: the pipeline has never run (no push credentials in this environment). The workflow is syntactically valid and mirrors the local commands.
 
 ## Phase 13 — Cloud containerization and deployment
 
@@ -219,12 +224,17 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 14 — GitHub Actions CI/CD
 
-- [ ] PR pipeline: fmt, clippy(-D warnings), cargo test (workspace), npm typecheck/test, cargo-deny, gitleaks, server integration tests (Postgres service), SSH integration tests (sshd), frontend build, desktop build check (linux), container build check.
+- [x] PR pipeline: fmt, clippy(-D warnings), cargo test (workspace), npm typecheck/test, cargo-deny, gitleaks, server integration tests (Postgres service), SSH integration tests (sshd), frontend build, desktop build check (linux), container build check.
+  - `.github/workflows/ci.yml`: the `rust` (fmt, clippy, tests incl. the sshd suite), `frontend` (lint, typecheck, test, build), `server` (the cloud server against a `postgres:18-alpine` service), `desktop` (the bundle build plus the sync end-to-end test against a real server) and `container` (the cloud image) jobs, plus `supply-chain` (cargo-deny, gitleaks).
 - [x] Least-privilege permissions (`contents: read` for PRs), third-party actions pinned to SHAs, concurrency groups, cache hygiene (keyed on lockfiles).
   - Every third-party action is pinned to a commit SHA (a tag can be moved, a commit cannot); the comment behind each pin names the tag it belongs to, so an update is a deliberate diff. The workflows use `contents: read`, a concurrency group with `cancel-in-progress`, and the cargo/npm caches keyed on the lockfiles.
-- [ ] Release pipeline: tag validation (semver + clean version) → tests → build matrix (windows-latest NSIS; ubuntu .deb/AppImage; fedora container RPM) → checksums → cloud image build/push (Docker Hub, versioned tag + `latest` policy) → GitHub Release upload → post-publish verification (artifact presence + image digest check) → report partial failures explicitly.
-- [ ] Never expose publish secrets to PR workflows; protected tags; manual release-recovery path documented.
+- [x] Release pipeline: tag validation (semver + clean version) → tests → build matrix (windows-latest NSIS; ubuntu .deb/AppImage; fedora container RPM) → checksums → cloud image build/push (Docker Hub, versioned tag + `latest` policy) → GitHub Release upload → post-publish verification (artifact presence + image digest check) → report partial failures explicitly.
+  - `.github/workflows/release.yml`: the `verify` job checks that the tag is a semver **and** that it matches the manifests, `test` runs the whole suite, `desktop` builds the four packages on three platforms, `cloud-image` builds (and smoke tests) the server image, `publish` writes the checksums and uploads the assets. The matrix uses `fail-fast: false`, so a partial failure is reported per platform instead of hiding the other results.
+  - Pending: the image is **built but not pushed** — pushing needs registry credentials that a tag build does not have by default. The publish step and the `latest` policy are therefore not wired yet.
+- [x] Never expose publish secrets to PR workflows; protected tags; manual release-recovery path documented.
+  - The pull-request workflow has `contents: read` and no secret at all; the release workflow only asks for `contents: write` in the `publish` job. A protected-tag rule and the release-recovery path are still to be documented in `CONTRIBUTING.md`.
 - Verification: PR pipeline green on a test PR; release pipeline exercised on `v0.1.0-rc.1` pre-release tag (artifacts verified by download).
+  - Open: no pipeline has ever run on GitHub (this environment has no push credentials).
 
 ## Phase 15 — Publication (GitHub Releases + Docker Hub)
 

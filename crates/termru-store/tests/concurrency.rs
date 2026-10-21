@@ -47,21 +47,18 @@ fn interleaved_writes_from_two_connections_keep_every_row() {
     let second = Store::open(&path).expect("open the second store");
 
     // Both connections write at the same time.
-    let handles: Vec<_> = [
-        Arc::new(first),
-        Arc::new(second),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(index, store)| {
-        thread::spawn(move || {
-            for round in 0..20 {
-                let mut entry = host(&format!("host-{index}-{round}"));
-                store.repos().hosts().save(&mut entry).expect("write");
-            }
+    let handles: Vec<_> = [Arc::new(first), Arc::new(second)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, store)| {
+            thread::spawn(move || {
+                for round in 0..20 {
+                    let mut entry = host(&format!("host-{index}-{round}"));
+                    store.repos().hosts().save(&mut entry).expect("write");
+                }
+            })
         })
-    })
-    .collect();
+        .collect();
 
     for handle in handles {
         handle.join().expect("the writer thread must not panic");
@@ -71,7 +68,9 @@ fn interleaved_writes_from_two_connections_keep_every_row() {
     let reader = Store::open(&path).expect("open the reader");
     let listed = reader.repos().hosts().list().expect("read");
     assert_eq!(listed.len(), 40, "no write may be lost");
-    reader.integrity_check().expect("the database must be intact");
+    reader
+        .integrity_check()
+        .expect("the database must be intact");
 }
 
 #[test]
@@ -87,5 +86,7 @@ fn a_second_store_sees_the_migrations_of_the_first() {
     // must not fail and must not lose the row.
     let second = Store::open(&path).expect("open the second store");
     assert_eq!(second.repos().hosts().list().expect("read").len(), 1);
-    second.integrity_check().expect("the database must be intact");
+    second
+        .integrity_check()
+        .expect("the database must be intact");
 }

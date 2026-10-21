@@ -38,6 +38,17 @@ pub fn run() {
 
 fn build() -> tauri::Result<tauri::App> {
     tauri::Builder::default()
+        // The plugin has to be registered first: it decides whether this
+        // process is the first instance.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // A second launch does not open a second window: it focuses the
+            // one that is already running.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = app.path().app_data_dir()?;

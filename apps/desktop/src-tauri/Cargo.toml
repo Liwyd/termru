@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2.12.4", features = [] }
+# A second launch focuses the running window instead of opening a second
+# instance that would fight over the local database.
+tauri-plugin-single-instance = "2.5.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
