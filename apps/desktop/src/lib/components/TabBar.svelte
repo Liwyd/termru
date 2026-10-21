@@ -7,6 +7,29 @@
 
   let renaming = $state(false);
   let draftTitle = $state('');
+  let dragIndex = $state<number | null>(null);
+  let dropIndex = $state<number | null>(null);
+
+  function onDragStart(event: DragEvent, index: number): void {
+    dragIndex = index;
+    event.dataTransfer?.setData('text/plain', String(index));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onDragOver(event: DragEvent, index: number): void {
+    event.preventDefault();
+    dropIndex = index;
+  }
+
+  function onDrop(event: DragEvent, index: number): void {
+    event.preventDefault();
+    const from = dragIndex ?? Number(event.dataTransfer?.getData('text/plain'));
+    dragIndex = null;
+    dropIndex = null;
+    if (Number.isInteger(from)) {
+      sessions.reorder(from, index);
+    }
+  }
 
   function startRename(): void {
     draftTitle = tab.title;
@@ -19,7 +42,23 @@
   }
 </script>
 
-<div class="tab" class:active role="tab" aria-selected={active} tabindex="0">
+<div
+  class="tab"
+  class:active
+  class:drop-target={dropIndex !== null}
+  role="tab"
+  aria-selected={active}
+  tabindex="0"
+  draggable="true"
+  ondragstart={(event) => onDragStart(event, sessions.tabs.indexOf(tab))}
+  ondragover={(event) => onDragOver(event, sessions.tabs.indexOf(tab))}
+  ondragleave={() => (dropIndex = null)}
+  ondrop={(event) => onDrop(event, sessions.tabs.indexOf(tab))}
+  ondragend={() => {
+    dragIndex = null;
+    dropIndex = null;
+  }}
+>
   {#if renaming}
     <input
       class="rename"
@@ -76,6 +115,10 @@
     color: var(--termru-muted);
     font-size: 0.82rem;
     max-width: 16rem;
+  }
+
+  .tab.drop-target {
+    border-color: var(--termru-accent);
   }
 
   .tab.active {

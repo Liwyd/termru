@@ -92,3 +92,34 @@ export type HostKeyPromptRequest =
       old: { key_type: string; fingerprint: string };
       new: { key_type: string; fingerprint: string };
     };
+
+/** Layout persistence (mirrors `termru_core::workspace`). */
+export interface PaneNode {
+  leaf?: { pane: string; host_id: string | null };
+  split?: {
+    direction: 'columns' | 'rows';
+    ratio: number;
+    first: PaneNode;
+    second: PaneNode;
+  };
+}
+
+export interface TabLayout {
+  id: string;
+  title?: string | null;
+  root: PaneNode;
+  active_pane?: string | null;
+}
+
+export interface WindowLayout {
+  id: string;
+  tabs: TabLayout[];
+  active_tab?: string | null;
+  bounds?: { x: number; y: number; width: number; height: number } | null;
+}
+
+export interface WorkspaceDoc {
+  version: number;
+  windows: WindowLayout[];
+  active_window?: string | null;
+}

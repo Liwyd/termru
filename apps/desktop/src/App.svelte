@@ -21,7 +21,11 @@
   });
 
   onMount(() => {
-    void hosts.load();
+    void (async () => {
+      await hosts.load();
+      // Restored tabs reference hosts, so the layout is restored after them.
+      await sessions.restoreLayout();
+    })();
     void prefs.load();
 
     const onKeyDown = (event: KeyboardEvent) => {

@@ -3,6 +3,7 @@
   import { Channel } from '@tauri-apps/api/core';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
+  import { WebglAddon } from '@xterm/addon-webgl';
   import { api } from '../ipc';
   import { errorMessage } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
@@ -35,6 +36,15 @@
     term = instance;
     fitAddon = fit;
 
+    // WebGL renderer when available; the DOM renderer stays as fallback.
+    try {
+      const webgl = new WebglAddon();
+      instance.loadAddon(webgl);
+    } catch {
+      // No WebGL context (software rendering, blocked GPU): keep the DOM
+      // renderer — slower, but correct.
+    }
+
     instance.onData((data) => {
       const sessionId = tab.sessionId;
       if (!sessionId) return;
@@ -48,8 +58,28 @@
     observer.observe(container as HTMLDivElement);
     scheduleFit();
 
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.shiftKey) return;
+      if (event.key === 'C' || event.key === 'c') {
+        const selection = instance.getSelection();
+        if (!selection) return;
+        event.preventDefault();
+        void navigator.clipboard?.writeText(selection).catch(() => undefined);
+      } else if (event.key === 'V' || event.key === 'v') {
+        event.preventDefault();
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            if (text.length > 0) instance.paste(text);
+          })
+          .catch(() => undefined);
+      }
+    };
+    (container as HTMLDivElement).addEventListener('keydown', onKeyDown);
+
     return () => {
       observer.disconnect();
+      (container as HTMLDivElement).removeEventListener('keydown', onKeyDown);
       if (resizeTimer) clearTimeout(resizeTimer);
       instance.dispose();
       term = null;

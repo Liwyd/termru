@@ -9,6 +9,7 @@ import type {
   SessionInfo,
   SessionSecrets,
   SessionUpdate,
+  WorkspaceDoc,
 } from './types';
 
 /**
@@ -46,6 +47,9 @@ export const api = {
 
   hostKeyPromptResolve: (id: string, trust: boolean) =>
     invoke<boolean>('host_key_prompt_resolve', { id, trust }),
+
+  layoutSave: (doc: WorkspaceDoc) => invoke<void>('layout_save', { doc }),
+  layoutLoad: () => invoke<WorkspaceDoc | null>('layout_load'),
 };
 
 export type { HostKeyPromptRequest };
