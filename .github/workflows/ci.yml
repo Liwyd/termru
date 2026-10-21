@@ -50,6 +50,46 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  server:
+    name: Cloud server (clippy, tests with PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: termru
+          POSTGRES_PASSWORD: termru
+          POSTGRES_DB: termru
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U termru -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # The integration tests create and drop their own databases in this
+      # server; without the variable they skip with a loud message.
+      TERMRU_TEST_DATABASE_URL: postgres://termru:termru@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Clippy
+        run: cargo clippy -p termru-cloud-server --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p termru-cloud-server
+
   frontend:
     name: Frontend (lint, typecheck, test, build)
     runs-on: ubuntu-latest

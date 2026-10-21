@@ -26,8 +26,9 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Decide desktop stack: **Tauri 2.12 stable** (not 3.0-alpha) + **Svelte 5.57 + Vite 8 + TypeScript 5.x** + **@xterm/xterm 6**.
   - Verified version compatibility: `@sveltejs/vite-plugin-svelte@7` peer = vite ^8 + svelte ^5.46; `svelte-check@4` peer = typescript ^5||^6 → **typescript pinned to 5.x (not 7)**.
 - [x] Decide local persistence: **SQLite (rusqlite, bundled) + versioned migrations** in `crates/termru-store`.
-- [x] Decide cloud persistence: **PostgreSQL + sqlx** for the cloud manager.
+- [x] Decide cloud persistence: **PostgreSQL** for the cloud manager, driven by `tokio-postgres` + `deadpool-postgres`.
   - Rationale: standard self-hosted deployment shape (compose with db + app, healthcheck-gated startup), mature backup/restore (`pg_dump`), safe concurrent multi-device writes. Data volume is small but Postgres adds only one compose service; documented in ADR.
+  - **Driver revised 2026-10-21 (was `sqlx`):** the `sqlx` facade crate can not live in this workspace — its optional `sqlx-sqlite` driver links the native library `sqlite3`, which the desktop app already links through `rusqlite`, and cargo allows only one package per `links` value. `tokio-postgres` + `deadpool-postgres` give the same capabilities with no native library. See ADR 0003.
 - [x] Decide cloud API framework: **Axum** (candidate; stable ecosystem, first-class tower middleware for rate limiting).
 - [x] Decide secret policy v1: **no secret synchronization**. Secrets stay in OS keyring (keyring crate) only. Documented limitation; config sync only. (Avoids inventing a recovery mechanism that breaks E2E guarantees.)
 - [x] Decide sync model: **transactional, revision-based, per-user monotonic `rev`, tombstones, cursor pagination, explicit conflict surfacing** (no silent LWW, no CRDTs).
@@ -38,7 +39,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 - [x] Cargo workspace with the three core crates (`termru-core`, `termru-store`, `termru-ssh`) + shared lints/profiles.
 - [x] Add `apps/desktop/src-tauri` to the Cargo workspace (member of root workspace; links clean against webkit2gtk-4.1).
-- [ ] Add `apps/cloud-server` to the workspace (does not exist yet → Phase 9).
+- [x] Add `apps/cloud-server` to the workspace (done in Phase 9).
 - [x] Frontend package layout (`apps/desktop`: Svelte 5.57 + Vite 8.3 + TS 5.9 pinned, `@xterm/xterm` 6) + editor/format configs (`.prettierrc` + prettier-plugin-svelte, strict `tsconfig`, `.editorconfig` already repo-wide, `.vscode/extensions.json`).
 - [x] Rust tooling: rustfmt config, clippy workspace lints (incl. unwrap/expect warns + allow-in-tests), `.editorconfig`, `.gitignore`, `cargo-deny` config (licenses + advisories).
 - [x] Root scripts for: dev, test, lint, format, typecheck — root `package.json` npm scripts delegating to the `apps/*` workspace (single source of truth; no separate `scripts/` duplicates).
@@ -135,16 +136,27 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 9 — Cloud API (self-hosted manager)
 
-- [ ] `apps/cloud-server` scaffold: Axum 0.8/0.9, config via env (validated at startup, fail-fast), structured logs, graceful shutdown, healthz/readyz (readyz checks DB).
-- [ ] Auth: register/login (argon2id), opaque access+refresh tokens (hashed at rest, rotation with reuse detection → family revocation), session/device revocation.
-- [ ] Devices: enrollment, list, rename, revoke (revoked device loses API access immediately).
-- [ ] Sync endpoints: `GET /v1/sync/changes?since=<rev>` (bounded cursor pagination, tombstones included) + `POST /v1/sync/changes` (batch, per-record base_rev conflict detection → 409 payload with server records), idempotency-safe retries (client mutation ids), payload size limits, schema version field.
-- [ ] Per-user isolation enforced at query level (every query scoped by user_id from token; IDOR tests).
-- [ ] Rate limiting (IP + token keyed), request body limits, timeouts, security headers, strict CORS (none needed for desktop client → deny by default; documented).
-- [ ] Audit log for auth/device/security events; login throttling + account-enumeration-resistant responses.
-- [ ] DB migrations (forward + tested on empty and existing DB), seed-free, pg_dump backup/restore script + test.
-- [ ] Integration tests: full auth/device/sync/conflict/revocation/isolation/rate-limit matrix against real Postgres (CI service; local cluster).
-- Verification: `cargo test` for server incl. testcontainer-free Postgres (CI service container), `cargo deny`, manual curl walkthrough.
+- [x] `apps/cloud-server` scaffold: Axum 0.8, config via env (validated at startup, fail-fast), structured logs, graceful shutdown, healthz/readyz (readyz checks DB).
+  - `src/config.rs`: every setting comes from the environment, is range-checked and the process aborts with a message that names the offending variable; `src/main.rs` binds only after the configuration and the migrations succeeded.
+  - `src/db.rs`: pool + a migration runner that embeds `migrations/*.sql` at build time (`build.rs`) and applies them under a PostgreSQL advisory lock, so replicas can boot at the same time.
+- [x] Auth: register/login (argon2id), opaque access+refresh tokens (hashed at rest, rotation with reuse detection → family revocation), session/device revocation.
+  - Tokens are 256-bit random values stored as SHA-256 hashes; a stolen database yields no usable credential. Refresh tokens rotate on every use; a replay outside the grace window (`TERMRU_REFRESH_REUSE_GRACE_SECS`, default 30 s) revokes the whole token family and is written to the audit log.
+  - Passwords: argon2id, minimum 12 characters, no composition rules (NIST-style). An unknown account spends the same work as a real verification, so the response time does not reveal whether an account exists.
+- [x] Devices: enrollment, list, rename, revoke (revoked device loses API access immediately).
+  - The device id is generated by the client and kept stable; a revoked device stays revoked (it must be re-enrolled), and a device id that belongs to another account is refused.
+- [x] Sync endpoints: `GET /v1/sync/changes?since=<rev>` (bounded cursor pagination, tombstones included) + `POST /v1/sync/changes` (batch, per-record base_rev conflict detection → 409 payload with server records), idempotency-safe retries (client mutation ids), payload size limits, schema version field.
+  - The wire types are the ones in `termru-core::sync`, shared with the desktop client. A stale `base_rev` is reported as a conflict with the server's copy; the server never resolves a conflict on the client's behalf. A replayed `mutation_id` returns the revision of the first application (idempotent retries). Revisions come from a per-user counter that is bumped inside the push transaction, so the sequence is monotonic and gapless.
+- [x] Per-user isolation enforced at query level (every query scoped by user_id from token; IDOR tests).
+  - Every read and write carries `user_id = $1` from the verified token; the integration suite proves that one account can neither see nor modify the records or devices of another.
+- [x] Rate limiting (IP + token keyed), request body limits, timeouts, security headers, strict CORS (none needed for desktop client → deny by default; documented).
+  - Token bucket per client address and per access token; `DefaultBodyLimit` (1 MiB body → 413); a 30 s request timeout; a strict header set (`nosniff`, `DENY`, CSP `default-src 'none'`, `no-store`, …). No CORS headers are sent at all, so a browser can not use the API cross-origin. `X-Forwarded-For` is ignored unless `TERMRU_TRUST_FORWARDED_FOR=true`.
+- [x] Audit log for auth/device/security events; login throttling + account-enumeration-resistant responses.
+  - `audit_log` records registration, login success/failure, refresh, token reuse, device lifecycle and sync conflicts; it never contains a credential. Failed logins lock the identifier for 15 minutes after 5 attempts.
+- [x] DB migrations (forward + tested on empty and existing DB), seed-free, pg_dump backup/restore script + test.
+  - `migrations/0001_init.sql` (users, devices, sessions, refresh tokens, records, applied mutations, audit log, login attempts) is applied by the server at start-up; the suite proves that re-running the migrations is a no-op. `scripts/postgres-backup.sh` / `postgres-restore.sh` write and verify a checksummed `pg_dump` archive; the test restores an archive into a second database and verifies the content.
+- [x] Integration tests: full auth/device/sync/conflict/revocation/isolation/rate-limit matrix against real Postgres (CI service; local cluster).
+  - 23 API tests + 4 operational tests, each against its own throwaway database on a real PostgreSQL server; they skip with a loud `SKIPPED:` line when `TERMRU_TEST_DATABASE_URL` is not set. CI runs them against a `postgres:18-alpine` service container.
+- Verification: `cargo test -p termru-cloud-server` → 46 tests green (19 unit + 23 API + 4 operations) against a local PostgreSQL 18.6; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean; the built binary was smoke-tested with `curl` (register → devices → push → pull → 401 without a token). `cargo deny` clean.
 
 ## Phase 10 — Desktop sync client
 
@@ -161,7 +173,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Documents the assets, the trust boundaries (webview ↔ Rust ↔ network ↔ OS), the per-surface mitigations, the **residual risks** (TOFU first use, unencrypted local DB, webview XSS, unpinned CI actions, no code signing) and the out-of-scope list.
 - [x] `cargo deny` (licenses, advisories, duplicates-bans policy), `npm audit` gate in CI, secret scanning (gitleaks) in CI.
   - The policy is defined in `deny.toml`: lockfile-pinned versions (wildcard requirements are warnings), unmaintained-crate advisories are fatal only for direct dependencies, and every ignore carries a reason + review date. Verified locally with cargo-deny 0.20: advisories/bans/licenses/sources **all ok**. `npm audit`: 0 vulnerabilities.
-- [ ] SQL injection: parameterized queries only (enforced by code review + tests), authz matrix tests on every endpoint.
+- [x] SQL injection: parameterized queries only (enforced by code review + tests), authz matrix tests on every endpoint.
+  - Every statement in `apps/cloud-server` is a bound parameter; no SQL is built by string concatenation. The authorization matrix is covered by the integration suite: unauthenticated calls are refused, a token of another user reaches nothing, a device of another account can not be renamed or revoked, and a revoked device loses access immediately.
 - [ ] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
 - [ ] Container hardening: non-root user, read-only FS where possible, no secrets in image, resource limits, minimal base.
 - [x] Dependency review for significant deps (maintenance, license, security history) → `docs/security/dependency-review.md`.
@@ -228,6 +241,8 @@ Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architectu
 
 Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionManager` (116 workspace tests green, incl. an **app-layer E2E** against a real `sshd`) and the frontend foundation (layout shell, host list/editor, connection + host-key dialogs, xterm view over Tauri `Channel`, tabs with reordering + layout persistence, file logging + panic hygiene; `svelte-check` 0/0, 28 vitest tests, `vite build` green).
 
-**Environment note:** the dev machine is close to full (the `target/` tree is ~6 GB). Work continues with `cargo check`/`cargo test` using `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small; avoid `cargo build` of the full tauri tree unless disk allows, and prefer `cargo clean -p <crate>` over a full clean.
+**Phase 9 (cloud API) implemented** in `apps/cloud-server`: Axum 0.8 + PostgreSQL (`tokio-postgres`/`deadpool-postgres`, see ADR 0003 for the driver change), 46 tests green against a real PostgreSQL 18.6, `cargo clippy --workspace --all-targets -D warnings` clean, smoke-tested with `curl`. The API covers accounts (argon2id, opaque rotating tokens, reuse detection), devices (enroll/rename/revoke) and the revision-based sync protocol shared with the desktop client (pull/push, tombstones, explicit conflicts, idempotent retries). Hardening: per-token and per-IP rate limiting, body limits, request timeouts, strict security headers, no CORS, an audit log, and login throttling with enumeration-resistant responses.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 6: split panes, per-window tab sets, window-close semantics; (3) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (4) Phase 8 remainder: native key file picker + single-instance plugin; (5) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (6) first CI run on GitHub (the pipeline has never executed remotely).
+**Environment note:** the dev machine is close to full. The workspace `dev` profile now uses `debug = 1` (line tables only), so the `target/` tree is ~2 GB instead of ~7 GB; work continues with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small, and `cargo clean -p <crate>` over a full clean.
+
+**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette); (2) Phase 10: the desktop sync client against the new API (settings UI, offline queue, conflict surfacing); (3) Phase 6: split panes, per-window tab sets, window-close semantics; (4) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (5) Phase 8 remainder: native key file picker + single-instance plugin; (6) Phase 13: container image + compose deployment for the cloud server; (7) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (8) first CI run on GitHub (the pipeline has never executed remotely).

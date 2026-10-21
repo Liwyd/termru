@@ -34,11 +34,27 @@ but the cloud service must tolerate concurrent writes from several devices.
     pre-restore file aside.
   * Opening a database created by a *newer* schema fails loudly instead of
     corrupting it.
-* **Cloud: PostgreSQL + `sqlx`**, one `compose` service alongside the app.
+* **Cloud: PostgreSQL + `tokio-postgres`/`deadpool-postgres`**, one `compose`
+  service alongside the app.
   * Rationale: standard self-hosted shape (healthcheck-gated startup,
     `pg_dump` backup/restore, safe concurrent multi-device writes) at the
     cost of one extra container.
   * Migrations run at container start with single-runner lock safety.
+  * **Driver choice (revised 2026-10-21):** the original decision named
+    `sqlx`. The `sqlx` facade crate can not be used in this workspace: it
+    depends on an *optional* `sqlx-sqlite` driver, and cargo allows only one
+    package per `links` value in a dependency graph. `sqlx-sqlite` links the
+    native library `sqlite3`, which the desktop app already links through
+    `rusqlite` — the two collide even though the sqlite driver is never
+    enabled (cargo resolves optional dependencies into the lock file and
+    rejects the conflicting `links` value). Depending on `sqlx-core` +
+    `sqlx-postgres` directly would avoid the collision, but only by giving
+    up the `sqlx::` facade for the raw `sqlx_core::` paths.
+    `tokio-postgres` + `deadpool-postgres` give the same capabilities
+    (async Postgres, a pool, transactions) with no native library involved,
+    a smaller dependency tree, and no compile-time database requirement.
+    The wire types and the protocol are unaffected: they live in
+    `termru-core` and are shared with the desktop client.
 
 Secrets are in **neither** database — see ADR 0004.
 
@@ -54,6 +70,14 @@ Secrets are in **neither** database — see ADR 0004.
   shows contention (would manifest as UI stalls during bulk import).
 * Cloud schema changes require Postgres-version-aware migration testing in
   CI (service container).
+* The cloud server talks to PostgreSQL without TLS (`NoTls`). The database is
+  expected to live on a private network next to the server (the `compose`
+  deployment of ADR 0013). A deployment that needs an encrypted database
+  connection has to add a TLS-terminating proxy; this is recorded as a
+  residual risk in `docs/security/threat-model.md`.
+* Because the driver has no compile-time query checking, every query is
+  reviewed by hand and the integration tests run against a real PostgreSQL
+  server (not a mock).
 
 ## Alternatives considered
 

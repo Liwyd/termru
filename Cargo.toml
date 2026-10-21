@@ -4,6 +4,7 @@ members = [
     "crates/termru-core",
     "crates/termru-store",
     "crates/termru-ssh",
+    "apps/cloud-server",
     "apps/desktop/src-tauri",
 ]
 
@@ -50,6 +51,9 @@ expect_used = "warn"
 
 [profile.dev]
 opt-level = 1
+# Line tables only: panics keep their source location, but the artifacts stay
+# small enough to fit on a disk-constrained development machine.
+debug = 1
 
 [profile.dev.package."*"]
 opt-level = 2
