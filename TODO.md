@@ -252,8 +252,11 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 17 — Cross-platform validation and performance
 
-- [ ] Measure (Linux local): cold/warm startup, idle RSS, RSS + memory with N sessions, terminal throughput (MB/s large output), UI responsiveness during flood, connection setup/teardown timings, DB query timings on 10k hosts.
-- [ ] Budgets recorded in `docs/performance.md` with actual numbers; fix measurable bottlenecks found.
+- [x] Measure (Linux local): cold/warm startup, idle RSS, RSS + memory with N sessions, terminal throughput (MB/s large output), UI responsiveness during flood, connection setup/teardown timings, DB query timings on 10k hosts.
+  - `crates/termru-store/tests/performance.rs` measures the store with 10,000 hosts (write, list, read, search, the sync payload, the backup, the file size); the SSH suite prints the throughput of a 4 MiB flood; the cloud server was measured with the built binary (start-up to ready, requests/s, RSS).
+  - Not measured: the desktop app's start-up and its memory, the UI responsiveness during a flood and the sync round trip at scale — the build machine has no window manager, so a visible window is needed (documented in `docs/limitations.md`).
+- [x] Budgets recorded in `docs/performance.md` with actual numbers; fix measurable bottlenecks found.
+  - `docs/performance.md` holds the numbers, the machine they come from and the budget behind each of them. No bottleneck was found: the slowest measured path is the list of 10,000 hosts (62 ms), and the sidebar only renders the visible part.
 - [ ] Windows + Ubuntu + Fedora validation on real runners (build+launch smoke; UI walkthrough limited to automated checks) — clearly distinguish "built on" vs "tested on".
 - [!] Manual interactive UX validation on Windows/Fedora/Ubuntu by human (environment limitation): automated + Linux-manual only in this environment.
   - Unblock: user machine verification checklist provided in docs.

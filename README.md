@@ -99,6 +99,7 @@ model and the known residual risks are documented in
 * [Architecture decisions](docs/architecture/README.md)
 * [Cloud deployment and operations](docs/cloud/deployment.md)
 * [Known limitations](docs/limitations.md)
+* [Performance measurements](docs/performance.md)
 
 ## Contributing
 
