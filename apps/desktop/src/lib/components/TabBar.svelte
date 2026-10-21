@@ -96,6 +96,17 @@
   <button
     type="button"
     class="close"
+    aria-label={`Move ${tab.title} to a new window`}
+    title="Move to a new window"
+    disabled={!tab.sessionId}
+    onclick={() => void sessions.moveToNewWindow(tab)}
+  >
+    ↗
+  </button>
+
+  <button
+    type="button"
+    class="close"
     aria-label={`Close ${tab.title}`}
     onclick={() => void sessions.close(tab)}
   >

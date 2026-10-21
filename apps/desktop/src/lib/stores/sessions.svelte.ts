@@ -30,6 +30,8 @@ export interface Tab {
   duplicateFrom: string | null;
   /** Restored from a saved layout (not connected yet). */
   restored: boolean;
+  /** Set when the view renders a session owned by another window. */
+  attachTo: string | null;
 }
 
 /** How long we wait for an expected auto-reconnect before showing "dead". */
@@ -68,6 +70,7 @@ export class SessionStore {
       lastFailure: null,
       duplicateFrom: null,
       restored: false,
+      attachTo: null,
     };
     this.tabs = [...this.tabs, tab];
     this.scheduleLayoutSave();
@@ -95,6 +98,7 @@ export class SessionStore {
       lastFailure: null,
       duplicateFrom: tab.sessionId,
       restored: false,
+      attachTo: null,
     };
     this.tabs = [...this.tabs, clone];
     this.scheduleLayoutSave();
@@ -229,11 +233,59 @@ export class SessionStore {
         lastFailure: null,
         duplicateFrom: null,
         restored: true,
+        attachTo: null,
       });
     }
     if (restored.length === 0) return;
     this.tabs = restored;
     this.activeId = restored[0].id;
+  }
+
+  /**
+   * Creates a view for a session owned by another window (the tab was
+   * moved). The session itself is not restarted.
+   */
+  attachTab(sessionId: string, host: Host): Tab {
+    const tab: Tab = {
+      id: newTabId(),
+      sessionId,
+      host,
+      title: host.name,
+      status: { state: 'connecting' },
+      secrets: {},
+      generation: 0,
+      exitCode: null,
+      dead: false,
+      errorMessage: null,
+      awaitingReconnect: false,
+      hadReady: false,
+      lastFailure: null,
+      duplicateFrom: null,
+      restored: false,
+      attachTo: sessionId,
+    };
+    this.tabs = [...this.tabs, tab];
+    this.activeId = tab.id;
+    return tab;
+  }
+
+  /**
+   * Moves a tab to a new window. The session keeps running in the
+   * background; the new window attaches to it.
+   */
+  async moveToNewWindow(tab: Tab): Promise<void> {
+    if (!tab.sessionId) return;
+    try {
+      await api.windowOpenSession(tab.sessionId, tab.title);
+      // The view moves: drop it here without closing the session.
+      this.tabs = this.tabs.filter((entry) => entry.id !== tab.id);
+      if (this.activeId === tab.id) {
+        const next = this.tabs[this.tabs.length - 1];
+        this.activeId = next ? next.id : null;
+      }
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    }
   }
 
   /** Applies a backend status event to a tab. */

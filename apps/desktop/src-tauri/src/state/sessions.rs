@@ -34,6 +34,9 @@ const EVENT_BUFFER: usize = 256;
 const MAX_RECONNECT_CYCLES: u32 = 5;
 /// A `Ready` lasting this long earns a fresh reconnect-cycle budget.
 const STABLE_READY: Duration = Duration::from_secs(30);
+/// Grace period for a view to (re-)attach before a session counts as
+/// orphaned — a tab moved to another window briefly has no view.
+const VIEW_GRACE: Duration = Duration::from_secs(10);
 
 /// What the frontend receives on the per-session channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +141,11 @@ struct Managed {
     /// `true` while the background connection task for this entry runs; a
     /// retry may never start a second task on the same entry.
     task_alive: bool,
+    /// All views currently rendering this session. The first one is the
+    /// owner that opened it; additional ones are attached later (a tab
+    /// moved to another window). The session itself lives in the manager —
+    /// views come and go without dropping the SSH connection.
+    views: Vec<Channel<SessionUpdate>>,
 }
 
 pub struct SessionManager {
@@ -165,6 +173,7 @@ impl SessionManager {
         &self,
         host_id: HostId,
         params: ConnectParams,
+        view: Channel<SessionUpdate>,
     ) -> (String, watch::Receiver<bool>) {
         let seq = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("s{seq}");
@@ -178,6 +187,7 @@ impl SessionManager {
                 session: None,
                 params,
                 task_alive: true,
+                views: vec![view],
             },
         );
         (id, cancel_rx)
@@ -214,6 +224,76 @@ impl SessionManager {
             ));
         }
         Ok((entry.params.clone(), entry.cancel.subscribe()))
+    }
+
+    /// Adds a view to a session without touching its transport (used when a
+    /// view (re)connects to an existing session).
+    pub fn add_view(&self, id: &str, view: Channel<SessionUpdate>) {
+        let mut guard = self.lock();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.views.push(view);
+        }
+    }
+
+    /// Attaches an additional view to a live session. The session keeps
+    /// running: the new view receives the replay buffer and then the live
+    /// stream. Used when a tab is moved to another window.
+    pub async fn attach_view(
+        &self,
+        id: &str,
+        view: Channel<SessionUpdate>,
+    ) -> Result<(), CommandError> {
+        let (session, status) = {
+            let guard = self.lock();
+            let entry = guard
+                .get(id)
+                .ok_or_else(|| CommandError::not_found("session", id))?;
+            let session = entry
+                .session
+                .clone()
+                .ok_or_else(|| CommandError::new("session is not connected yet"))?;
+            (session, entry.status.clone())
+        };
+
+        // Replay first, so the new view shows the same scrollback, then live
+        // events follow.
+        let replay = session.replay_snapshot().await?;
+        if !replay.is_empty() {
+            let _ = view.send(SessionUpdate::Data {
+                base64: base64::engine::general_purpose::STANDARD.encode(replay),
+            });
+        }
+        let _ = view.send(SessionUpdate::Status { status });
+
+        let mut guard = self.lock();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.views.push(view);
+        }
+        Ok(())
+    }
+
+    /// Number of views currently rendering a session.
+    pub fn view_count(&self, id: &str) -> usize {
+        self.lock()
+            .get(id)
+            .map(|entry| entry.views.len())
+            .unwrap_or(0)
+    }
+
+    /// Snapshot of the views rendering a session.
+    fn views(&self, id: &str) -> Vec<Channel<SessionUpdate>> {
+        self.lock()
+            .get(id)
+            .map(|entry| entry.views.clone())
+            .unwrap_or_default()
+    }
+
+    /// Keeps only the views that still accept events (a closed window drops
+    /// its view).
+    fn retain_views(&self, id: &str, alive: Vec<Channel<SessionUpdate>>) {
+        if let Some(entry) = self.lock().get_mut(id) {
+            entry.views = alive;
+        }
     }
 
     pub fn set_session(&self, id: &str, session: Option<Session>) {
@@ -341,6 +421,40 @@ impl Default for SessionManager {
     }
 }
 
+/// Waits (up to `grace`) for a view to attach to the session.
+async fn wait_for_view(manager: &SessionManager, id: &str, grace: Duration) -> bool {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if manager.view_count(id) > 0 {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Sends an update to every view of a session.
+///
+/// Returns `false` when no view accepted it (all views are gone) — the
+/// caller then treats the session as orphaned.
+fn forward(manager: &SessionManager, id: &str, update: SessionUpdate) -> bool {
+    let views = manager.views(id);
+    if views.is_empty() {
+        return false;
+    }
+    let mut alive = Vec::with_capacity(views.len());
+    for view in views {
+        if view.send(update.clone()).is_ok() {
+            alive.push(view);
+        }
+    }
+    let any_alive = !alive.is_empty();
+    manager.retain_views(id, alive);
+    any_alive
+}
+
 /// Outcome of one connect+serve cycle.
 enum CycleEnd {
     /// Death qualifies for automatic reconnection (budget permitting).
@@ -378,7 +492,6 @@ pub fn spawn_connection(
     params: ConnectParams,
     options: SessionOptions,
     cancel: watch::Receiver<bool>,
-    channel: Channel<SessionUpdate>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut ever_ready = false;
@@ -406,7 +519,6 @@ pub fn spawn_connection(
                         &id,
                         &manager,
                         &store,
-                        &channel,
                         &mut ev_rx,
                         &mut ever_ready,
                         &mut ready_since,
@@ -419,7 +531,7 @@ pub fn spawn_connection(
                 Err(_) => {
                     // Failure/cancellation statuses were already emitted on
                     // the events channel; forward whatever is buffered.
-                    drain(&id, &manager, &channel, &mut ev_rx, &mut ever_ready).await;
+                    drain(&id, &manager, &mut ev_rx, &mut ever_ready).await;
                     manager.set_session(&id, None);
                     CycleEnd::Stop
                 }
@@ -443,7 +555,6 @@ async fn pump(
     id: &str,
     manager: &SessionManager,
     store: &Store,
-    channel: &Channel<SessionUpdate>,
     ev_rx: &mut mpsc::Receiver<SessionEvent>,
     ever_ready: &mut bool,
     ready_since: &mut Option<Instant>,
@@ -491,8 +602,15 @@ async fn pump(
         if let SessionUpdate::Status { status } = &update {
             manager.set_status(id, status.clone());
         }
-        if channel.send(update).is_err() {
-            return CycleEnd::ChannelGone;
+        if !forward(manager, id, update) {
+            // No view accepted the event. The frontend window/tab may be
+            // gone (orphaned) or just moving to another window (a new view
+            // attaches within the grace period).
+            if !wait_for_view(manager, id, VIEW_GRACE).await {
+                return CycleEnd::ChannelGone;
+            }
+            // The new view gets the replay buffer on attach.
+            continue;
         }
         if terminal_closed {
             let cancelled = manager.is_cancelled(id);
@@ -525,7 +643,6 @@ fn verdict(
 async fn drain(
     id: &str,
     manager: &SessionManager,
-    channel: &Channel<SessionUpdate>,
     ev_rx: &mut mpsc::Receiver<SessionEvent>,
     ever_ready: &mut bool,
 ) {
@@ -537,7 +654,7 @@ async fn drain(
                     *ever_ready = true;
                 }
                 manager.set_status(id, dto.clone());
-                if channel.send(SessionUpdate::Status { status: dto }).is_err() {
+                if !forward(manager, id, SessionUpdate::Status { status: dto }) {
                     return;
                 }
             }
@@ -545,12 +662,12 @@ async fn drain(
                 let update = SessionUpdate::Data {
                     base64: base64::engine::general_purpose::STANDARD.encode(bytes),
                 };
-                if channel.send(update).is_err() {
+                if !forward(manager, id, update) {
                     return;
                 }
             }
             Ok(SessionEvent::Exit { code }) => {
-                if channel.send(SessionUpdate::Exit { code }).is_err() {
+                if !forward(manager, id, SessionUpdate::Exit { code }) {
                     return;
                 }
             }
@@ -583,8 +700,8 @@ mod tests {
     fn register_assigns_unique_ids_and_lists_in_order() {
         let manager = SessionManager::new();
         let host = HostId::new();
-        let (a, _ra) = manager.register(host, params());
-        let (b, _rb) = manager.register(host, params());
+        let (a, _ra) = manager.register(host, params(), test_channel());
+        let (b, _rb) = manager.register(host, params(), test_channel());
         assert_ne!(a, b);
         let list = manager.list();
         assert_eq!(list.len(), 2);
@@ -607,7 +724,7 @@ mod tests {
     #[test]
     fn write_before_session_is_attached_reports_not_ready() {
         let manager = SessionManager::new();
-        let (id, _cancel) = manager.register(HostId::new(), params());
+        let (id, _cancel) = manager.register(HostId::new(), params(), test_channel());
         let error = futures_block(async { manager.write(&id, b"x".to_vec()).await });
         assert!(error.unwrap_err().message.contains("not ready"));
     }
@@ -615,7 +732,7 @@ mod tests {
     #[test]
     fn close_removes_entry_and_second_close_is_not_found() {
         let manager = SessionManager::new();
-        let (id, _cancel) = manager.register(HostId::new(), params());
+        let (id, _cancel) = manager.register(HostId::new(), params(), test_channel());
         futures_block(manager.close(&id)).expect("first close");
         assert!(manager.info(&id).is_none());
         let error = futures_block(manager.close(&id));
@@ -696,6 +813,11 @@ mod tests {
                 last_error: "refused".into(),
             }
         );
+    }
+
+    /// A channel that accepts (and drops) every update.
+    fn test_channel() -> Channel<SessionUpdate> {
+        Channel::new(|_body| Ok(()))
     }
 
     /// Tiny block-on for std-future test bodies (no runtime needed for the

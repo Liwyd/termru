@@ -76,7 +76,7 @@ async fn app_session_connects_streams_and_closes() {
     };
 
     let (channel, mut updates) = channel_to_sender();
-    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone());
+    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), channel);
     spawn_connection(
         manager.clone(),
         store,
@@ -84,7 +84,6 @@ async fn app_session_connects_streams_and_closes() {
         params,
         SessionOptions::default(),
         cancel,
-        channel,
     );
 
     // 1. The session reaches `Ready` and the manager reflects it.
@@ -149,7 +148,7 @@ async fn app_session_reports_a_failed_authentication() {
     };
 
     let (channel, mut updates) = channel_to_sender();
-    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone());
+    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), channel);
     spawn_connection(
         manager.clone(),
         store,
@@ -157,7 +156,6 @@ async fn app_session_reports_a_failed_authentication() {
         params,
         SessionOptions::default(),
         cancel,
-        channel,
     );
 
     let failed = wait_for_status(&mut updates, |status| {
@@ -171,6 +169,105 @@ async fn app_session_reports_a_failed_authentication() {
     let info = manager.info(&id).expect("session info");
     assert!(info.status.is_terminal());
     assert!(manager.status(&id).is_some_and(|s| s.is_terminal()));
+
+    manager.close(&id).await.expect("close session");
+    assert!(manager.info(&id).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn second_view_attaches_and_receives_replay_and_live_output() {
+    let Some(server) = support::TestServer::start() else {
+        eprintln!("SKIPPED: OpenSSH tooling unavailable — app-layer E2E not exercised");
+        return;
+    };
+
+    let (_dir, store) = temp_store();
+    let manager = Arc::new(SessionManager::new());
+
+    let params = ConnectParams {
+        host: "127.0.0.1".into(),
+        port: server.port,
+        username: support::current_user(),
+        auth: AuthChoice::PrivateKey {
+            key_path: server.client_key.clone(),
+            passphrase: None,
+        },
+        term: "xterm-256color".into(),
+        keepalive_seconds: 0,
+        timeouts: ConnectTimeouts {
+            connect: Duration::from_secs(5),
+            auth: Duration::from_secs(5),
+            host_key_decision: Duration::from_secs(10),
+        },
+        known_hosts_path: server.known_hosts.clone(),
+        host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+    };
+
+    let (channel, mut updates) = channel_to_sender();
+    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), channel);
+    spawn_connection(
+        manager.clone(),
+        store,
+        id.clone(),
+        params,
+        SessionOptions::default(),
+        cancel,
+    );
+
+    assert!(
+        wait_for_status(&mut updates, |status| matches!(
+            status,
+            SessionStatusDto::Ready
+        ))
+        .await,
+        "session never became ready"
+    );
+
+    manager
+        .write(
+            &id,
+            b"echo first-view-marker
+"
+            .to_vec(),
+        )
+        .await
+        .expect("write to session");
+    assert!(
+        wait_for_data(&mut updates, b"first-view-marker").await,
+        "first view never saw its own output"
+    );
+
+    // A second view attaches (a tab moved to another window): it must
+    // receive the replay buffer, then the live stream.
+    let (second_channel, mut second_updates) = channel_to_sender();
+    manager
+        .attach_view(&id, second_channel)
+        .await
+        .expect("attach second view");
+    assert_eq!(manager.view_count(&id), 2);
+
+    assert!(
+        wait_for_data(&mut second_updates, b"first-view-marker").await,
+        "second view did not receive the replay buffer"
+    );
+
+    manager
+        .write(
+            &id,
+            b"echo second-view-marker
+"
+            .to_vec(),
+        )
+        .await
+        .expect("write to session");
+    assert!(
+        wait_for_data(&mut second_updates, b"second-view-marker").await,
+        "second view did not receive live output"
+    );
+    assert!(
+        wait_for_data(&mut updates, b"second-view-marker").await,
+        "first view missed the live output"
+    );
 
     manager.close(&id).await.expect("close session");
     assert!(manager.info(&id).is_none());

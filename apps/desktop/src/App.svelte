@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { hosts } from './lib/stores/hosts.svelte';
+  import { api } from './lib/ipc';
+  import { errorMessage, hosts } from './lib/stores/hosts.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
   import { sessions } from './lib/stores/sessions.svelte';
+  import { toasts } from './lib/stores/toasts.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
   import HostEditor from './lib/components/HostEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
@@ -23,6 +25,13 @@
   onMount(() => {
     void (async () => {
       await hosts.load();
+      // A window opened for a moved session attaches to it instead of
+      // restoring the saved layout.
+      const attachId = new URLSearchParams(window.location.search).get('attach');
+      if (attachId) {
+        await attachToSession(attachId);
+        return;
+      }
       // Restored tabs reference hosts, so the layout is restored after them.
       await sessions.restoreLayout();
     })();
@@ -44,6 +53,26 @@
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   });
+
+  /** Attaches this window to a session that another window moved here. */
+  async function attachToSession(sessionId: string): Promise<void> {
+    try {
+      const sessions_ = await api.sessionList();
+      const info = sessions_.find((entry) => entry.id === sessionId);
+      if (!info) {
+        toasts.error('The session is no longer available.');
+        return;
+      }
+      const host = hosts.hosts.find((entry) => entry.id === info.host_id);
+      if (!host) {
+        toasts.error('The host of that session no longer exists.');
+        return;
+      }
+      sessions.attachTab(sessionId, host);
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    }
+  }
 
   /** Hosts that need a secret prompt before the connection can start. */
   function requestConnect(host: Host): void {

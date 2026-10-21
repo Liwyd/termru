@@ -163,7 +163,7 @@ fn start_session(
         rows,
         ..SessionOptions::default()
     };
-    let (id, cancel_rx) = state.sessions.register(host_id, params.clone());
+    let (id, cancel_rx) = state.sessions.register(host_id, params.clone(), channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -171,7 +171,6 @@ fn start_session(
         params,
         options,
         cancel_rx,
-        channel,
     );
     id
 }
@@ -225,6 +224,9 @@ pub async fn session_retry(
         rows: geometry.rows,
         ..SessionOptions::default()
     };
+    // The retry re-uses the session's existing views; the channel argument
+    // is the (re)attaching view.
+    state.sessions.add_view(&id, channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -232,7 +234,6 @@ pub async fn session_retry(
         params,
         options,
         cancel_rx,
-        channel,
     );
     Ok(())
 }
@@ -286,6 +287,18 @@ pub async fn session_resize(
 ) -> Result<(), CommandError> {
     validate_geometry(cols, rows)?;
     state.sessions.resize(&id, cols, rows).await
+}
+
+/// Attaches another view to a live session (a tab moved to a new window).
+/// The SSH session is **not** restarted: the new view first receives the
+/// replay buffer, then the live stream.
+#[tauri::command]
+pub async fn session_attach(
+    state: State<'_, AppState>,
+    id: String,
+    channel: Channel<SessionUpdate>,
+) -> Result<(), CommandError> {
+    state.sessions.attach_view(&id, channel).await
 }
 
 #[tauri::command]

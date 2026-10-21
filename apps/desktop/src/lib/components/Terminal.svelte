@@ -121,6 +121,14 @@
 
     const geometry = currentGeometry();
     try {
+      if (tab.attachTo) {
+        // The session lives in another window: attach to it (the backend
+        // sends the replay buffer, then the live stream).
+        await api.sessionAttach(tab.attachTo, channel);
+        if (tab.generation !== generation) return;
+        tab.sessionId = tab.attachTo;
+        return;
+      }
       const id = tab.duplicateFrom
         ? await api.sessionDuplicate(tab.duplicateFrom, geometry, channel)
         : await api.sessionOpen(

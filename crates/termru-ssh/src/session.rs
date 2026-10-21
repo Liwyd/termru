@@ -140,8 +140,14 @@ impl Default for SessionOptions {
 #[derive(Debug)]
 enum SessionCommand {
     Write(Vec<u8>),
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     Attach(mpsc::Sender<SessionEvent>),
+    /// Returns a snapshot of the replay buffer **without** replacing the
+    /// active consumer (used to show a second view the same scrollback).
+    Replay(mpsc::Sender<Vec<u8>>),
     Close,
 }
 
@@ -374,6 +380,21 @@ impl Session {
             .send(SessionCommand::Attach(consumer))
             .await
             .map_err(|_| SshError::SessionClosing)
+    }
+
+    /// Snapshot of the bounded replay buffer.
+    ///
+    /// Unlike [`Session::attach`], this does **not** replace the active
+    /// consumer: the session keeps streaming to whoever is attached while
+    /// another view receives the same scrollback. This is what makes a
+    /// window/tab move possible without dropping the SSH session.
+    pub async fn replay_snapshot(&self) -> Result<Vec<u8>, SshError> {
+        let (tx, mut rx) = mpsc::channel(1);
+        self.cmd
+            .send(SessionCommand::Replay(tx))
+            .await
+            .map_err(|_| SshError::SessionClosing)?;
+        rx.recv().await.ok_or(SshError::SessionClosing)
     }
 
     /// Graceful local close: EOF + channel close + disconnect.
@@ -858,6 +879,13 @@ impl Actor {
                     SessionCommand::Attach(consumer) => {
                         self.events = Some(consumer);
                         self.flush_replay().await;
+                    }
+                    SessionCommand::Replay(tx) => {
+                        let snapshot: Vec<u8> = self.replay.iter().copied().collect();
+                        // `send` is async: it must be awaited, otherwise the
+                        // value is dropped and the caller only sees a closed
+                        // channel.
+                        let _ = tx.send(snapshot).await;
                     }
                     SessionCommand::Close => {
                         self.finish("closed by user").await;

@@ -50,6 +50,12 @@ export const api = {
 
   layoutSave: (doc: WorkspaceDoc) => invoke<void>('layout_save', { doc }),
   layoutLoad: () => invoke<WorkspaceDoc | null>('layout_load'),
+
+  sessionAttach: (id: string, channel: Channel<SessionUpdate>) =>
+    invoke<void>('session_attach', { id, channel }),
+  windowOpenSession: (id: string, title: string) =>
+    invoke<string>('window_open_session', { id, title }),
+  windowClose: (label: string) => invoke<void>('window_close', { label }),
 };
 
 export type { HostKeyPromptRequest };

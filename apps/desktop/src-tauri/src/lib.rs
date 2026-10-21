@@ -67,9 +67,12 @@ fn build() -> tauri::Result<tauri::App> {
             commands::sessions::session_write,
             commands::sessions::session_resize,
             commands::sessions::session_list,
+            commands::sessions::session_attach,
             commands::sessions::host_key_prompt_resolve,
             commands::layout::layout_save,
             commands::layout::layout_load,
+            commands::windows::window_open_session,
+            commands::windows::window_close,
         ])
         .build(tauri::generate_context!())
 }

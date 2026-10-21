@@ -3,3 +3,4 @@ pub mod hosts;
 pub mod layout;
 pub mod prefs;
 pub mod sessions;
+pub mod windows;

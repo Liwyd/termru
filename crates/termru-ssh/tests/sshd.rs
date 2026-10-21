@@ -526,6 +526,39 @@ fn count(data: &[u8], needle: &[u8]) -> usize {
 // ------------------------------------------------------------------- tests --
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_snapshot_returns_the_buffered_output() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let (tx, mut rx) = mpsc::channel(256);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    session
+        .write(b"echo replay-marker\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "replay-marker", |data| {
+        count(data, b"replay-marker") > 0
+    })
+    .await;
+
+    let snapshot = session.replay_snapshot().await.expect("replay snapshot");
+    let text = String::from_utf8_lossy(&snapshot);
+    assert!(
+        text.contains("replay-marker"),
+        "replay snapshot lacks the marker: {text:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_roundtrip_and_tofu_trust() {
     let Some(server) = TestServer::start() else {
         return;
