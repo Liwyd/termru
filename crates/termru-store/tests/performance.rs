@@ -5,6 +5,12 @@
 //! only fails when something is obviously broken (a query that returns the
 //! wrong number of rows), never because a machine is slower than another.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "harness setup failures must panic loudly in tests"
+)]
+
 use std::time::{Duration, Instant};
 
 use termru_core::Host;
@@ -21,7 +27,11 @@ fn seed(store: &Store, count: usize) -> Duration {
             "deploy".to_string(),
         );
         host.description = Some("a seeded host for the measurement".to_string());
-        store.repos().hosts().save(&mut host).expect("seed the host");
+        store
+            .repos()
+            .hosts()
+            .save(&mut host)
+            .expect("seed the host");
     }
     start.elapsed()
 }
