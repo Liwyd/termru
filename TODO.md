@@ -55,7 +55,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] `crates/termru-store`: SQLite schema + versioned migrations (up migrations with recorded schema version; tested), repositories (hosts, groups, tags, favorites, recents, preferences, workspaces, sync queue/meta), soft delete + tombstone bookkeeping for sync.
 - [x] Store safety: WAL mode, busy timeout, foreign keys ON, transactions per operation, corruption detection on open (quick_check → actionable error), file permissions 0600.
 - [x] Export/import/backup (VACUUM INTO → atomic rename; restore verifies, keeps pre-restore aside) with round-trip test + corrupt-backup rejection test.
-- [ ] Concurrent-access test (two connections, busy-timeout behavior).
+- [x] Concurrent-access test (two connections, busy-timeout behavior).
+  - `crates/termru-store/tests/concurrency.rs`: two independent connections to the same file both read and write, 40 interleaved writes from two threads keep every row (no `SQLITE_BUSY`, the busy timeout covers the overlap), and a second store opened on an existing file does not lose data. The integrity check runs on the file afterwards.
 - Verification: unit tests incl. migration-from-empty AND future-schema rejection, backup/restore round-trip, 25 store tests green (incl. deterministic monotonic `now_ms` + `ORDER BY` tiebreakers).
 
 ## Phase 4 — SSH engine and terminal reliability (russh)
@@ -186,7 +187,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - The policy is defined in `deny.toml`: lockfile-pinned versions (wildcard requirements are warnings), unmaintained-crate advisories are fatal only for direct dependencies, and every ignore carries a reason + review date. Verified locally with cargo-deny 0.20: advisories/bans/licenses/sources **all ok**. `npm audit`: 0 vulnerabilities.
 - [x] SQL injection: parameterized queries only (enforced by code review + tests), authz matrix tests on every endpoint.
   - Every statement in `apps/cloud-server` is a bound parameter; no SQL is built by string concatenation. The authorization matrix is covered by the integration suite: unauthenticated calls are refused, a token of another user reaches nothing, a device of another account can not be renamed or revoked, and a revoked device loses access immediately.
-- [ ] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
+- [x] Webview XSS surface: no `dangerouslySetInnerHTML`-equivalent, sanitization tests for any rendered remote-influenced strings (host names etc.).
+  - Svelte escapes every interpolation, and the frontend contains no raw HTML insertion at all. A test (`apps/desktop/src/lib/hardening.test.ts`) reads the frontend sources and fails when a `{@html …}` / `innerHTML` insertion or a remote `src`/`href` appears — so a later change cannot quietly open the hole.
 - [ ] Container hardening: non-root user, read-only FS where possible, no secrets in image, resource limits, minimal base.
 - [x] Dependency review for significant deps (maintenance, license, security history) → `docs/security/dependency-review.md`.
   - Documents the policy, every significant Rust/npm dependency with its licence and role, and the **known advisories**: RUSTSEC-2023-0071 (rsa via russh/ssh-key — no fixed release, reviewed 2027) and the unmaintained zbus/zvariant chain behind the keyring's Linux backend.
@@ -218,7 +220,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 ## Phase 14 — GitHub Actions CI/CD
 
 - [ ] PR pipeline: fmt, clippy(-D warnings), cargo test (workspace), npm typecheck/test, cargo-deny, gitleaks, server integration tests (Postgres service), SSH integration tests (sshd), frontend build, desktop build check (linux), container build check.
-- [ ] Least-privilege permissions (`contents: read` for PRs), third-party actions pinned to SHAs, concurrency groups, cache hygiene (keyed on lockfiles).
+- [x] Least-privilege permissions (`contents: read` for PRs), third-party actions pinned to SHAs, concurrency groups, cache hygiene (keyed on lockfiles).
+  - Every third-party action is pinned to a commit SHA (a tag can be moved, a commit cannot); the comment behind each pin names the tag it belongs to, so an update is a deliberate diff. The workflows use `contents: read`, a concurrency group with `cancel-in-progress`, and the cargo/npm caches keyed on the lockfiles.
 - [ ] Release pipeline: tag validation (semver + clean version) → tests → build matrix (windows-latest NSIS; ubuntu .deb/AppImage; fedora container RPM) → checksums → cloud image build/push (Docker Hub, versioned tag + `latest` policy) → GitHub Release upload → post-publish verification (artifact presence + image digest check) → report partial failures explicitly.
 - [ ] Never expose publish secrets to PR workflows; protected tags; manual release-recovery path documented.
 - Verification: PR pipeline green on a test PR; release pipeline exercised on `v0.1.0-rc.1` pre-release tag (artifacts verified by download).
@@ -233,7 +236,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [ ] README: description, status, platforms, capabilities + limitations, per-OS install, single cloud install command, first-run config, usage, data locations, backup/restore, upgrade/troubleshooting, contributing, security reporting, license.
   - Done: description, status, stack, features, development commands, the cloud install pointer, the repository layout, the data locations, security reporting, contributing and the license. The per-OS install commands need the packaging of Phase 12.
 - [ ] `docs/`: development guide (setup, tests), architecture overview + ADRs, cloud deployment/ops, backup/restore, performance notes, known limitations.
-  - Done: `docs/architecture/` (7 ADRs + index), `docs/security/` (threat model, dependency review), `docs/cloud/deployment.md` (install, first run, backups, upgrade/rollback, troubleshooting) and `apps/cloud-server/README.md` (the API reference and the configuration table). Missing: the development guide, the performance notes and the known-limitations page.
+  - Done: `docs/architecture/` (7 ADRs + index), `docs/security/` (threat model, dependency review), `docs/cloud/deployment.md` (install, first run, backups, upgrade/rollback, troubleshooting), `docs/development.md` (setup, the test matrix, the everyday commands, the conventions) and `docs/limitations.md` (what the product does not do yet and the residual risks). Missing: the performance notes (Phase 17) and an architecture overview that ties the ADRs together.
 - [x] Repo hygiene: LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG (Keep a Changelog), .editorconfig, issue+PR templates, Dependabot (cargo/npm/github-actions).
 - Verification: docs match actual commands (each command executed once), links resolve.
 

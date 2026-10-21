@@ -90,7 +90,15 @@ and the sync queue catches up later.
 
 Report a vulnerability privately, see [SECURITY.md](SECURITY.md). The threat
 model and the known residual risks are documented in
-[docs/security/threat-model.md](docs/security/threat-model.md).
+[docs/security/threat-model.md](docs/security/threat-model.md) and
+[docs/limitations.md](docs/limitations.md).
+
+## Documentation
+
+* [Development guide](docs/development.md) — setup, tests, commands
+* [Architecture decisions](docs/architecture/README.md)
+* [Cloud deployment and operations](docs/cloud/deployment.md)
+* [Known limitations](docs/limitations.md)
 
 ## Contributing
 
