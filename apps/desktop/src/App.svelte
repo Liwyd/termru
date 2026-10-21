@@ -12,6 +12,7 @@
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
   import HostEditor from './lib/components/HostEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
+  import SettingsPanel from './lib/components/SettingsPanel.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import SyncPanel from './lib/components/SyncPanel.svelte';
   import TabBar from './lib/components/TabBar.svelte';
@@ -22,6 +23,7 @@
   let pendingHost = $state<Host | null>(null);
   let pendingSecretStored = $state(false);
   let syncOpen = $state(false);
+  let settingsOpen = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
   $effect(() => {
@@ -112,6 +114,9 @@
       case 'sync.open':
         syncOpen = true;
         void sync.load();
+        break;
+      case 'settings.open':
+        settingsOpen = true;
         break;
     }
   }
@@ -215,6 +220,7 @@
 <HostEditor />
 <HostKeyDialog />
 <SyncPanel bind:open={syncOpen} />
+<SettingsPanel bind:open={settingsOpen} />
 <CommandPalette />
 <Toasts />
 

@@ -290,6 +290,40 @@ describe('desktop UI ↔ Tauri contract', () => {
     });
   });
 
+  it('saves the appearance settings with the documented shape', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    // Mod+Comma opens the settings.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: ',', ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Settings');
+    });
+
+    const size = target.querySelector('input[type="number"]') as HTMLInputElement;
+    expect(size).not.toBeNull();
+    type(size, '18');
+
+    const save = findButton(target, 'Save');
+    click(save);
+
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'prefs_set')).toBe(true);
+    });
+
+    const call = invokeCalls.find((entry) => entry.cmd === 'prefs_set');
+    const prefs = call?.args?.prefs as
+      { theme: string; terminal: { font_size: number; cursor_style: string } } | undefined;
+    expect(prefs?.terminal.font_size).toBe(18);
+    // The theme is the one the backend reports; the dialog only changes
+    // what the user edits.
+    expect(prefs?.theme).toBe('dark');
+    expect(prefs?.terminal.cursor_style).toBe('block');
+  });
+
   it('closes the backend session when the tab is closed', async () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('web-1');

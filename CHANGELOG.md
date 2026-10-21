@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent retries) shared with the desktop client.
 * Container image and `compose.yaml` for the cloud server, with a
   checksum-verified install command and a backup/restore procedure.
+* A settings dialog (theme, font, scrollback, cursor, copy-on-select) that
+  opens with `Mod+,`; the values are synced with the other devices.
 * Automatic background sync: the app syncs every few minutes on its own,
   refreshes the access token before it expires and retries a failure with a
   bounded backoff.

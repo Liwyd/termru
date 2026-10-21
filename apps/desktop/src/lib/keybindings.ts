@@ -23,7 +23,8 @@ export type CommandId =
   | 'view.toggleTheme'
   | 'view.increaseFont'
   | 'view.decreaseFont'
-  | 'sync.open';
+  | 'sync.open'
+  | 'settings.open';
 
 export interface Command {
   id: CommandId;
@@ -98,6 +99,7 @@ export const COMMANDS: Command[] = [
   { id: 'view.increaseFont', title: 'Increase font size', accelerator: 'Mod+Plus', group: 'View' },
   { id: 'view.decreaseFont', title: 'Decrease font size', accelerator: 'Mod+Minus', group: 'View' },
   { id: 'sync.open', title: 'Cloud sync', accelerator: 'Mod+Shift+S', group: 'Sync' },
+  { id: 'settings.open', title: 'Settings', accelerator: 'Mod+,', group: 'View' },
 ];
 
 /**

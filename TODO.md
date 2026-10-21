@@ -110,14 +110,14 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [ ] Global search across hosts/tags/snippets.
   - Done: host search in the sidebar (name, address, username) + a "Recent" section (most recently connected hosts, from the recents table).
   - Pending: tags/snippets do not exist yet (no snippet model in the store), so the search cannot cover them.
-- [ ] Appearance settings: fonts, sizes, terminal theme overrides, cursor style, reduced motion respected.
-  - Done: font family/size, cursor style/blink and the light/dark theme are preferences and apply live to the running terminal; the palette can change the theme and the font size; the UI honours `prefers-reduced-motion` (spinner).
-  - Pending: a settings dialog (the values are stored, but there is no UI for them yet).
+- [x] Appearance settings: fonts, sizes, terminal theme overrides, cursor style, reduced motion respected.
+  - Done: a settings dialog (`SettingsPanel.svelte`, `Mod+,`) with the theme, the font family and size, the scrollback, the cursor style and blink and the copy-on-select switch; the values are stored as the portable `preferences` record, so they are synced with the other devices, and they apply live to the running terminal. The palette can still change the theme and the font size, and the UI honours `prefers-reduced-motion` (spinner).
+  - Pending: per-record terminal theme overrides (the terminal follows the app theme, it can not differ per host).
 - [ ] Context menus, tooltips, drag-and-drop (host → tab), recent hosts, favorites, tags, folders.
   - Done: recent hosts (sidebar section), favorites (star toggle + sorting), host → tab via drag-free "Connect"/palette entries.
   - Pending: context menus, tooltips, drag-and-drop of hosts onto tabs, tags/folders in the tree.
 - Verification: unit tests for keybinding conflict detection and command registry; `svelte-check` clean; manual keyboard-only walkthrough of core journeys.
-  - Automated: 44 frontend tests (keybinding normalization/conflicts/event matching, fuzzy ranking, the tab state machine, the layout document, and the jsdom UI↔Tauri contract test) + `svelte-check` 0/0.
+  - Automated: 53 frontend tests (keybinding normalization/conflicts/event matching, fuzzy ranking, the tab state machine, the layout document, the sync store, the webview hardening scan, and the jsdom UI↔Tauri contract test) + `svelte-check` 0/0.
   - Manual: the keyboard-only walkthrough still needs a desktop session (no window manager on this machine).
 
 ## Phase 8 — Local security (desktop)
