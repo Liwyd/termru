@@ -11,6 +11,22 @@ The pre-release that exercised the release pipeline: the packages, the
 cloud image and the GitHub release were built and published by the pipeline
 alone. It is marked as a pre-release and its image carries no `latest` tag.
 
+## [0.1.1] — 2026-10-23
+
+The fixed build, re-packaged: `v0.1.0` was re-published on the day of
+the release to fix the startup crash listed below under its *Fixed*,
+but the re-uploaded assets kept their name, which made the broken and
+the fixed download indistinguishable. `v0.1.1` carries the same code
+as the fixed `v0.1.0`, plus the correction of the install commands, so
+the artifacts to download are unmistakable.
+
+### Documentation
+
+* The install commands in `docs/install.md` and the README used the
+  lower-case file names (`termru_…`), while the published assets are
+  `Termru_…` — the documented commands returned HTTP 404. The file
+  names and the version now match the release they document.
+
 ## [0.1.0] — 2026-10-22
 
 The first version. Everything below is implemented and covered by tests; the
@@ -66,6 +82,13 @@ open items are listed in [TODO.md](TODO.md) and in
 * A closed window left the sessions it showed running with nothing rendering
   them. A view now knows its window, and a destroyed window releases the
   sessions nobody shows any more.
+* The packaged apps exited immediately on launch: the background sync
+  scheduler called `tokio::spawn` from Tauri's `setup` hook, which runs
+  on the main thread before a Tokio runtime exists ("there is no reactor
+  running"). It now uses `tauri::async_runtime::spawn`, which runs its
+  own standalone runtime; a regression test starts the scheduler from
+  a plain test with no runtime at all. The `v0.1.0` upload was re-cut
+  with this fix within the same day.
 
 ### Changed
 

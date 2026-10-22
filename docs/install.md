@@ -10,16 +10,16 @@ assets (see [Verifying the download](#verifying-the-download)).
 Set the version you want once:
 
 ```bash
-VERSION=0.1.0
+VERSION=0.1.1
 BASE="https://github.com/Liwyd/termru/releases/download/v${VERSION}"
 ```
 
 ## Debian / Ubuntu (`.deb`)
 
 ```bash
-VERSION=0.1.0
-curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/termru_${VERSION}_amd64.deb"
-sudo apt install ./termru_${VERSION}_amd64.deb
+VERSION=0.1.1
+curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/Termru_${VERSION}_amd64.deb"
+sudo apt install ./Termru_${VERSION}_amd64.deb
 ```
 
 `apt` pulls in the runtime dependencies (WebKitGTK, GTK 3, the app
@@ -29,15 +29,15 @@ from the desktop menu.
 To install it for the current user only, without `sudo`:
 
 ```bash
-sudo apt install --root=$HOME/.local ./termru_${VERSION}_amd64.deb
+sudo apt install --root=$HOME/.local ./Termru_${VERSION}_amd64.deb
 ```
 
 ## Fedora / RHEL / openSUSE (`.rpm`)
 
 ```bash
-VERSION=0.1.0
-curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/termru-${VERSION}-1.x86_64.rpm"
-sudo dnf install ./termru-${VERSION}-1.x86_64.rpm
+VERSION=0.1.1
+curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/Termru-${VERSION}-1.x86_64.rpm"
+sudo dnf install ./Termru-${VERSION}-1.x86_64.rpm
 ```
 
 ## Any Linux (AppImage)
@@ -45,16 +45,16 @@ sudo dnf install ./termru-${VERSION}-1.x86_64.rpm
 No installation, no root rights:
 
 ```bash
-VERSION=0.1.0
-curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/termru_${VERSION}_amd64.AppImage"
-chmod +x termru_${VERSION}_amd64.AppImage
-./termru_${VERSION}_amd64.AppImage
+VERSION=0.1.1
+curl -fLO "https://github.com/Liwyd/termru/releases/download/v${VERSION}/Termru_${VERSION}_amd64.AppImage"
+chmod +x Termru_${VERSION}_amd64.AppImage
+./Termru_${VERSION}_amd64.AppImage
 ```
 
 The AppImage needs `FUSE` to mount itself. On a distribution without it:
 
 ```bash
-./termru_${VERSION}_amd64.AppImage --appimage-extract-and-run
+./Termru_${VERSION}_amd64.AppImage --appimage-extract-and-run
 ```
 
 Put it in `~/Applications` (or wherever you keep your portable programs)
@@ -65,7 +65,7 @@ and add it to the menu of your desktop environment by hand.
 The installer installs for the current user; no administrator rights are
 needed.
 
-1. Download `termru_${VERSION}_x64-setup.exe` from the release page.
+1. Download `Termru_${VERSION}_x64-setup.exe` from the release page.
 2. Run it.
 
 The installer is not signed, so Windows SmartScreen will warn about an

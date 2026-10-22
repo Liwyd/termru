@@ -13,12 +13,12 @@ authoritative plan and the open items.
 
 ```bash
 # Debian / Ubuntu
-curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.0/termru_0.1.0_amd64.deb
-sudo apt install ./termru_0.1.0_amd64.deb
+curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.1/Termru_0.1.1_amd64.deb
+sudo apt install ./Termru_0.1.1_amd64.deb
 
 # Fedora
-curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.0/termru-0.1.0-1.x86_64.rpm
-sudo dnf install ./termru-0.1.0-1.x86_64.rpm
+curl -fLO https://github.com/Liwyd/termru/releases/download/v0.1.1/Termru-0.1.1-1.x86_64.rpm
+sudo dnf install ./Termru-0.1.1-1.x86_64.rpm
 ```
 
 Windows, the AppImage and the details are in
