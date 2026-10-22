@@ -28,9 +28,9 @@ ones the CI runs.
 |---|---|---|
 | Format | `cargo fmt --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
-| Tests | `cargo test --workspace` | 208 passed, 0 failed |
+| Tests | `cargo test --workspace` | 210 passed, 0 failed |
 | Frontend lint | `npm run lint` (prettier + svelte-check) | 0 errors, 0 warnings |
-| Frontend tests | `npm run test` | 90 passed |
+| Frontend tests | `npm run test` | 91 passed |
 | Frontend build | `npm run build` | green |
 | Supply chain | `cargo deny check` | advisories, bans, licences, sources: ok |
 | Action pins | `scripts/check-action-pins.py` | every pin resolves to a real commit |
@@ -51,7 +51,7 @@ a failure.
 | The settings and the remapped keys | The contract test opens the settings, changes a value and checks the argument shape of `prefs_set` |
 | Sign in to a sync server, push, pull, resolve a conflict | The end-to-end test (`sync_e2e.rs`) drives the desktop engine against the **real** server binary: register, push, pull with a second device |
 | The cloud server is deployed | `compose-smoke.sh` starts the compose stack with the image under test, waits for the readiness, checks that the migration ran, drives a client round trip, backs the database up and restores it |
-| The packages are installable | The release pipeline installs the `.deb` (dpkg), the `.rpm` (dnf), extracts the AppImage and checks the PE header of the NSIS installer |
+| The packages are installable | The release pipeline installs the `.deb` with apt and checks the declared dependencies, extracts the AppImage and checks the PE header of the NSIS installer; the `.rpm` is queried with the `rpm` tools (the runner has no `dnf`, so it is not installed there) |
 
 ## The decisions that are still open
 

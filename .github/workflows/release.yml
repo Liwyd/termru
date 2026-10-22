@@ -200,8 +200,9 @@ jobs:
             os: ubuntu-22.04
             args: --bundles appimage
           # There is no Fedora image among the GitHub-hosted runners, so
-          # the RPM is built on Debian with `rpmbuild` (the `rpm` package).
-          # The dependencies of the RPM are the Fedora ones, they are
+          # the RPM is built on Debian. The bundler writes it itself (the
+          # Rust crate `rpm`); the `rpm` tools are only installed to query
+          # it. The dependencies of the RPM are the Fedora ones, they are
           # declared in `tauri.conf.json`.
           - label: rpm
             os: ubuntu-22.04
@@ -441,11 +442,28 @@ jobs:
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
 
+      # The release page shows the section of the changelog of the version.
+      # The generated notes alone would only cover the commits since the
+      # previous tag, which says nothing about a release.
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v version="$VERSION" '
+            $0 ~ "^## \\[" version "\\]" { take = 1; next }
+            take && /^## \[/ { take = 0 }
+            take { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          test -s RELEASE_NOTES.md             || { echo "the changelog has no section for $VERSION" >&2; exit 1; }
+          cat RELEASE_NOTES.md
+
       - name: Upload the assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           # A pre-release is marked as such: it is not the stable release.
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}

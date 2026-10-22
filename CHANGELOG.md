@@ -11,7 +11,7 @@ The pre-release that exercised the release pipeline: the packages, the
 cloud image and the GitHub release were built and published by the pipeline
 alone. It is marked as a pre-release and its image carries no `latest` tag.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-10-22
 
 The first version. Everything below is implemented and covered by tests; the
 open items are listed in [TODO.md](TODO.md) and in
