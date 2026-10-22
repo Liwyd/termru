@@ -53,10 +53,36 @@ vi.mock('@tauri-apps/api/core', () => {
       switch (cmd) {
         case 'host_list':
           return [HOST];
+        case 'host_save':
+          // The backend answers with the saved host: the editor closes.
+          return { ...(args?.host as Record<string, unknown>) };
         case 'recent_list':
           return [];
         case 'identity_list':
           return identities;
+        case 'group_list':
+          return [
+            {
+              id: 'group-1',
+              name: 'production',
+              parent_id: null,
+              sort_order: 0,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+              deleted: false,
+            },
+          ];
+        case 'tag_list':
+          return [
+            {
+              id: 'tag-1',
+              name: 'frontend',
+              color: null,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+              deleted: false,
+            },
+          ];
         case 'identity_bindings':
           return [{ identityId: 'identity-1', keyPath: '/home/user/.ssh/id_ed25519' }];
         case 'plugin:dialog|open':
@@ -377,6 +403,39 @@ describe('desktop UI ↔ Tauri contract', () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  it('saves the folder and the tags of a host', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    click(findButton(target, 'Edit'));
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Edit host');
+    });
+
+    // The folder and the tag of the host are offered.
+    const selects = target.querySelectorAll('.dialog select');
+    const folder = selects[1] as HTMLSelectElement;
+    expect(folder).not.toBeNull();
+    folder.value = 'group-1';
+    folder.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const check = target.querySelector('.dialog input[type="checkbox"]') as HTMLInputElement;
+    expect(check).not.toBeNull();
+    check.checked = true;
+    check.dispatchEvent(new Event('change', { bubbles: true }));
+
+    click(findButton(target, 'Save'));
+
+    await vi.waitFor(() => {
+      expect(invokeCalls.some((call) => call.cmd === 'host_save')).toBe(true);
+    });
+    const save = invokeCalls.filter((call) => call.cmd === 'host_save').pop();
+    const host = save?.args?.host as { group_id: string | null; tags: string[] } | undefined;
+    expect(host?.group_id).toBe('group-1');
+    expect(host?.tags).toEqual(['tag-1']);
   });
 
   it('binds a key file to an identity with the native picker', async () => {

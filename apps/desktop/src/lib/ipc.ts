@@ -2,10 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Channel } from '@tauri-apps/api/core';
 import type {
   ConflictView,
+  Group,
   Host,
   HostKeyPromptRequest,
   Identity,
   IdentityBinding,
+  Tag,
   Preferences,
   SessionGeometry,
   SessionInfo,
@@ -27,6 +29,14 @@ export const api = {
   hostDelete: (id: string) => invoke<void>('host_delete', { id }),
   hostSetFavorite: (id: string, favorite: boolean) =>
     invoke<void>('host_set_favorite', { id, favorite }),
+
+  groupList: () => invoke<Group[]>('group_list'),
+  groupSave: (group: Group) => invoke<Group>('group_save', { group }),
+  groupDelete: (id: string) => invoke<void>('group_delete', { id }),
+
+  tagList: () => invoke<Tag[]>('tag_list'),
+  tagSave: (tag: Tag) => invoke<Tag>('tag_save', { tag }),
+  tagDelete: (id: string) => invoke<void>('tag_delete', { id }),
 
   identityList: () => invoke<Identity[]>('identity_list'),
   identitySave: (identity: Identity) => invoke<Identity>('identity_save', { identity }),

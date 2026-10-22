@@ -32,6 +32,27 @@ export interface Identity {
   deleted: boolean;
 }
 
+/** A folder (the group a host can live in). */
+export interface Group {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  deleted: boolean;
+}
+
+/** A label that can be put on a host. */
+export interface Tag {
+  id: string;
+  name: string;
+  color: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted: boolean;
+}
+
 /**
  * A device-local key binding: which key file an identity uses on this
  * machine. The path is never synced.

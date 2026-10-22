@@ -118,10 +118,10 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Done: a settings dialog (`SettingsPanel.svelte`, `Mod+,`) with the theme, the font family and size, the scrollback, the cursor style and blink and the copy-on-select switch; the values are stored as the portable `preferences` record, so they are synced with the other devices, and they apply live to the running terminal. The palette can still change the theme and the font size, and the UI honours `prefers-reduced-motion` (spinner).
   - Pending: per-record terminal theme overrides (the terminal follows the app theme, it can not differ per host).
 - [ ] Context menus, tooltips, drag-and-drop (host → tab), recent hosts, favorites, tags, folders.
-  - Done: recent hosts (sidebar section), favorites (star toggle + sorting), host → tab via drag-free "Connect"/palette entries.
-  - Pending: context menus, tooltips, drag-and-drop of hosts onto tabs, tags/folders in the tree.
+  - Done: recent hosts (sidebar section), favorites (star toggle + sorting), host → tab via drag-free "Connect"/palette entries, and **folders and tags**: the folders can be created, nested, renamed and deleted (the "Folders" dialog), the host editor puts a host in a folder and gives it tags, the sidebar groups the hosts by their folder, and the search covers the description and the tag names.
+  - Pending: context menus, tooltips, drag-and-drop of hosts onto tabs.
 - Verification: unit tests for keybinding conflict detection and command registry; `svelte-check` clean; manual keyboard-only walkthrough of core journeys.
-  - Automated: 85 frontend tests (keybinding normalization/conflicts/event matching, the overrides and the recorder, fuzzy ranking, the tab state machine, the pane tree, the layout document, the sync store, the webview hardening scan, and the jsdom UI↔Tauri contract tests) + `svelte-check` 0/0.
+  - Automated: 90 frontend tests (keybinding normalization/conflicts/event matching, the overrides and the recorder, fuzzy ranking, the tab state machine, the pane tree, the layout document, the sync store, the webview hardening scan, and the jsdom UI↔Tauri contract tests) + `svelte-check` 0/0.
   - Manual: the keyboard-only walkthrough still needs a desktop session (no window manager on this machine).
 
 ## Phase 8 — Local security (desktop)

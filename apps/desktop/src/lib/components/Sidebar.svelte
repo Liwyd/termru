@@ -10,10 +10,12 @@
     onconnect,
     onopensync,
     onopenidentities,
+    onopenfolders,
   }: {
     onconnect: (host: Host) => void;
     onopensync: () => void;
     onopenidentities: () => void;
+    onopenfolders: () => void;
   } = $props();
 
   function edit(host: Host | null): void {
@@ -50,19 +52,24 @@
       {hosts.query ? 'No hosts match your search.' : 'No hosts yet — add your first one.'}
     </p>
   {:else}
-    <ul>
-      {#each hosts.visible as host (host.id)}
-        <li>
-          <HostCard
-            {host}
-            {onconnect}
-            onedit={edit}
-            ondelete={remove}
-            ontogglefavorite={(target) => hosts.toggleFavorite(target)}
-          />
-        </li>
-      {/each}
-    </ul>
+    {#each hosts.grouped as section (section.id)}
+      {#if section.id !== ''}
+        <h3 class="folder">{section.label}</h3>
+      {/if}
+      <ul>
+        {#each section.hosts as host (host.id)}
+          <li>
+            <HostCard
+              {host}
+              {onconnect}
+              onedit={edit}
+              ondelete={remove}
+              ontogglefavorite={(target) => hosts.toggleFavorite(target)}
+            />
+          </li>
+        {/each}
+      </ul>
+    {/each}
   {/if}
 
   {#if hosts.recents.length > 0 && hosts.query.length === 0}
@@ -82,6 +89,9 @@
   {/if}
 
   <footer>
+    <button type="button" class="identities" onclick={onopenfolders}>
+      <span>Folders</span>
+    </button>
     <button type="button" class="identities" onclick={onopenidentities}>
       <span>Identities</span>
     </button>
@@ -151,6 +161,15 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--termru-muted);
+  }
+
+  h3.folder {
+    margin: 0.3rem 0 0.1rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--termru-muted);
+    border-bottom: 1px solid var(--termru-border);
+    padding-bottom: 0.15rem;
   }
 
   .recent {

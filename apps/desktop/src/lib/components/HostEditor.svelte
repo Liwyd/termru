@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { hosts } from '../stores/hosts.svelte';
+  import { api } from '../ipc';
+  import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { AuthMethod, Host } from '../types';
 
@@ -18,6 +19,9 @@
   let draft = $state<Host | null>(null);
   let authType = $state<AuthMethod['type']>('password');
   let identityId = $state<string>('');
+  let groupId = $state<string>('');
+  let selectedTags = $state<string[]>([]);
+  let newTag = $state('');
   let saving = $state(false);
   let formError = $state<string | null>(null);
 
@@ -31,6 +35,9 @@
     draft = target ? { ...target, description: target.description ?? '' } : newHost();
     authType = target?.auth.type ?? 'password';
     identityId = target?.auth.type === 'private_key' ? target.auth.identity_id : '';
+    groupId = target?.group_id ?? '';
+    selectedTags = [...(target?.tags ?? [])];
+    newTag = '';
   });
 
   function close(): void {
@@ -60,6 +67,35 @@
       updated_at: now,
       deleted: false,
     };
+  }
+
+  /** Creates a tag and puts it on the host. */
+  async function addTag(): Promise<void> {
+    const name = newTag.trim();
+    if (name.length === 0) return;
+    formError = null;
+    const now = new Date().toISOString();
+    try {
+      const created = await api.tagSave({
+        id: crypto.randomUUID(),
+        name,
+        color: null,
+        created_at: now,
+        updated_at: now,
+        deleted: false,
+      });
+      if (!selectedTags.includes(created.id)) selectedTags = [...selectedTags, created.id];
+      newTag = '';
+      await hosts.load();
+    } catch (err) {
+      formError = errorMessage(err);
+    }
+  }
+
+  function toggleTag(id: string): void {
+    selectedTags = selectedTags.includes(id)
+      ? selectedTags.filter((entry) => entry !== id)
+      : [...selectedTags, id];
   }
 
   async function save(event: SubmitEvent): Promise<void> {
@@ -102,6 +138,8 @@
       address: draft.address.trim(),
       username: draft.username.trim(),
       description: draft.description?.trim() ? draft.description.trim() : null,
+      group_id: groupId.length > 0 ? groupId : null,
+      tags: [...selectedTags],
     };
     saving = true;
     const saved = await hosts.save(payload);
@@ -184,6 +222,38 @@
             <input type="number" bind:value={draft.keepalive_seconds} min="0" max="3600" />
           </label>
         </div>
+
+        <label>
+          Folder
+          <select bind:value={groupId}>
+            <option value="">No folder</option>
+            {#each hosts.folderOptions as option (option.id)}
+              <option value={option.id}>{option.label}</option>
+            {/each}
+          </select>
+        </label>
+
+        <fieldset>
+          <legend>Tags</legend>
+          {#if hosts.tags.length > 0}
+            <div class="tags">
+              {#each hosts.tags as tag (tag.id)}
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={selectedTags.includes(tag.id)}
+                    onchange={() => toggleTag(tag.id)}
+                  />
+                  <span>{tag.name}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          <div class="new-tag">
+            <input bind:value={newTag} placeholder="New tag" maxlength="60" />
+            <button type="button" onclick={() => void addTag()}>Add</button>
+          </div>
+        </fieldset>
 
         <label>
           Description
@@ -270,6 +340,44 @@
     justify-content: flex-end;
     gap: 0.5rem;
     margin-top: 0.3rem;
+  }
+
+  fieldset {
+    border: 1px solid var(--termru-border);
+    border-radius: var(--termru-radius);
+    padding: 0.45rem 0.6rem 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  legend {
+    font-size: 0.75rem;
+    color: var(--termru-muted);
+    padding: 0 0.3rem;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .check {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--termru-fg);
+  }
+
+  .new-tag {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .new-tag input {
+    flex: 1;
   }
 
   .hint {

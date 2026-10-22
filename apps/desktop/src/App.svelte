@@ -17,6 +17,7 @@
   import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
   import HostEditor from './lib/components/HostEditor.svelte';
+  import FolderEditor from './lib/components/FolderEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
   import IdentityEditor from './lib/components/IdentityEditor.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
@@ -32,6 +33,7 @@
   let syncOpen = $state(false);
   let settingsOpen = $state(false);
   let identitiesOpen = $state(false);
+  let foldersOpen = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
   $effect(() => {
@@ -217,6 +219,7 @@
     onconnect={requestConnect}
     onopensync={() => (syncOpen = true)}
     onopenidentities={() => (identitiesOpen = true)}
+    onopenfolders={() => (foldersOpen = true)}
   />
 
   <main>
@@ -256,6 +259,7 @@
 
 <HostEditor onmanageidentities={() => (identitiesOpen = true)} />
 <HostKeyDialog />
+<FolderEditor bind:open={foldersOpen} />
 <IdentityEditor bind:open={identitiesOpen} />
 <SyncPanel bind:open={syncOpen} />
 <SettingsPanel bind:open={settingsOpen} />

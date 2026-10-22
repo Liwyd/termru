@@ -4,7 +4,8 @@
 use tauri::State;
 use termru_core::host::Host;
 use termru_core::identity::Identity;
-use termru_core::ids::{HostId, IdentityId};
+use termru_core::ids::{GroupId, HostId, IdentityId, TagId};
+use termru_core::taxonomy::{Group, Tag};
 
 use crate::app_error::CommandError;
 use crate::state::AppState;
@@ -65,6 +66,44 @@ pub fn identity_save(
 #[tauri::command]
 pub fn identity_delete(state: State<'_, AppState>, id: IdentityId) -> Result<(), CommandError> {
     hosts(&state).identities().soft_delete(id)?;
+    Ok(())
+}
+
+/// The folders (groups) of the hosts.
+#[tauri::command]
+pub fn group_list(state: State<'_, AppState>) -> Result<Vec<Group>, CommandError> {
+    Ok(hosts(&state).groups().list()?)
+}
+
+#[tauri::command]
+pub fn group_save(state: State<'_, AppState>, mut group: Group) -> Result<Group, CommandError> {
+    group.validate()?;
+    hosts(&state).groups().save(&mut group)?;
+    Ok(group)
+}
+
+#[tauri::command]
+pub fn group_delete(state: State<'_, AppState>, id: GroupId) -> Result<(), CommandError> {
+    hosts(&state).groups().soft_delete(id)?;
+    Ok(())
+}
+
+/// The tags of the hosts.
+#[tauri::command]
+pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<Tag>, CommandError> {
+    Ok(hosts(&state).tags().list()?)
+}
+
+#[tauri::command]
+pub fn tag_save(state: State<'_, AppState>, mut tag: Tag) -> Result<Tag, CommandError> {
+    tag.validate()?;
+    hosts(&state).tags().save(&mut tag)?;
+    Ok(tag)
+}
+
+#[tauri::command]
+pub fn tag_delete(state: State<'_, AppState>, id: TagId) -> Result<(), CommandError> {
+    hosts(&state).tags().soft_delete(id)?;
     Ok(())
 }
 
