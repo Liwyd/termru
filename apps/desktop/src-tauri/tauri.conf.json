@@ -38,7 +38,7 @@
     "shortDescription": "SSH terminal workspace",
     "longDescription": "Termru is a cross-platform SSH terminal workspace: a connection manager with groups, tags and favorites, tabbed terminals with split panes, and an optional self-hosted sync server that keeps your host configuration on all your devices.",
     "copyright": "Copyright (c) Termru contributors",
-    "licenseFile": "../../LICENSE",
+    "licenseFile": "../../../LICENSE",
     "linux": {
       "deb": {
         "depends": [
