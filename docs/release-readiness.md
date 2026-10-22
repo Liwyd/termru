@@ -4,6 +4,14 @@ A review of what is in the 0.1.0 release, with the evidence for every
 claim. The open work is in [TODO.md](../TODO.md) and the known gaps are in
 [limitations.md](limitations.md).
 
+> `v0.1.0` was published on 2026-10-22: the tag passed the pipeline
+> (`verify`, `test`, `desktop`, `cloud-image`, `publish`) and the release
+> page holds the `.deb`, the AppImage, the NSIS installer, the `.rpm`, the
+> checksums and the deployment files; the image carries the tags `0.1.0`
+> and `latest`. The manual items below (visual pass on a real desktop, the
+> packages launched on real Windows, Ubuntu and Fedora) remain outstanding
+> — nothing in the repository can do them for you.
+
 > The project instructions that define the release criteria (§23) were not
 > available in the environment this release was prepared in. The review
 > below therefore uses the acceptance criteria the repository documents

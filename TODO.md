@@ -264,15 +264,27 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
     3. the backup test of the cloud server ran the `pg_dump` of the runner (version 16) against a server of version 18 — the dump was refused; the jobs install the client of the server version;
     4. the compose smoke test pushed a host without its fields and the desktop tests needed a credential store that a runner does not have.
   - The **release** pipeline ran for the first time on 2026-10-22 (the pre-release `v0.1.0-rc.1`) and published everything: the `.deb` (built *and* installed on the runner), the AppImage, the NSIS installer, the cloud image in `ghcr.io` (publicly pullable) and the GitHub release with the checksums and the deployment files. The first run found six more defects, all fixed: npm ate the `--bundles` flag, the registry refused the capitalised repository name, there is no Fedora image among the GitHub-hosted runners (the RPM is built on Debian; the bundler writes it itself, the `rpm` tools only query it), the Windows build had no `icon.ico`, the licence file was two levels up instead of three, and the download of the artifacts failed on the record of the image build.
-  - The pre-release is marked as such and its image has no `latest` tag: the stable tag points at the last stable release only.
+  - Shipping `v0.1.0` found two more defects, both fixed: the sync
+    scheduler panicked on startup outside a Tokio runtime
+    (`tokio::spawn` from Tauri's `setup` hook →
+    `tauri::async_runtime::spawn`, regression test added), and the two-tag
+    image list broke the release's verification loop (the list is an
+    environment variable now, not text spliced into the script).
 
-## Phase 15 — Publication (GitHub Releases + Docker Hub)
+## Phase 15 — Publication (GitHub Releases + ghcr.io)
 
 
-- [!] Publish real `v0.1.0`: the pipeline is proven (the pre-release `v0.1.0-rc.1` published everything), the push credentials **are** available now (the git credential store of the machine), but the stable release is the maintainer's decision.
-  - Unblock: the maintainer does the manual steps of `docs/release-readiness.md` (the visual pass on a real desktop, the packages on a real Windows, Ubuntu and Fedora) and pushes the tag `v0.1.0`. The pipeline needs no additional secret: the release and the container image are published with the workflow token.
-  - The image no longer needs a Docker Hub token: it goes to `ghcr.io`, which the pipeline can write with `packages: write`.
-  - The manifests are back at `0.1.0`, so the tag `v0.1.0` passes the check of the `verify` job.
+- [x] Publish real `v0.1.0`: published on 2026-10-22. The tag `v0.1.0`
+  passed the `verify` job (semver + manifest match), the four packages
+  were built on the runners (the `.deb` was installed on the runner, the
+  AppImage extracted, the NSIS installer checked as a PE binary, the
+  `.rpm` queried with the `rpm` tools), the cloud image was pushed to
+  `ghcr.io/liwyd/termru-cloud` with the tags `0.1.0` and `latest`, and
+  the release was uploaded with the changelog as its body and the
+  checksums and the deployment files as assets. It is the latest release.
+  - The push credentials are in the git credential store of the machine;
+    the pipeline publishes with the workflow token (`contents: write`,
+    `packages: write`) — no Docker Hub secret needed.
 
 ## Phase 16 — Documentation and open-source readiness
 
