@@ -393,12 +393,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The list of tags is an environment variable, not text spliced into
+      # the script: a stable release carries two tags, and the newline
+      # between them would break the `for`.
       - name: Verify that the image is in the registry
+        env:
+          IMAGE_TAGS: ${{ needs.verify.outputs.image_tags }}
         run: |
           set -euo pipefail
-          for tag in ${{ needs.verify.outputs.image_tags }}; do
+          for tag in $IMAGE_TAGS; do
             digest="$(docker buildx imagetools inspect "$tag" --format '{{ .Manifest.Digest }}')"
-            test -n "$digest" || { echo "the image $tag has no digest"; exit 1; }
+            test -n "$digest" || { echo "the image $tag has no digest" >&2; exit 1; }
             echo "$tag -> $digest"
           done
 
