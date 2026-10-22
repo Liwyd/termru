@@ -263,14 +263,16 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
     2. the container image did not build: the Dockerfile never copied `build.rs`, so the migrations were never embedded;
     3. the backup test of the cloud server ran the `pg_dump` of the runner (version 16) against a server of version 18 — the dump was refused; the jobs install the client of the server version;
     4. the compose smoke test pushed a host without its fields and the desktop tests needed a credential store that a runner does not have.
-  - Open: the **release** pipeline (the tag) has never run — it needs a tag, and a tag is the maintainer's decision.
+  - The **release** pipeline ran for the first time on 2026-10-22 (the pre-release `v0.1.0-rc.1`) and published everything: the `.deb` (built *and* installed on the runner), the AppImage, the NSIS installer, the cloud image in `ghcr.io` (publicly pullable) and the GitHub release with the checksums and the deployment files. The first run found six more defects, all fixed: npm ate the `--bundles` flag, the registry refused the capitalised repository name, there is no Fedora image among the GitHub-hosted runners (the RPM is built on Debian with `rpmbuild`), the Windows build had no `icon.ico`, the licence file was two levels up instead of three, and the download of the artifacts failed on the record of the image build.
+  - The pre-release is marked as such and its image has no `latest` tag: the stable tag points at the last stable release only.
 
 ## Phase 15 — Publication (GitHub Releases + Docker Hub)
 
 
-- [!] Publish real `v0.1.0`: the push credentials **are** available now (the git credential store of the machine), but publishing is the maintainer's decision.
-  - Unblock: the maintainer does the manual steps of `docs/release-readiness.md` (the visual pass on a real desktop, the packages on Windows, Ubuntu and Fedora) and pushes the tag `v0.1.0`. The pipeline needs no additional secret: the release and the container image are published with the workflow token.
+- [!] Publish real `v0.1.0`: the pipeline is proven (the pre-release `v0.1.0-rc.1` published everything), the push credentials **are** available now (the git credential store of the machine), but the stable release is the maintainer's decision.
+  - Unblock: the maintainer does the manual steps of `docs/release-readiness.md` (the visual pass on a real desktop, the packages on a real Windows, Ubuntu and Fedora) and pushes the tag `v0.1.0`. The pipeline needs no additional secret: the release and the container image are published with the workflow token.
   - The image no longer needs a Docker Hub token: it goes to `ghcr.io`, which the pipeline can write with `packages: write`.
+  - The manifests are back at `0.1.0`, so the tag `v0.1.0` passes the check of the `verify` job.
 
 ## Phase 16 — Documentation and open-source readiness
 

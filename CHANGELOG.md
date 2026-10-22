@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-rc.1] — 2026-10-22
+
+The pre-release that exercised the release pipeline: the packages, the
+cloud image and the GitHub release were built and published by the pipeline
+alone. It is marked as a pre-release and its image carries no `latest` tag.
+
 ## [0.1.0] — unreleased
 
 The first version. Everything below is implemented and covered by tests; the
