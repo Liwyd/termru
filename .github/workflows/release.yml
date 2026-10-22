@@ -412,9 +412,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Only the packages: the build of the image leaves a `.dockerbuild`
+      # record behind, and the download of the artifacts fails on it.
       - name: Download the artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          pattern: desktop-*
           path: artifacts
           merge-multiple: true
 
