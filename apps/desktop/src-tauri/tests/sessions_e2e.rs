@@ -76,7 +76,12 @@ async fn app_session_connects_streams_and_closes() {
     };
 
     let (channel, mut updates) = channel_to_sender();
-    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), "main", channel);
+    let (id, cancel) = manager.register(
+        termru_core::ids::HostId::new(),
+        params.clone(),
+        "main",
+        channel,
+    );
     spawn_connection(
         manager.clone(),
         store,
@@ -148,7 +153,12 @@ async fn app_session_reports_a_failed_authentication() {
     };
 
     let (channel, mut updates) = channel_to_sender();
-    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), "main", channel);
+    let (id, cancel) = manager.register(
+        termru_core::ids::HostId::new(),
+        params.clone(),
+        "main",
+        channel,
+    );
     spawn_connection(
         manager.clone(),
         store,
@@ -204,7 +214,12 @@ async fn second_view_attaches_and_receives_replay_and_live_output() {
     };
 
     let (channel, mut updates) = channel_to_sender();
-    let (id, cancel) = manager.register(termru_core::ids::HostId::new(), params.clone(), "main", channel);
+    let (id, cancel) = manager.register(
+        termru_core::ids::HostId::new(),
+        params.clone(),
+        "main",
+        channel,
+    );
     spawn_connection(
         manager.clone(),
         store,

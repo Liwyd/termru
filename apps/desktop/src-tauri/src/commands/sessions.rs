@@ -175,7 +175,9 @@ fn start_session(
         rows,
         ..SessionOptions::default()
     };
-    let (id, cancel_rx) = state.sessions.register(host_id, params.clone(), window, channel);
+    let (id, cancel_rx) = state
+        .sessions
+        .register(host_id, params.clone(), window, channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -316,7 +318,10 @@ pub async fn session_attach(
     id: String,
     channel: Channel<SessionUpdate>,
 ) -> Result<(), CommandError> {
-    state.sessions.attach_view(&id, webview.label(), channel).await
+    state
+        .sessions
+        .attach_view(&id, webview.label(), channel)
+        .await
 }
 
 #[tauri::command]

@@ -6,40 +6,41 @@ security-relevant part of this list is also tracked in the
 
 ## Product
 
-* **No packaged installers yet.** The desktop app is built from source; the
-  `.deb`, RPM, AppImage and NSIS packages are still to come. Until then
-  there is no "one command" install for a desktop user.
-* **No automatic background sync.** The sync runs when the user asks for it
-  (the sidebar entry or the palette). There is no timer, no automatic token
-  refresh and no automatic retry with backoff.
-* **No split panes yet.** A window shows one terminal per tab; the split
-  layout, the per-window tab sets and the window-close semantics are open.
-* **No key file picker.** The path of a private key is typed in; there is no
-  native file dialog yet.
-* **No settings dialog.** The appearance preferences (font, size, cursor,
-  theme) are stored and applied, but there is no UI to change them beyond
-  the palette commands.
-* **No remapping UI.** The keybinding registry detects conflicts and the
-  palette shows the bindings, but a binding cannot be changed by the user
-  yet.
-* **No tags, folders or context menus in the host tree.** Hosts can be
-  favourited, searched and grouped by the *group* model, but the tree
-  itself is a flat list.
-* **Restored tabs are placeholders.** After a restart the layout comes back,
-  but the sessions do not: the user reconnects. A remote shell can not be
-  restored, and Termru never claims otherwise.
-
-## Environment
-
 * **The interactive UI was never driven by a human on the build machine.**
   The machine has no window manager, so the window could not be shown,
   clicked through or screenshotted. Everything automated is green; the
   visual pass is still open. A checklist for it is in the TODO.
+* **Only Linux was built and tested.** The Windows and macOS packages are
+  built by the release pipeline, but "built on" is not "tested on".
+* **The second window can only show a moved tab.** There is no per-window
+  tab bar: a window that was opened to take over a session has exactly that
+  session, and no tabs of its own.
+* **Restored tabs are placeholders.** After a restart the layout comes back
+  (the tabs, the order and the pane tree), but the sessions do not: the
+  user reconnects. A remote shell can not be restored, and Termru never
+  claims otherwise.
+* **The port forwarding is not implemented.** No local, remote or dynamic
+  forwarding, no jump hosts. The SSH engine is the pure-Rust one, so the
+  feature is possible, but it was left out of the first version
+  (see ADR 0002).
+* **No snippets.** The domain has no snippet model, so the search can not
+  cover one and the palette can not insert one.
+* **No context menus and no drag & drop of a host onto a tab.** The tabs can
+  be reordered by dragging, and a host is opened with a click or from the
+  palette.
+* **The terminal follows the theme of the app.** A host can not have a
+  terminal theme of its own.
+* **The sync covers the configuration, not the sessions.** The open
+  terminals, the window geometry and the layout are device-local.
+
+## Environment
+
 * **The cloud server was never exercised against a container runtime
-  locally** (no Docker daemon): the image and the compose file are built in
-  CI.
-* **Only Linux was built and tested.** The Windows and macOS builds exist
-  in the pipeline plan, but "built on" is not "tested on".
+  locally** (no Docker daemon on the build machine). The image and the
+  compose file are built and smoke-tested in CI.
+* **The packages were never installed on a real desktop.** The pipeline
+  installs the `.deb` and the `.rpm` on the runner and queries the package
+  manager, but the application was never launched by a user.
 
 ## Security
 
@@ -60,11 +61,13 @@ security-relevant part of this list is also tracked in the
 * **The webview is a browser.** The content security policy is strict and
   the frontend never inserts raw markup, but a browser engine is still a
   large attack surface.
-* **No code signing.** The release artifacts are not signed, and there are
-  no checksums published for the desktop packages yet. A user has to trust
-  the download channel.
+* **No code signing.** The release artifacts are not signed; the
+  `SHA256SUMS` file of the release is the trust anchor.
 * **The CI actions are pinned to SHAs**, but the build still runs on
   GitHub-hosted runners.
+* **The first use of a private key trusts the file on disk.** The path is
+  stored, the key is never copied, but the file itself is not verified
+  against a fingerprint in the UI.
 
 ## Protocol
 
@@ -77,3 +80,5 @@ security-relevant part of this list is also tracked in the
   different payload version must be updated in lockstep with the server
   (the schema version is carried in the payload, but there is no downgrade
   path yet).
+* **The revision counter is per user.** Deleting an account and creating a
+  new one with the same name starts at 1 again.

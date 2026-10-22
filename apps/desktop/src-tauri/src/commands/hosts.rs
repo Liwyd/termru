@@ -128,7 +128,7 @@ pub fn identity_bindings(state: State<'_, AppState>) -> Result<Vec<IdentityBindi
             key_path,
         })
         .collect();
-    out.sort_by(|a, b| a.identity_id.to_string().cmp(&b.identity_id.to_string()));
+    out.sort_by_key(|binding| binding.identity_id.to_string());
     Ok(out)
 }
 

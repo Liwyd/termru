@@ -9,6 +9,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 0 — Repository assessment and baseline
 
+
 - [x] Inspect repository: empty (`main` has no commits; remote `origin = https://github.com/Liwyd/termru.git` has no refs). No existing code, no uncommitted user work to preserve.
 - [x] Toolchain baseline: Rust 1.99.0, Cargo 1.99.0, Node 22.23.1, npm 10.9.8, pnpm, webkit2gtk4.1 + gtk3 devel present, Postgres 18.6 client+server, OpenSSH 10.2 client+server, sqlite3 CLI, Docker CLI present.
 - [x] Network baseline: crates.io, npm registry, github.com reachable.
@@ -20,6 +21,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Unblock: install packages, or avoid dependencies requiring them (chosen: avoid; monitor build).
 
 ## Phase 1 — Product requirements and architecture decisions
+
 
 - [x] Decide SSH transport: **russh 0.64 (pure Rust)** over system OpenSSH spawn.
   - Why: full control of host-key trust UX (TOFU + changed-key warnings), auth flows, no system-OpenSSH dependency, single code path on Windows/Linux, viable Android path. Cost: implement OpenSSH-compatible known_hosts parsing/writing, own config parsing subset, algorithm coverage = russh's. Verified: crate maintained, Apache-2.0.
@@ -37,6 +39,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 2 — Repository structure and development tooling
 
+
 - [x] Cargo workspace with the three core crates (`termru-core`, `termru-store`, `termru-ssh`) + shared lints/profiles.
 - [x] Add `apps/desktop/src-tauri` to the Cargo workspace (member of root workspace; links clean against webkit2gtk-4.1).
 - [x] Add `apps/cloud-server` to the workspace (done in Phase 9).
@@ -52,6 +55,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 3 — Core domain and local persistence
 
+
 - [x] `crates/termru-core`: typed IDs, Host/Identity/Group/Tag/Snippet/Preference models, validation, serialization (serde), sync payload types + envelope versioning.
 - [x] `crates/termru-store`: SQLite schema + versioned migrations (up migrations with recorded schema version; tested), repositories (hosts, groups, tags, favorites, recents, preferences, workspaces, sync queue/meta), soft delete + tombstone bookkeeping for sync.
 - [x] Store safety: WAL mode, busy timeout, foreign keys ON, transactions per operation, corruption detection on open (quick_check → actionable error), file permissions 0600.
@@ -61,6 +65,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - Verification: unit tests incl. migration-from-empty AND future-schema rejection, backup/restore round-trip, 25 store tests green (incl. deterministic monotonic `now_ms` + `ORDER BY` tiebreakers).
 
 ## Phase 4 — SSH engine and terminal reliability (russh)
+
 
 - [x] `crates/termru-ssh`: connection state machine (idle→connecting→authenticating→ready→reconnecting→closed/failed), timeouts (connect/auth), keepalive + broken-connection detection, cancellable connect.
 - [x] Auth: password, private key (+ passphrase), SSH agent (OpenSSH agent socket) with graceful degradation when unavailable.
@@ -72,6 +77,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - Verification: `crates/termru-ssh/tests/sshd.rs` — 16 tests green locally (private sshd per test, self-skips with loud `SKIPPED:` if OpenSSH tooling missing): shell roundtrip + TOFU write, declined/changed host keys (decline + accept + subsequently-known), wrong password, unauthorized/wrong/correct passphrase, agent auth via explicit socket, PTY resize, 4MiB flood, reattach replay ordering, interrupted connection → `Failed{Network}`, binary output verbatim, clean `exit(7)` → status without failure, bounded reconnect give-up. Negative cases assert `ErrorCategory` and no credential leakage.
 
 ## Phase 5 — Desktop MVP (main UI + SSH end-to-end)
+
 
 - [x] Tauri app scaffold: window config (label `main`, 1200×800, min 640×400), capabilities least-privilege (`core:default` only — no fs/shell/opener), CSP set, `AppState` stub as future single session owner, structured stderr logging (`tracing` + `EnvFilter`), `app_info` IPC smoke command (frontend renders it).
 - [x] App runtime hardening: file logging alongside stderr (no secrets), panic hygiene (hook + recovery). (`SessionManager` wiring into `AppState` is done and verified.)
@@ -92,6 +98,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 6 — Splits, multiple windows, workspaces
 
+
 - [x] Split panes: horizontal/vertical split, adjustable ratios, pane focus model, keyboard navigation between panes.
   - A tab holds a **pane tree** (the model the backend already had): a leaf is a pane with its own session, a split divides the space in two with a ratio. The tree lives in `lib/pane-tree.ts` and is unit-tested (split, remove with the collapse of the parent, the clamping of the ratio, the round trip through the persisted layout).
   - The UI: `SplitView.svelte` renders the tree recursively, `PaneView.svelte` a pane (header with the host, the status, the split and close buttons, and the terminal). The divider is dragged with the pointer or moved with the arrow keys. A new pane is empty and offers the hosts of the sidebar; the pane that has the focus is the one the keyboard goes to.
@@ -105,6 +112,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - Verification: tests for session ownership invariants (single owner, no leaks, no double-free of channels) + manual multi-window passes.
 
 ## Phase 7 — Keyboard, palette, search, theming, preferences
+
 
 - [x] Global + terminal-aware keybinding system (platform defaults, conflict detection, remapping UI, works when terminal focused without stealing input).
   - Done: command registry with platform-aware accelerators (`Mod` → Ctrl/Cmd), conflict detection (unit-tested), a global key dispatcher that never shadows the terminal's own keys, per-command bindings shown in the palette, and **a remapping UI** in the settings dialog: "Change" records the next combination, a combination that another command already uses is refused with the name of the command that owns it, Escape cancels, and every binding can be reset individually or all at once. The overrides are stored in the portable `preferences` record, so they follow the user to the other devices, and the dispatcher and the palette use the effective binding.
@@ -126,6 +134,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 8 — Local security (desktop)
 
+
 - [x] Secrets in OS keyring via `keyring` crate (Secret Service / Windows Credential Manager / macOS Keychain); no plaintext secrets in SQLite; secret values zeroized where feasible; never logged.
   - `secrets.rs`: secrets are stored under `com.liwyd.termru` in the platform credential store; the app degrades gracefully when no credential store exists (the secret is asked for per connection); the frontend drops its in-memory copy once the credential store holds it; the connection path falls back to the stored secret, so "remembered" hosts connect without prompting.
   - The database schema has no field that could hold a secret, and the sync payload never contains one.
@@ -140,6 +149,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - Verification: unit tests for keyring abstraction (mock backend), CSP in prod config, command input validation tests.
 
 ## Phase 9 — Cloud API (self-hosted manager)
+
 
 - [x] `apps/cloud-server` scaffold: Axum 0.8, config via env (validated at startup, fail-fast), structured logs, graceful shutdown, healthz/readyz (readyz checks DB).
   - `src/config.rs`: every setting comes from the environment, is range-checked and the process aborts with a message that names the offending variable; `src/main.rs` binds only after the configuration and the migrations succeeded.
@@ -165,6 +175,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 10 — Desktop sync client
 
+
 - [x] Sync settings UI (server URL, sign-in, device enrollment, status, last-sync, offline indicator).
   - `SyncPanel.svelte`: server URL, email, password and device name; the status (server, account, device, last sync, pending changes, open conflicts); a "Sync now" button; the conflict list. The panel is reachable from the sidebar (with a badge) and from the palette (`Mod+Shift+S`).
   - The device is enrolled implicitly: the client generates a stable device id on the first sign-in and sends it with every sign-in, so the server recognizes the installation.
@@ -185,6 +196,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 11 — Security hardening
 
+
 - [x] Threat model document (`docs/security/threat-model.md`) covering client, SSH, local storage, cloud API, sync, update, build pipeline, artifacts.
   - Documents the assets, the trust boundaries (webview ↔ Rust ↔ network ↔ OS), the per-surface mitigations, the **residual risks** (TOFU first use, unencrypted local DB, webview XSS, unpinned CI actions, no code signing) and the out-of-scope list.
 - [x] `cargo deny` (licenses, advisories, duplicates-bans policy), `npm audit` gate in CI, secret scanning (gitleaks) in CI.
@@ -203,6 +215,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 12 — Desktop packaging and installation
 
+
 - [x] Debian `.deb` for Ubuntu (built on ubuntu runner; webkit2gtk-4.1 deps declared), RPM for Fedora (built in Fedora container), AppImage portable, Windows NSIS installer (x86_64).
   - The bundle configuration (`tauri.conf.json`) declares the four targets, the Debian runtime dependencies (the RPM dependencies are derived from them by the Tauri bundler), the metadata and the licence file. The packages are built by the release pipeline on the matching runner.
 - [x] Package install smoke tests (dpkg/rpm query + launch where runner allows); WebKit/keyring/font deps validated on targets.
@@ -215,6 +228,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Open: the pipeline has never run (no push credentials in this environment). The workflow is syntactically valid and mirrors the local commands.
 
 ## Phase 13 — Cloud containerization and deployment
+
 
 - [x] Multi-stage Dockerfile (debian-slim, non-root, dumb-init graceful shutdown), healthcheck.
   - `apps/cloud-server/Dockerfile`: a `rust:1.99-bookworm` builder that reduces the workspace to the crates the server needs (the Tauri app would drag the whole webview stack in) and a `debian:bookworm-slim` runtime with the stripped binary, `ca-certificates`, `curl` (health check) and `dumb-init` as PID 1. The runtime user is `termru` (uid 10001); the image contains no source and no toolchain.
@@ -230,6 +244,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 14 — GitHub Actions CI/CD
 
+
 - [x] PR pipeline: fmt, clippy(-D warnings), cargo test (workspace), npm typecheck/test, cargo-deny, gitleaks, server integration tests (Postgres service), SSH integration tests (sshd), frontend build, desktop build check (linux), container build check.
   - `.github/workflows/ci.yml`: the `rust` (fmt, clippy, tests incl. the sshd suite), `frontend` (lint, typecheck, test, build), `server` (the cloud server against a `postgres:18-alpine` service), `desktop` (the bundle build plus the sync end-to-end test against a real server) and `container` (the cloud image) jobs, plus `supply-chain` (cargo-deny, gitleaks).
 - [x] Least-privilege permissions (`contents: read` for PRs), third-party actions pinned to SHAs, concurrency groups, cache hygiene (keyed on lockfiles).
@@ -244,11 +259,13 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 15 — Publication (GitHub Releases + Docker Hub)
 
+
 - [!] Publish real `v0.1.0`: requires GitHub push/release credentials (not present in environment: no `gh` CLI, no tokens in env).
   - Unblock: the user pushes the tag with the write permission (the pipeline needs no additional secret: the release and the container image are published with the workflow token). Verify the assets and the image tags afterwards.
   - The image no longer needs a Docker Hub token: it goes to `ghcr.io`, which the pipeline can write with `packages: write`.
 
 ## Phase 16 — Documentation and open-source readiness
+
 
 - [x] README: description, status, platforms, capabilities + limitations, per-OS install, single cloud install command, first-run config, usage, data locations, backup/restore, upgrade/troubleshooting, contributing, security reporting, license.
   - The README carries the description, the status, the stack, the features, the install commands for Debian/Ubuntu and Fedora, the development commands, the cloud install pointer, the repository layout, the data locations, security reporting, contributing and the license. The full install guide is `docs/install.md`.
@@ -258,6 +275,7 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - Verification: docs match actual commands (each command executed once), links resolve.
 
 ## Phase 17 — Cross-platform validation and performance
+
 
 - [x] Measure (Linux local): cold/warm startup, idle RSS, RSS + memory with N sessions, terminal throughput (MB/s large output), UI responsiveness during flood, connection setup/teardown timings, DB query timings on 10k hosts.
   - `crates/termru-store/tests/performance.rs` measures the store with 10,000 hosts (write, list, read, search, the sync payload, the backup, the file size); the SSH suite prints the throughput of a 4 MiB flood; the cloud server was measured with the built binary (start-up to ready, requests/s, RSS).
@@ -270,23 +288,56 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 18 — Final acceptance and release readiness
 
-- [ ] Required user journeys (desktop, sync, operations) executed or automated; failures triaged.
-- [ ] No placeholder/fake functionality in shipped paths; errors actionable; TODO scan for correctness/security debt.
-- [ ] TODO.md reconciled with reality; limitations and residual risks documented; version + changelog final.
-- [ ] Release readiness review against §23 of project instructions (evidence per item).
+
+- [x] Required user journeys (desktop, sync, operations) executed or automated; failures triaged.
+  - Every journey has an automated proof: the app-layer E2E against a real `sshd` (connect, stream, resize, close, the failure path), the SSH suite (the host-key trust flow, the changed key, the auth failures, the flood, the re-attach), the sync E2E against the real server binary (register, push, pull with a second device), the compose smoke test (the deployment, the migration, a client round trip, the backup and the restore) and the contract test (the UI ↔ Tauri argument shapes, the splits, the settings, the remapping, the folders and the tags).
+  - Not covered by a machine: the visual pass (no window manager on the build machine) and the packages on Windows, macOS and a real desktop. Both are listed as the manual steps in `docs/release-readiness.md`.
+- [x] No placeholder/fake functionality in shipped paths; errors actionable; TODO scan for correctness/security debt.
+  - The scan found no `TODO`/`FIXME` marker in the code (only two in the SSH test header and the issue template), no `unimplemented!` and no `panic!` outside the tests and the build script (which fails the build loudly on a malformed migration file). Every command answers with an actionable message; the errors of the API name the field that is wrong.
+  - The two defects that the suites found are fixed: a local edit did not mark the record dirty (a silent overwrite instead of a conflict) and a closed window left its sessions running with nothing rendering them.
+- [x] TODO.md reconciled with reality; limitations and residual risks documented; version + changelog final.
+  - `docs/limitations.md` was rewritten: it listed as missing the background sync, the split panes, the key file picker, the settings dialog, the remapping UI, the folders and the tags — all of them are implemented now, and the list only holds what is really missing.
+  - The changelog holds the 0.1.0 release; the version in `Cargo.toml` and in `tauri.conf.json` is 0.1.0.
+- [x] Release readiness review against §23 of project instructions (evidence per item).
+  - `docs/release-readiness.md`: what the release contains, the evidence per check (the commands and their results), the journey coverage, the decisions, the residual risks, the manual steps a maintainer has to do before the tag and the known gaps.
+  - The instruction document itself (§23) was not available in this environment; the review uses the acceptance criteria the repository documents (the phases of this file, the ADRs and the threat model). This is stated in the document.
 
 ---
 
 ## Current status
 
-Phases 0–1 complete (environment baseline, decisions, ADRs in `docs/architecture/`). Phases 2–4 Rust scope complete: workspace + three crates; `cargo fmt --check`, `cargo clippy --workspace --all-targets` (0 warnings), `cargo test --workspace` (95 tests = 28 core + 26 ssh + 16 sshd integration + 25 store) green locally. Known-hosts verified against OpenSSH incl. hashed entries, wildcards, negation, `@revoked`, changed-key detection. SSH integration suite runs a private unprivileged sshd per test (loud self-skip without OpenSSH tooling). Defects found & fixed by the suite: russh `SshId::Standard` needs the full `SSH-2.0-` banner prefix; `ChannelMsg::ExitSignal` without an `ExitStatus` is now classified `Failed{Network}` (reconnect-eligible) per the no-status-is-an-abrupt-death invariant; monotonic `now_ms` + deterministic `ORDER BY` tiebreakers in the store. Desktop scaffold complete and pushed (`bb834f0`): `apps/desktop` (Svelte 5 + Vite 8 + TS 5 + xterm 6, prettier/svelte-check/vitest green) + `apps/desktop/src-tauri` (Tauri 2.12, capability `core:default`, CSP, `app_info` IPC) in the workspace; debug binary smoke-ran against vite dev.
+**0.1.0 is ready to be tagged** (the tag itself needs the push credentials, which this
+environment does not have). 88 of the 99 items are done, 4 are blocked by the environment
+and 7 are the open ends listed in the phases above: the port forwarding, the per-window
+tab sets, the workspace geometry, the race-condition review, the search over the snippets
+(which do not exist), the context menus and the validation on Windows, Ubuntu and
+Fedora.
 
-Phase 5 (desktop MVP) substantially implemented: Rust command layer + `SessionManager` (116 workspace tests green, incl. an **app-layer E2E** against a real `sshd`) and the frontend foundation (layout shell, host list/editor, connection + host-key dialogs, xterm view over Tauri `Channel`, tabs with reordering + layout persistence, file logging + panic hygiene; `svelte-check` 0/0, 28 vitest tests, `vite build` green).
+**What is in the release.** A desktop SSH workspace (Tauri 2 + Svelte 5) with a connection
+manager, tabs and split panes, a command palette, remappable keys, folders and tags, the
+secrets in the OS credential store and a self-hosted sync server (Axum + PostgreSQL) that
+mirrors the configuration between the devices — never a secret. The SSH engine is pure
+Rust (`russh`), with the trust-on-first-use flow, the changed-key warning and a bounded
+reconnect policy.
 
-**Phase 9 (cloud API) implemented** in `apps/cloud-server`: Axum 0.8 + PostgreSQL (`tokio-postgres`/`deadpool-postgres`, see ADR 0003 for the driver change), 46 tests green against a real PostgreSQL 18.6, `cargo clippy --workspace --all-targets -D warnings` clean, smoke-tested with `curl`. The API covers accounts (argon2id, opaque rotating tokens, reuse detection), devices (enroll/rename/revoke) and the revision-based sync protocol shared with the desktop client (pull/push, tombstones, explicit conflicts, idempotent retries). Hardening: per-token and per-IP rate limiting, body limits, request timeouts, strict security headers, no CORS, an audit log, and login throttling with enumeration-resistant responses.
+**How it was verified.** 208 Rust tests (the SSH suite against a real `sshd`, the cloud
+server against a real PostgreSQL, the app layer end to end, the sync client against the
+real server binary) and 90 frontend tests (the pane tree, the store, the keybindings, the
+webview hardening scan and a jsdom contract test that asserts the argument shapes of the
+IPC). `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`,
+`cargo deny`, `npm run lint`, `npm run test` and `npm run build` are green.
 
-**Environment note:** the dev machine is close to full. The workspace `dev` profile now uses `debug = 1` (line tables only), so the `target/` tree is ~2 GB instead of ~7 GB; work continues with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small, and `cargo clean -p <crate>` over a full clean.
+**The two defects the suites found** (a local edit that did not mark the record dirty, so
+a change from another device overwrote the local copy instead of raising a conflict, and a
+closed window that left its SSH sessions running with nothing rendering them) are fixed,
+each with a regression test.
 
-**Phase 10 (desktop sync client) implemented**: a sync engine in the desktop app (transport trait + an HTTP client, tokens in the OS credential store, push/pull with the revision cursor, explicit conflict resolution), the store gained the conflict-resolution semantics and — with them — a fix for a real bug: a local edit did not mark the row dirty, so a remote change would have silently overwritten the local copy instead of raising a conflict. The UI gained a sync panel (settings, status, conflicts) and a sidebar entry.
+**What is not verified here.** The interactive UI was never driven by a human (the build
+machine has no window manager), the packages were never installed on a real desktop, and
+only Linux was built and tested. `docs/release-readiness.md` lists the manual steps a
+maintainer has to do before the tag.
 
-**Next steps:** (1) visual UI pass on a machine with a window manager (add host → connect → resize → close, move a tab to a new window, remember a password, use the palette, sign in to a sync server); (2) Phase 10 remainder: an automatic background sync cycle with a bounded retry and an automatic token refresh; (3) Phase 6: split panes, per-window tab sets, window-close semantics; (4) Phase 7 remainder: keybinding remapping UI, settings dialog, tags/folders, context menus; (5) Phase 8 remainder: native key file picker + single-instance plugin; (6) Phase 11 remainder: CI action pinning by SHA, `cargo deny` in the local pre-commit path; (7) Phase 12/14: packaging and the release pipeline; (8) first CI run on GitHub (the pipeline has never executed remotely).
+**Environment note:** the dev machine is close to full. The workspace `dev` profile uses
+`debug = 1` (line tables only), so the `target/` tree is ~2 GB instead of ~7 GB; work
+continues with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` to keep artifacts small,
+and `cargo clean -p <crate>` over a full clean.

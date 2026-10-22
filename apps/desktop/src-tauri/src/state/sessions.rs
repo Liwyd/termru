@@ -296,9 +296,7 @@ impl SessionManager {
         let mut orphaned = Vec::new();
         let mut guard = self.lock();
         for (id, entry) in guard.iter_mut() {
-            entry
-                .views
-                .retain(|(_, label, _)| label.as_str() != window);
+            entry.views.retain(|(_, label, _)| label.as_str() != window);
             if entry.views.is_empty() && entry.task_alive {
                 orphaned.push(id.clone());
             }
@@ -326,7 +324,9 @@ impl SessionManager {
     /// meantime are kept (they are not part of `dead`).
     fn remove_views(&self, id: &str, dead: &[u64]) {
         if let Some(entry) = self.lock().get_mut(id) {
-            entry.views.retain(|(view_id, _, _)| !dead.contains(view_id));
+            entry
+                .views
+                .retain(|(view_id, _, _)| !dead.contains(view_id));
         }
     }
 
