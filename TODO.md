@@ -108,7 +108,10 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - Done: **the window close semantics** — every view remembers the window it lives in (`tauri::Webview::label()`), and a destroyed window releases its views. A session that no window shows any more is closed (its SSH connection would stay open for nothing); a session that another window still shows keeps running. Covered by a unit test.
   - Pending: per-window tab sets (a second window can only show a moved tab today; it has no tab bar of its own).
 - [ ] Workspaces: save/restore layout (tabs+splits+window geometry), crash recovery of layout metadata (never claim remote shell recovery), stale session cleanup on startup.
-- [ ] Race-condition review: rapid open/close/move/quit interleavings (test-cased).
+  - Done: the layout holds the tabs, their order, the hosts **and the pane tree**; it is restored on launch as disconnected placeholders (the secrets are never stored, so the user reconnects), a host that was deleted meanwhile is dropped from the tree, and a folder cycle can not break the restore.
+  - Pending: the window geometry is not saved, and there is no "crash recovery" beyond the layout (a remote shell is never claimed to be recovered).
+- [x] Race-condition review: rapid open/close/move/quit interleavings (test-cased).
+  - Two tests in the session manager: the interleaving of 20 sessions that are opened, shown in a second window (a moved tab), closed one by one and released with their windows — the invariants hold (a closed session is gone, a second close reports "no session", a session that another window still shows keeps running, and it is orphaned exactly once); and four threads that open and close at the same time — the lock holds, nothing panics and nothing is left behind.
 - Verification: tests for session ownership invariants (single owner, no leaks, no double-free of channels) + manual multi-window passes.
 
 ## Phase 7 — Keyboard, palette, search, theming, preferences
@@ -120,8 +123,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Command palette (fuzzy, discoverable, shows bindings).
   - `Ctrl/Cmd+K` opens it; fuzzy subsequence matching with word-boundary and consecutive-character bonuses; arrows/Enter/Escape; shows the accelerator of every entry and offers the hosts as entries ("Connect to …").
 - [ ] Global search across hosts/tags/snippets.
-  - Done: host search in the sidebar (name, address, username) + a "Recent" section (most recently connected hosts, from the recents table).
-  - Pending: tags/snippets do not exist yet (no snippet model in the store), so the search cannot cover them.
+  - Done: the search in the sidebar covers the name, the address, the user name, the description **and the tag names** (not the tag ids), plus a "Recent" section (the most recently connected hosts, from the recents table). The command palette offers the hosts as entries ("Connect to …").
+  - Pending: the **snippets** do not exist (there is no snippet model in the store). The snippet feature is out of scope for 0.1.0 and is listed in `docs/limitations.md`.
 - [x] Appearance settings: fonts, sizes, terminal theme overrides, cursor style, reduced motion respected.
   - Done: a settings dialog (`SettingsPanel.svelte`, `Mod+,`) with the theme, the font family and size, the scrollback, the cursor style and blink and the copy-on-select switch; the values are stored as the portable `preferences` record, so they are synced with the other devices, and they apply live to the running terminal. The palette can still change the theme and the font size, and the UI honours `prefers-reduced-motion` (spinner).
   - Pending: per-record terminal theme overrides (the terminal follows the app theme, it can not differ per host).

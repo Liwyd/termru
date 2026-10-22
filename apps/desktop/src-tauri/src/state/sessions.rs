@@ -764,6 +764,82 @@ mod tests {
         assert!(manager.info(&shared).is_some());
     }
 
+    /// The interleavings of a user who opens, closes, moves and quits fast.
+    ///
+    /// The invariants: a session that was closed is gone (and closing it
+    /// again reports "no session"), a session that is still shown keeps its
+    /// views, and a session nobody shows any more is reported as orphaned
+    /// exactly once.
+    #[test]
+    fn rapid_open_close_and_move_keep_the_invariants() {
+        let manager = SessionManager::new();
+        let host = HostId::new();
+        let mut ids = Vec::new();
+        for _ in 0..20 {
+            let (id, _cancel) = manager.register(host, params(), "main", test_channel());
+            // Every session is also shown in a second window (a moved tab).
+            manager.add_view(&id, "other", test_channel());
+            ids.push(id);
+        }
+        assert_eq!(manager.list().len(), 20);
+
+        // Close every third session, then close one of them again.
+        for (index, id) in ids.iter().enumerate() {
+            if index % 3 == 0 {
+                futures_block(manager.close(id)).expect("the first close");
+                let error = futures_block(manager.close(id));
+                assert!(error.unwrap_err().message.contains("no session"));
+            }
+        }
+        let alive = manager.list().len();
+        assert_eq!(alive, 20 - 7);
+
+        // The first window goes away: every session is still shown in the
+        // second window, so none of them is orphaned.
+        let orphaned = manager.drop_window_views("main");
+        assert!(orphaned.is_empty());
+        for id in &ids {
+            if manager.info(id).is_none() {
+                continue; // closed above
+            }
+            assert!(manager.info(id).is_some());
+            assert_eq!(manager.view_count(id), 1);
+        }
+
+        // The second window goes away too: now nobody shows them.
+        let orphaned = manager.drop_window_views("other");
+        assert_eq!(orphaned.len(), alive);
+
+        // Closing them releases everything.
+        for id in &orphaned {
+            futures_block(manager.close(id)).expect("the close");
+        }
+        assert!(manager.list().is_empty());
+    }
+
+    /// The manager is used from several tasks: the lock must hold.
+    #[test]
+    fn concurrent_open_and_close_never_panic() {
+        let manager = std::sync::Arc::new(SessionManager::new());
+        let host = HostId::new();
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let manager = manager.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..25 {
+                    let (id, _cancel) = manager.register(host, params(), "main", test_channel());
+                    manager.add_view(&id, "other", test_channel());
+                    let _ = futures_block(manager.close(&id));
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("the thread did not panic");
+        }
+        // Every session was closed: nothing is left.
+        assert!(manager.list().is_empty());
+    }
+
     #[test]
     fn unknown_session_operations_report_not_found() {
         let manager = SessionManager::new();
