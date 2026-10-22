@@ -22,8 +22,8 @@ mkdir -p termru-cloud && cd termru-cloud
 curl -fsSLO https://github.com/Liwyd/termru/releases/download/v0.1.0/compose.yaml
 curl -fsSLO https://github.com/Liwyd/termru/releases/download/v0.1.0/compose.yaml.sha256
 sha256sum --check compose.yaml.sha256
-curl -fsSLO https://github.com/Liwyd/termru/releases/download/v0.1.0/env.example
-mv env.example .env
+curl -fsSLO https://github.com/Liwyd/termru/releases/download/v0.1.0/termru-cloud.env.example
+mv termru-cloud.env.example .env
 ```
 
 The checksum check must succeed before the next step. Nothing is piped into a

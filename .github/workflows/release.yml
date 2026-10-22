@@ -125,14 +125,50 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends openssh-server
 
+      # The backup test of the cloud server runs `pg_dump` and
+      # `pg_restore`: they have to be the version of the server, or they
+      # refuse the dump ("server version mismatch").
+      - name: Install the PostgreSQL client of the server version
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
+
+      # The desktop app needs the system libraries of the webview.
+      - name: Install the Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
       - name: Format
         run: cargo fmt --check
 
+      # The whole workspace: the desktop app is a member too, and the
+      # libraries it needs are installed above.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --workspace
+
+      # The desktop sync client against the real cloud server.
+      - name: Sync end-to-end test
+        env:
+          TERMRU_CLOUD_SERVER_BIN: ${{ github.workspace }}/target/debug/termru-cloud-server
+        run: |
+          cargo build -p termru-cloud-server --bin termru-cloud-server
+          cargo test -p termru-desktop --test sync_e2e
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -180,8 +216,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install the Linux build dependencies
-        if: runner.os == 'Linux'
+      - name: Install the build dependencies (Debian, Ubuntu)
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -191,6 +227,20 @@ jobs:
             patchelf \
             libssl-dev \
             rpm \
+            fuse \
+            file
+
+      - name: Install the build dependencies (Fedora)
+        if: matrix.os == 'fedora-latest'
+        run: |
+          sudo dnf install -y \
+            webkit2gtk4.1-devel \
+            gtk3-devel \
+            libappindicator-gtk3-devel \
+            librsvg2-devel \
+            patchelf \
+            openssl-devel \
+            rpm-build \
             fuse \
             file
 
@@ -368,7 +418,7 @@ jobs:
           set -euo pipefail
           cp apps/cloud-server/compose.yaml artifacts/compose.yaml
           # Not '.env.example': the upload action skips hidden files.
-          cp apps/cloud-server/.env.example artifacts/env.example
+          cp apps/cloud-server/.env.example artifacts/termru-cloud.env.example
           cd artifacts
           sha256sum compose.yaml > compose.yaml.sha256
           cat compose.yaml.sha256
@@ -386,12 +436,16 @@ jobs:
           files: artifacts/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # A pre-release is marked as such: it is not the stable release.
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
 
       - name: Verify that the release is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          count="$(gh release view "${{ needs.verify.outputs.version }}" --json assets --jq '.assets | length')" \
+          count="$(gh release view "v${{ needs.verify.outputs.version }}" --json assets --jq '.assets | length')" \
             || { echo "the release was not created"; exit 1; }
           echo "the release holds $count assets"
           test "$count" -ge 5 || { echo "the release is missing assets"; exit 1; }
-          gh release view "${{ needs.verify.outputs.version }}" --json assets --jq '.assets[].name'
+          gh release view "v${{ needs.verify.outputs.version }}" --json assets --jq '.assets[].name'
