@@ -41,8 +41,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       image_tags: ${{ steps.version.outputs.image_tags }}
-    env:
-      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/termru-cloud
+      image_repo: ${{ steps.version.outputs.image_repo }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -61,6 +60,10 @@ jobs:
             echo "the tag '$tag' is not a semantic version" >&2
             exit 1
           fi
+          # The registry only accepts a lowercase repository name.
+          owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          image_repo="ghcr.io/${owner}/termru-cloud"
+          echo "image_repo=$image_repo" >> "$GITHUB_OUTPUT"
           for manifest in Cargo.toml apps/desktop/src-tauri/tauri.conf.json; do
             if ! grep -q "\"$version\"" "$manifest" && ! grep -q "version = \"$version\"" "$manifest"; then
               echo "the version $version does not match $manifest" >&2
@@ -75,15 +78,15 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             {
               echo "image_tags<<EOF"
-              echo "$IMAGE_REPO:$version"
+              echo "$image_repo:$version"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             {
               echo "image_tags<<EOF"
-              echo "$IMAGE_REPO:$version"
-              echo "$IMAGE_REPO:latest"
+              echo "$image_repo:$version"
+              echo "$image_repo:latest"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -228,6 +231,7 @@ jobs:
             libssl-dev \
             rpm \
             fuse \
+            libfuse2 \
             file
 
       - name: Install the build dependencies (Fedora)
@@ -249,7 +253,9 @@ jobs:
 
       - name: Build the packages
         working-directory: apps/desktop
-        run: npm run tauri build ${{ matrix.args }} -- --ci
+        # The `--` is what separates the arguments of npm from the
+        # arguments of the script: without it, npm eats `--bundles`.
+        run: npm run tauri -- build ${{ matrix.args }} --ci
 
       # The bundler writes into the target directory of the cargo workspace.
       # It is located by searching instead of by a fixed path, so the pipeline
@@ -360,7 +366,7 @@ jobs:
       # pipeline needs no second set of credentials.
       packages: write
     env:
-      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/termru-cloud
+      IMAGE_REPO: ${{ needs.verify.outputs.image_repo }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
