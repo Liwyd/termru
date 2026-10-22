@@ -5593,7 +5593,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "deadpool-postgres",
  "hex",
@@ -5629,7 +5629,7 @@ name = "termru-desktop"
 version = "0.1.1"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "keyring",
  "reqwest 0.12.28",
@@ -5656,7 +5656,7 @@ name = "termru-ssh"
 version = "0.1.1"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-util",
  "hmac 0.12.1",
  "rand 0.8.8",
