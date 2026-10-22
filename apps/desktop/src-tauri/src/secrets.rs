@@ -88,6 +88,7 @@ impl SecretStore {
     /// A machine without one (a CI runner, a headless server) is a missing
     /// prerequisite, not a failure: the app asks for the secret on every
     /// connection and everything else keeps working.
+    #[cfg(test)]
     pub fn available() -> bool {
         let Ok(entry) = Self::entry("termru-probe", SecretKind::Password) else {
             return false;

@@ -243,10 +243,19 @@ jobs:
           docker run --rm --entrypoint /bin/sh termru-cloud:ci -c \
             'command -v cargo && exit 1 || true; command -v rustc && exit 1 || true; test -x /usr/local/bin/termru-cloud-server'
 
-      - name: Install the PostgreSQL client (for the backup step)
+      # The backup step runs `pg_dump` and `pg_restore`: they have to be
+      # the version of the server, or they refuse the dump.
+      - name: Install the PostgreSQL client of the server version
         run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
 
       # The deployment itself: the compose stack is started with the image
       # under test, the server becomes ready, the migration ran, a client can
