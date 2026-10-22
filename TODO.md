@@ -258,13 +258,18 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 - [x] Never expose publish secrets to PR workflows; protected tags; manual release-recovery path documented.
   - The pull-request workflow has `contents: read` and no secret at all; the release workflow asks for `contents: write` in the `publish` job and `packages: write` in the image job. The protected-tag rule (`v*`, write permission only, covering the deletion) and the release-recovery path (a failed platform, a failed push, a failed upload, a release that must be withdrawn) are documented in `CONTRIBUTING.md`.
 - Verification: PR pipeline green on a test PR; release pipeline exercised on `v0.1.0-rc.1` pre-release tag (artifacts verified by download).
-  - Open: no pipeline has ever run on GitHub (this environment has no push credentials).
+  - **The pipeline ran for the first time on 2026-10-22 and is green** (six jobs: the Rust crates, the cloud server against a PostgreSQL, the frontend, the desktop app with the sync end-to-end test, the container image with the compose smoke test, and the supply chain). The first run found four defects that are fixed:
+    1. the `rust` job ran `cargo clippy --workspace`, which builds the desktop app — and the webview libraries are not installed there; the job now covers the pure-Rust crates and the `desktop` job lints and tests the app;
+    2. the container image did not build: the Dockerfile never copied `build.rs`, so the migrations were never embedded;
+    3. the backup test of the cloud server ran the `pg_dump` of the runner (version 16) against a server of version 18 — the dump was refused; the jobs install the client of the server version;
+    4. the compose smoke test pushed a host without its fields and the desktop tests needed a credential store that a runner does not have.
+  - Open: the **release** pipeline (the tag) has never run — it needs a tag, and a tag is the maintainer's decision.
 
 ## Phase 15 — Publication (GitHub Releases + Docker Hub)
 
 
-- [!] Publish real `v0.1.0`: requires GitHub push/release credentials (not present in environment: no `gh` CLI, no tokens in env).
-  - Unblock: the user pushes the tag with the write permission (the pipeline needs no additional secret: the release and the container image are published with the workflow token). Verify the assets and the image tags afterwards.
+- [!] Publish real `v0.1.0`: the push credentials **are** available now (the git credential store of the machine), but publishing is the maintainer's decision.
+  - Unblock: the maintainer does the manual steps of `docs/release-readiness.md` (the visual pass on a real desktop, the packages on Windows, Ubuntu and Fedora) and pushes the tag `v0.1.0`. The pipeline needs no additional secret: the release and the container image are published with the workflow token.
   - The image no longer needs a Docker Hub token: it goes to `ghcr.io`, which the pipeline can write with `packages: write`.
 
 ## Phase 16 — Documentation and open-source readiness
