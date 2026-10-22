@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import type { Host } from '../types';
 
   let {
@@ -14,9 +15,48 @@
     ondelete: (host: Host) => void;
     ontogglefavorite: (host: Host) => void;
   } = $props();
+
+  // The context menu of the card.
+  let menuOpen = $state(false);
+  let menuX = $state(0);
+  let menuY = $state(0);
+
+  const items: MenuItem[] = $derived([
+    { id: 'connect', label: 'Connect' },
+    { id: 'edit', label: 'Edit…' },
+    {
+      id: 'favorite',
+      label: host.favorite ? 'Remove from favorites' : 'Add to favorites',
+    },
+    { id: 'delete', label: 'Delete', danger: true },
+  ]);
+
+  function onContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    menuX = event.clientX;
+    menuY = event.clientY;
+    menuOpen = true;
+  }
+
+  function choose(id: string): void {
+    switch (id) {
+      case 'connect':
+        onconnect(host);
+        break;
+      case 'edit':
+        onedit(host);
+        break;
+      case 'favorite':
+        ontogglefavorite(host);
+        break;
+      case 'delete':
+        ondelete(host);
+        break;
+    }
+  }
 </script>
 
-<article class="card">
+<article class="card" oncontextmenu={onContextMenu}>
   <button
     type="button"
     class="favorite"
@@ -42,6 +82,15 @@
     <button type="button" class="danger" onclick={() => ondelete(host)}>Delete</button>
   </div>
 </article>
+
+<ContextMenu
+  open={menuOpen}
+  x={menuX}
+  y={menuY}
+  {items}
+  onchoose={choose}
+  onclose={() => (menuOpen = false)}
+/>
 
 <style>
   .card {

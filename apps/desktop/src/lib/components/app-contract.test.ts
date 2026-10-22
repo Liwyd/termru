@@ -405,6 +405,32 @@ describe('desktop UI ↔ Tauri contract', () => {
     );
   });
 
+  it('opens the context menu of a host and connects it', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+
+    const card = target.querySelector('.card') as HTMLElement;
+    expect(card).not.toBeNull();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Add to favorites');
+    });
+
+    // The menu offers the actions of the host. The card has its own
+    // "Connect" button, so the one of the menu is picked explicitly.
+    const menuButtons = Array.from(target.querySelectorAll('.menu button')) as HTMLButtonElement[];
+    const menuConnect = menuButtons.find((button) => button.textContent === 'Connect');
+    expect(menuConnect).toBeDefined();
+    menuConnect!.click();
+
+    // The connection dialog opens for the host.
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Password');
+    });
+  });
+
   it('saves the folder and the tags of a host', async () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('web-1');
