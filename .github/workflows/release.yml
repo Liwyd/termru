@@ -241,7 +241,11 @@ jobs:
       - name: Install the dependencies
         run: npm ci
 
+      # The RPM format has no room for a prerelease version (the version
+      # may not contain a dash), so the RPM is only built for a stable
+      # release.
       - name: Build the packages
+        if: matrix.label != 'rpm' || needs.verify.outputs.prerelease == 'false'
         working-directory: apps/desktop
         # The `--` is what separates the arguments of npm from the
         # arguments of the script: without it, npm eats `--bundles`.
@@ -252,6 +256,7 @@ jobs:
       # does not depend on where the bundler decides to put the files.
       - name: Locate the packages
         id: packages
+        if: matrix.label != 'rpm' || needs.verify.outputs.prerelease == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -266,7 +271,7 @@ jobs:
       # test installs it, queries the package manager and checks the
       # dependencies the package declares are the ones the system provides.
       - name: Install and query the package (${{ matrix.label }})
-        if: runner.os != 'Windows'
+        if: (runner.os != 'Windows') && (matrix.label != 'rpm' || needs.verify.outputs.prerelease == 'false')
         shell: bash
         run: |
           set -euo pipefail
@@ -274,7 +279,8 @@ jobs:
             deb)
               package="$(ls dist-artifacts/*.deb)"
               sudo apt-get update
-              sudo apt-get install -y "$package"
+              # apt only takes a file when the path starts with ./ or /.
+              sudo apt-get install -y "./$package"
               dpkg-query -W -f='${Package} ${Version}\n' termru
               # The declared dependencies must be satisfiable on the target.
               for dependency in libwebkit2gtk-4.1-0 libgtk-3-0; do
@@ -316,7 +322,9 @@ jobs:
         with:
           name: desktop-${{ matrix.label }}
           path: dist-artifacts/*
-          if-no-files-found: error
+          # The RPM of a prerelease does not exist (see above): an empty
+          # artifact is expected there, an empty one anywhere else is not.
+          if-no-files-found: ${{ matrix.label == 'rpm' && 'warn' || 'error' }}
           retention-days: 7
 
   cloud-image:
