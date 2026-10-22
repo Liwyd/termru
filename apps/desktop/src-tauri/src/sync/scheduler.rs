@@ -42,7 +42,7 @@ pub fn spawn(engine: Arc<SyncEngine>, interval: Duration) -> SyncScheduler {
     let (cancel, mut cancelled) = watch::channel(false);
     let scheduler = SyncScheduler { cancel };
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut backoff = MIN_BACKOFF;
         loop {
             // Wait for the next cycle (or for the shutdown).
@@ -90,4 +90,25 @@ pub fn spawn(engine: Arc<SyncEngine>, interval: Duration) -> SyncScheduler {
     });
 
     scheduler
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use termru_store::Store;
+
+    #[test]
+    fn spawn_does_not_require_a_tokio_runtime() {
+        // Regression test: the background sync is started from Tauri's
+        // `setup` hook, which runs on the main thread before a Tokio
+        // runtime exists, so `spawn` must not call `tokio::spawn`
+        // directly (that panics with "there is no reactor running").
+        let dir = tempdir().unwrap();
+        let store = Arc::new(Store::open(&dir.path().join("termru.sqlite")).unwrap());
+        let engine = Arc::new(crate::sync::SyncEngine::new(store));
+        let scheduler = super::spawn(engine, Duration::from_secs(3600));
+        scheduler.shutdown();
+    }
 }
