@@ -167,6 +167,7 @@ fn start_session(
     params: ConnectParams,
     cols: u16,
     rows: u16,
+    window: &str,
     channel: Channel<SessionUpdate>,
 ) -> String {
     let options = SessionOptions {
@@ -174,7 +175,7 @@ fn start_session(
         rows,
         ..SessionOptions::default()
     };
-    let (id, cancel_rx) = state.sessions.register(host_id, params.clone(), channel);
+    let (id, cancel_rx) = state.sessions.register(host_id, params.clone(), window, channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -189,6 +190,7 @@ fn start_session(
 #[tauri::command]
 pub async fn session_open(
     state: State<'_, AppState>,
+    webview: tauri::Webview,
     host_id: HostId,
     options: SessionOpenOptions,
     channel: Channel<SessionUpdate>,
@@ -214,6 +216,7 @@ pub async fn session_open(
         params,
         options.cols,
         options.rows,
+        webview.label(),
         channel,
     ))
 }
@@ -221,6 +224,7 @@ pub async fn session_open(
 #[tauri::command]
 pub async fn session_retry(
     state: State<'_, AppState>,
+    webview: tauri::Webview,
     id: String,
     geometry: SessionGeometry,
     channel: Channel<SessionUpdate>,
@@ -237,7 +241,7 @@ pub async fn session_retry(
     };
     // The retry re-uses the session's existing views; the channel argument
     // is the (re)attaching view.
-    state.sessions.add_view(&id, channel);
+    state.sessions.add_view(&id, webview.label(), channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -252,6 +256,7 @@ pub async fn session_retry(
 #[tauri::command]
 pub async fn session_duplicate(
     state: State<'_, AppState>,
+    webview: tauri::Webview,
     id: String,
     geometry: SessionGeometry,
     channel: Channel<SessionUpdate>,
@@ -271,6 +276,7 @@ pub async fn session_duplicate(
         params,
         geometry.cols,
         geometry.rows,
+        webview.label(),
         channel,
     ))
 }
@@ -306,10 +312,11 @@ pub async fn session_resize(
 #[tauri::command]
 pub async fn session_attach(
     state: State<'_, AppState>,
+    webview: tauri::Webview,
     id: String,
     channel: Channel<SessionUpdate>,
 ) -> Result<(), CommandError> {
-    state.sessions.attach_view(&id, channel).await
+    state.sessions.attach_view(&id, webview.label(), channel).await
 }
 
 #[tauri::command]

@@ -147,8 +147,10 @@ struct Managed {
     /// views come and go without dropping the SSH connection.
     ///
     /// Each view carries an id so that a view attached *while* an event is
-    /// being forwarded is never dropped by the cleanup of dead views.
-    views: Vec<(u64, Channel<SessionUpdate>)>,
+    /// being forwarded is never dropped by the cleanup of dead views, and
+    /// the label of the window it lives in, so a closed window can release
+    /// its views.
+    views: Vec<(u64, String, Channel<SessionUpdate>)>,
 }
 
 pub struct SessionManager {
@@ -178,6 +180,7 @@ impl SessionManager {
         &self,
         host_id: HostId,
         params: ConnectParams,
+        window: &str,
         view: Channel<SessionUpdate>,
     ) -> (String, watch::Receiver<bool>) {
         let seq = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -192,7 +195,11 @@ impl SessionManager {
                 session: None,
                 params,
                 task_alive: true,
-                views: vec![(self.next_view_id.fetch_add(1, Ordering::Relaxed), view)],
+                views: vec![(
+                    self.next_view_id.fetch_add(1, Ordering::Relaxed),
+                    window.to_string(),
+                    view,
+                )],
             },
         );
         (id, cancel_rx)
@@ -233,11 +240,11 @@ impl SessionManager {
 
     /// Adds a view to a session without touching its transport (used when a
     /// view (re)connects to an existing session).
-    pub fn add_view(&self, id: &str, view: Channel<SessionUpdate>) {
+    pub fn add_view(&self, id: &str, window: &str, view: Channel<SessionUpdate>) {
         let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.lock();
         if let Some(entry) = guard.get_mut(id) {
-            entry.views.push((view_id, view));
+            entry.views.push((view_id, window.to_string(), view));
         }
     }
 
@@ -247,6 +254,7 @@ impl SessionManager {
     pub async fn attach_view(
         &self,
         id: &str,
+        window: &str,
         view: Channel<SessionUpdate>,
     ) -> Result<(), CommandError> {
         let (session, status) = {
@@ -274,9 +282,28 @@ impl SessionManager {
         let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.lock();
         if let Some(entry) = guard.get_mut(id) {
-            entry.views.push((view_id, view));
+            entry.views.push((view_id, window.to_string(), view));
         }
         Ok(())
+    }
+
+    /// Releases the views of a window that was closed.
+    ///
+    /// Returns the sessions that nobody shows any more: their SSH
+    /// connection would stay open for nothing, so the caller closes them.
+    /// A session that another window still shows keeps running.
+    pub fn drop_window_views(&self, window: &str) -> Vec<String> {
+        let mut orphaned = Vec::new();
+        let mut guard = self.lock();
+        for (id, entry) in guard.iter_mut() {
+            entry
+                .views
+                .retain(|(_, label, _)| label.as_str() != window);
+            if entry.views.is_empty() && entry.task_alive {
+                orphaned.push(id.clone());
+            }
+        }
+        orphaned
     }
 
     /// Number of views currently rendering a session.
@@ -288,7 +315,7 @@ impl SessionManager {
     }
 
     /// Snapshot of the views rendering a session.
-    fn views(&self, id: &str) -> Vec<(u64, Channel<SessionUpdate>)> {
+    fn views(&self, id: &str) -> Vec<(u64, String, Channel<SessionUpdate>)> {
         self.lock()
             .get(id)
             .map(|entry| entry.views.clone())
@@ -299,7 +326,7 @@ impl SessionManager {
     /// meantime are kept (they are not part of `dead`).
     fn remove_views(&self, id: &str, dead: &[u64]) {
         if let Some(entry) = self.lock().get_mut(id) {
-            entry.views.retain(|(view_id, _)| !dead.contains(view_id));
+            entry.views.retain(|(view_id, _, _)| !dead.contains(view_id));
         }
     }
 
@@ -453,7 +480,7 @@ fn forward(manager: &SessionManager, id: &str, update: SessionUpdate) -> bool {
     }
     let mut dead: Vec<u64> = Vec::new();
     let mut any_alive = false;
-    for (view_id, view) in views {
+    for (view_id, _, view) in views {
         if view.send(update.clone()).is_ok() {
             any_alive = true;
         } else {
@@ -709,14 +736,32 @@ mod tests {
     fn register_assigns_unique_ids_and_lists_in_order() {
         let manager = SessionManager::new();
         let host = HostId::new();
-        let (a, _ra) = manager.register(host, params(), test_channel());
-        let (b, _rb) = manager.register(host, params(), test_channel());
+        let (a, _ra) = manager.register(host, params(), "main", test_channel());
+        let (b, _rb) = manager.register(host, params(), "main", test_channel());
         assert_ne!(a, b);
         let list = manager.list();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, a);
         assert_eq!(list[1].id, b);
         assert!(list.iter().all(|info| !info.status.is_terminal()));
+    }
+
+    #[test]
+    fn closing_a_window_orphans_only_the_sessions_it_showed() {
+        let manager = SessionManager::new();
+        let host = HostId::new();
+        let (mine, _a) = manager.register(host, params(), "main", test_channel());
+        let (shared, _b) = manager.register(host, params(), "other", test_channel());
+        // A second window shows the same session.
+        manager.add_view(&shared, "main", test_channel());
+        assert_eq!(manager.view_count(&shared), 2);
+
+        // Closing the first window releases its views.
+        let orphaned = manager.drop_window_views("main");
+        assert_eq!(orphaned, vec![mine.clone()]);
+        // The session the other window still shows keeps running.
+        assert_eq!(manager.view_count(&shared), 1);
+        assert!(manager.info(&shared).is_some());
     }
 
     #[test]
@@ -733,7 +778,7 @@ mod tests {
     #[test]
     fn write_before_session_is_attached_reports_not_ready() {
         let manager = SessionManager::new();
-        let (id, _cancel) = manager.register(HostId::new(), params(), test_channel());
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
         let error = futures_block(async { manager.write(&id, b"x".to_vec()).await });
         assert!(error.unwrap_err().message.contains("not ready"));
     }
@@ -741,7 +786,7 @@ mod tests {
     #[test]
     fn close_removes_entry_and_second_close_is_not_found() {
         let manager = SessionManager::new();
-        let (id, _cancel) = manager.register(HostId::new(), params(), test_channel());
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
         futures_block(manager.close(&id)).expect("first close");
         assert!(manager.info(&id).is_none());
         let error = futures_block(manager.close(&id));

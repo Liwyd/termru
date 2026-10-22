@@ -98,7 +98,8 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - The commands: `Mod+Shift+E` (split to the right), `Mod+Shift+O` (split below), `Mod+Shift+W` (close the pane), `Mod+Alt+ArrowLeft/Right` (the previous/next pane). The layout (the tree with the hosts) is saved with the tabs, so the split survives a restart.
 - [ ] Multi-window: create/close native windows, per-window tab sets, **tab move between windows without dropping SSH** (re-attach + replay buffer), no duplicate session ownership.
   - Done: **tab move between windows without dropping the SSH session** — the session is owned by the app, not the window; a moved tab opens a new window (`window_open_session`) whose frontend attaches to the running session (`session_attach`) and receives the replay buffer, then the live stream. The app layer fans events out to every attached view and drops views whose window closed; a brief grace period covers the move itself.
-  - Pending: per-window tab sets, window close semantics (a closed window must not kill sessions other windows still show).
+  - Done: **the window close semantics** — every view remembers the window it lives in (`tauri::Webview::label()`), and a destroyed window releases its views. A session that no window shows any more is closed (its SSH connection would stay open for nothing); a session that another window still shows keeps running. Covered by a unit test.
+  - Pending: per-window tab sets (a second window can only show a moved tab today; it has no tab bar of its own).
 - [ ] Workspaces: save/restore layout (tabs+splits+window geometry), crash recovery of layout metadata (never claim remote shell recovery), stale session cleanup on startup.
 - [ ] Race-condition review: rapid open/close/move/quit interleavings (test-cased).
 - Verification: tests for session ownership invariants (single owner, no leaks, no double-free of channels) + manual multi-window passes.

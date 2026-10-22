@@ -53,6 +53,24 @@ fn build() -> tauri::Result<tauri::App> {
         // The native file picker: the user chooses the private key file
         // instead of typing its path.
         .plugin(tauri_plugin_dialog::init())
+        // A window that is closed releases its views. A session that no
+        // window shows any more is closed as well — its SSH connection
+        // would stay open for nothing. A session that another window still
+        // shows keeps running.
+        .on_window_event(|window, event| {
+            if !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            let state = window.app_handle().state::<AppState>();
+            let label = window.label().to_string();
+            let orphaned = state.sessions.drop_window_views(&label);
+            for id in orphaned {
+                let manager = state.sessions.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = manager.close(&id).await;
+                });
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = app.path().app_data_dir()?;
