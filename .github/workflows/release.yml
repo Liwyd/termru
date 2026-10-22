@@ -317,14 +317,16 @@ jobs:
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "the installer is not a PE binary" }
           Write-Host "the installer is a PE binary of $($installer.Length) bytes"
 
+      # The RPM of a prerelease does not exist (see above). The step is
+      # skipped instead of uploading an empty artifact: the download of
+      # the artifacts (which merges them) fails on an empty one.
       - name: Collect the artifacts
+        if: matrix.label != 'rpm' || needs.verify.outputs.prerelease == 'false'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.label }}
           path: dist-artifacts/*
-          # The RPM of a prerelease does not exist (see above): an empty
-          # artifact is expected there, an empty one anywhere else is not.
-          if-no-files-found: ${{ matrix.label == 'rpm' && 'warn' || 'error' }}
+          if-no-files-found: error
           retention-days: 7
 
   cloud-image:
