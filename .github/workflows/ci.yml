@@ -114,7 +114,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-18
-          pg_dump --version
+          # The wrapper in /usr/bin still points at the version of the
+          # runner: the binaries of the installed version come first.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
 
       - name: Clippy
         run: cargo clippy -p termru-cloud-server --all-targets -- -D warnings

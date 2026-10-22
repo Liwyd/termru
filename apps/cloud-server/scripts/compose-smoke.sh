@@ -154,10 +154,15 @@ devices = json.load(sys.stdin)
 assert len(devices) == 1, f"expected one device, got {len(devices)}"' \
   || fail "the registered device is not in the device list"
 
+# The payload is a complete host: the server validates it like a local
+# write would.
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+HOST_PAYLOAD="{\"id\":\"${RECORD_ID}\",\"name\":\"smoke-host\",\"address\":\"smoke.example.test\",\"port\":22,\"username\":\"deploy\",\"auth\":{\"type\":\"password\"},\"tags\":[],\"favorite\":false,\"term\":\"xterm-256color\",\"keepalive_seconds\":0,\"sort_order\":0,\"created_at\":\"${NOW}\",\"updated_at\":\"${NOW}\"}"
+
 curl -fsS -X POST "$APP_URL/v1/sync/changes" \
   -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
-  -d "{\"mutations\":[{\"mutation_id\":\"${MUTATION_ID}\",\"id\":\"${RECORD_ID}\",\"kind\":\"host\",\"deleted\":false,\"payload\":{\"name\":\"smoke-host\",\"address\":\"smoke.example.test\"}}]}" \
+  -d "{\"mutations\":[{\"mutation_id\":\"${MUTATION_ID}\",\"id\":\"${RECORD_ID}\",\"kind\":\"host\",\"deleted\":false,\"updated_at\":\"${NOW}\",\"payload\":${HOST_PAYLOAD}}]}" \
   >/dev/null || fail "the push failed"
 
 CHANGES="$(curl -fsS "$APP_URL/v1/sync/changes?since=0" -H "authorization: Bearer $TOKEN")" \
