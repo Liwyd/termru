@@ -48,11 +48,25 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
+      # The desktop app is a workspace member too, but it needs the system
+      # libraries of the webview: it is built and tested by the `desktop`
+      # job, which installs them.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo clippy \
+            -p termru-core \
+            -p termru-store \
+            -p termru-ssh \
+            -p termru-cloud-server \
+            --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: |
+          cargo test \
+            -p termru-core \
+            -p termru-store \
+            -p termru-ssh \
+            -p termru-cloud-server
 
   server:
     name: Cloud server (clippy, tests with PostgreSQL)
@@ -87,6 +101,20 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> target
+
+      # The backup test runs `pg_dump` and `pg_restore`: they have to be the
+      # version of the server, or they refuse the dump ("server version
+      # mismatch").
+      - name: Install the PostgreSQL client of the server version
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+          pg_dump --version
 
       - name: Clippy
         run: cargo clippy -p termru-cloud-server --all-targets -- -D warnings
@@ -167,8 +195,14 @@ jobs:
       - name: Build the frontend bundle
         run: npm run build
 
+      - name: Clippy the desktop app
+        run: cargo clippy -p termru-desktop --all-targets -- -D warnings
+
       - name: Compile the desktop binary
         run: cargo build -p termru-desktop
+
+      - name: Test the desktop app
+        run: cargo test -p termru-desktop
 
       - name: Build the cloud server binary
         run: cargo build -p termru-cloud-server --bin termru-cloud-server

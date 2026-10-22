@@ -36,6 +36,9 @@ RUN sed -i \
 COPY crates/termru-core/src crates/termru-core/src
 COPY apps/cloud-server/src apps/cloud-server/src
 COPY apps/cloud-server/migrations apps/cloud-server/migrations
+# The build script embeds the migrations into the binary: without it the
+# `include!` of the generated table has no OUT_DIR to read.
+COPY apps/cloud-server/build.rs apps/cloud-server/
 
 RUN touch crates/termru-core/src/lib.rs apps/cloud-server/src/lib.rs \
  && cargo build --release -p termru-cloud-server --bin termru-cloud-server
