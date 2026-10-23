@@ -36,9 +36,13 @@
   let foldersOpen = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
+  // The motion and focus preferences drive the token overrides of Doc B.05
+  // and the high-visibility focus ring.
   $effect(() => {
     const theme = prefs.prefs.theme;
     document.documentElement.dataset.theme = theme === 'system' ? '' : theme;
+    document.documentElement.dataset.reducedMotion = prefs.prefs.reduced_motion;
+    document.documentElement.dataset.focusVisibility = prefs.prefs.focus_visibility ? 'on' : '';
   });
 
   onMount(() => {

@@ -7,6 +7,10 @@
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
+  // The terminal default of the design (Doc A.03): IBM Plex Mono with the
+  // platform monospace as the fallback for a missing glyph.
+  const DEFAULT_FONT_FAMILY = 'IBM Plex Mono, monospace';
+
   // The dialog element: it takes the focus while a key combination is
   // being recorded, so the keydown reaches it.
   let dialog = $state<HTMLDivElement | null>(null);
@@ -76,7 +80,7 @@
       theme: draft.theme,
       terminal: {
         ...prefs.prefs.terminal,
-        font_family: draft.font_family.trim() || 'monospace',
+        font_family: draft.font_family.trim() || DEFAULT_FONT_FAMILY,
         font_size: Math.min(72, Math.max(6, draft.font_size)),
         scrollback: Math.min(1_000_000, Math.max(1000, draft.scrollback)),
         cursor_blink: draft.cursor_blink,
@@ -91,7 +95,7 @@
 
   function reset(): void {
     draft.theme = 'system';
-    draft.font_family = 'monospace';
+    draft.font_family = DEFAULT_FONT_FAMILY;
     draft.font_size = 14;
     draft.scrollback = 10_000;
     draft.cursor_blink = true;
@@ -137,7 +141,7 @@
 
         <label>
           <span>Font family</span>
-          <input type="text" bind:value={draft.font_family} placeholder="monospace" />
+          <input type="text" bind:value={draft.font_family} placeholder={DEFAULT_FONT_FAMILY} />
         </label>
 
         <label>

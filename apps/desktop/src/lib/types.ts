@@ -64,6 +64,7 @@ export interface IdentityBinding {
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CursorStyle = 'block' | 'bar' | 'underline';
+export type MotionPreference = 'system' | 'on' | 'off';
 
 export interface TerminalPreferences {
   font_family: string;
@@ -72,12 +73,16 @@ export interface TerminalPreferences {
   cursor_blink: boolean;
   cursor_style: CursorStyle;
   copy_on_select: boolean;
+  line_height: number;
 }
 
 export interface Preferences {
   theme: ThemePreference;
   terminal: TerminalPreferences;
   keybindings: Record<string, string>;
+  reduced_motion: MotionPreference;
+  focus_visibility: boolean;
+  routine_notices: boolean;
 }
 
 export type ErrorCategory = 'auth' | 'host_key' | 'network' | 'timeout' | 'protocol' | 'local';

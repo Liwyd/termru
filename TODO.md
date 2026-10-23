@@ -359,38 +359,53 @@ exactly as the shell"). Frames: `1` Hosts · `2` Sessions single pane · `3` Ses
 
 ### R1 — Foundations: tokens, type, motion, theme
 
-- [ ] Token layer: retarget the existing `--termru-*` variables to the Doc A.02 palette
+- [x] Token layer: retarget the existing `--termru-*` variables to the Doc A.02 palette
   (surface `#FFFFFF`, canvas `#F4F5F2`, subtle `#FAFBF8`, terminal `#FDFEFB`, ink `#202925`,
   muted `#626D67`, line `#DBE0DA`, accent `#17665E`, accentSoft `#EAF3EF`, success
-  `#276440`, danger `#A33330`, dangerSoft `#FBF0EF`, warning `#825713`, warningSoft,
-  selection `#D7E9E0`, faint `#87928B` for non-essential text only) and extend the set with
-  the Doc A.03 geometry: spacing scale 4/8/12/16/24/32/40/48/56, control height 40 (input
-  42), radius 4 input / 6 button / 0 pane, border 1px, focus 2px accent + 2px offset, page
-  inset 48 horizontal / 28-32 top, titlebar 36 / nav 64. Components keep their `var(--termru-*)`
-  names, so this is a value change plus additions — no mass rewrite.
-  - Verification: `app.css` is the only place UI hex lives (plus `terminal/theme.ts`);
-    `svelte-check` and vitest green.
-- [ ] Dark theme re-derived from the same semantic tokens (the frames ship light only),
+  `#276440`, danger `#A3333D`, dangerSoft `#FBF0EF`, warning `#825713`, warningSoft
+  `#FAF3E4`, selection `#D7E9E0`, faint `#87928B` for non-essential text only) and extend
+  the set with the Doc A.03 geometry: spacing scale 4/8/12/16/24/32/40/48/56, control height 40 (input
+  42), radius 4 input / 6 button / 0 pane / 16 overlay+notice, border 1px, focus 2px
+  accent + 2px offset, page inset 48 horizontal / 28-32 top, titlebar 36 / nav 64.
+  Components keep their `var(--termru-*)` names, so this is a value change plus additions —
+  no mass rewrite. **Two transcription corrections of this file, taken from the SVG:**
+  the danger colour is `#A3333D` (the file said `#A33330`) and warningSoft is `#FAF3E4`.
+  - Verification: `app.css` is the only place UI hex lives (plus `terminal/theme.ts`) —
+    the one stray `#fff` in `Sidebar.svelte` is now `var(--termru-on-danger)`;
+    `svelte-check` 0/0 and vitest green (104 tests, incl. the new token suite).
+- [x] Dark theme re-derived from the same semantic tokens (the frames ship light only),
   every foreground/background pair ≥ 4.5:1 (Doc A.02 requires the check), terminal colors
-  from Doc A.06 (ANSI 0-7 / 8-15 as given, background `#FDFEFB`, selection `#D7E9E0`,
+  from Doc A.06 (ANSI 0-7 `#202925 #A3333D #276440 #825713 #315D99 #78518C #17665E #626D67`
+  / 8-15 `#626D67 … #202925`, background `#FDFEFB`, selection `#D7E9E0`,
   cursor `#17665E` on light; a matching dark set with the same slot mapping).
-  - Verification: an automated contrast test over the token pairs (light + dark) in vitest;
-    `terminal/theme.ts` mapped to the new slots and covered by a slot test.
-- [ ] Type scale + self-hosted fonts: Inter for the UI and IBM Plex Mono as the terminal
-  default (Doc A.03: page title 28/42 550, section heading 18-23, body 14/21, control
-  13/19.5, metadata 11/16.5, terminal 14/23.1), shipped as local `@fontsource-variable/*`
-  assets (SIL OFL) — **no remote font URLs** (CSP is `font-src 'self'`), system fallback
+  - Verification: `src/lib/design-tokens.test.ts` parses `app.css` and asserts the light
+    palette equals the specification hex-for-hex, that the dark block and the
+    `prefers-color-scheme` block are identical, that all 22 normal-text pairs clear
+    4.5:1 in both themes, that the non-essential `faint` stays ≥ 2.5:1, and that the
+    terminal theme matches Doc A.06 exactly with readable background/selection pairs.
+- [x] Type scale + self-hosted fonts: Inter for the UI and IBM Plex Mono as the terminal
+  default (Doc A.03: page title 28/42 550, section heading 20/30, body 14/21, control
+  13/19.5, metadata 11/16.5, terminal 14/23.1), shipped as local fontsource assets
+  (SIL OFL) — **no remote font URLs** (CSP is `font-src 'self'`), system fallback
   stack retained for a missing glyph/weight.
-  - Verification: license + review recorded in `docs/security/dependency-review.md`;
-    the hardening test still fails on any remote `src`/`href`.
-- [ ] Motion tokens per Doc B: `--motion-fast: 100ms`, `--motion-context: 160ms`,
+  - Verification: `@fontsource-variable/inter` + `@fontsource/ibm-plex-mono` (Latin
+    subsets) are bundled by Vite into `dist/assets`; license + review recorded in
+    `docs/security/dependency-review.md`; the hardening test still fails on any remote
+    `src`/`href`; the terminal default is now `IBM Plex Mono, monospace`
+    (`termru-core` default + the frontend default + the settings reset).
+- [x] Motion tokens per Doc B: `--motion-fast: 100ms`, `--motion-context: 160ms`,
   `--motion-structure: 220ms`, `--ease-quiet: cubic-bezier(0.2, 0, 0, 1)`; one motion
   property per element (B.04), no `transition: all`, no blur/filter, no spring/back/elastic
   in app chrome, no entrance cascade, no bounce; terminal input/output/caret never animated;
   reduced motion (`prefers-reduced-motion` **and** the new preference) collapses everything
   to instant/opacity-only ≤ 80 ms (B.05).
-  - Verification: a source-scan test fails on `transition: all` / bounce easings; a
-    reduced-motion test drives the tokens.
+  - Verification: `src/lib/motion.test.ts` pins the token values, drives the reduced-motion
+    overrides (media query **and** `data-reduced-motion='on'` from the preference) and
+    scans every source for `transition: all`, `backdrop-filter`, `filter: blur(`, bounce/
+    spring/elastic easings. The additive preference fields this needs
+    (`reduced_motion`, `focus_visibility`, `routine_notices`, `terminal.line_height`)
+    landed here with their serde defaults and old-record tests; the R5 page wires the
+    controls.
 
 ### R2 — Shell: titlebar, navigation, status bar, routing
 

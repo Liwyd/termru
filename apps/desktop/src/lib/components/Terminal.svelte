@@ -24,6 +24,7 @@
     const instance = new Terminal({
       fontFamily: prefs.prefs.terminal.font_family,
       fontSize: prefs.prefs.terminal.font_size,
+      lineHeight: prefs.prefs.terminal.line_height,
       scrollback: prefs.prefs.terminal.scrollback,
       cursorBlink: prefs.prefs.terminal.cursor_blink,
       cursorStyle: prefs.prefs.terminal.cursor_style,
@@ -91,9 +92,11 @@
   $effect(() => {
     const instance = term;
     if (!instance) return;
-    const { font_family, font_size, cursor_blink, cursor_style } = prefs.prefs.terminal;
+    const { font_family, font_size, line_height, cursor_blink, cursor_style } =
+      prefs.prefs.terminal;
     instance.options.fontFamily = font_family;
     instance.options.fontSize = font_size;
+    instance.options.lineHeight = line_height;
     instance.options.cursorBlink = cursor_blink;
     instance.options.cursorStyle = cursor_style;
     instance.options.theme = terminalTheme(prefs.isDark);

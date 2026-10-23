@@ -1,51 +1,170 @@
-/* Design tokens + base styles. Light/dark follow the OS unless the user
-   overrides the theme in preferences. */
+/* Design tokens: the single place where UI colour, geometry, type and motion
+   live. Values follow the design specification (Doc A.02 colour, A.03 type +
+   space, Doc B motion); the dark set is re-derived from the same semantic
+   slots and every normal-text pair is contrast-checked in
+   `lib/design-tokens.test.ts`. */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  --termru-bg: #f8fafc;
+  /* A.02 palette — light. */
   --termru-surface: #ffffff;
-  --termru-fg: #0f172a;
-  --termru-muted: #64748b;
-  --termru-border: #d8dee9;
-  --termru-accent: #0284c7;
-  --termru-danger: #dc2626;
-  --termru-success: #16a34a;
+  --termru-canvas: #f4f5f2;
+  --termru-bg: var(--termru-canvas);
+  --termru-subtle: #fafbf8;
+  --termru-terminal: #fdfefb;
+  --termru-fg: #202925;
+  --termru-muted: #626d67;
+  --termru-faint: #87928b;
+  --termru-border: #dbe0da;
+  --termru-accent: #17665e;
+  --termru-accent-soft: #eaf3ef;
+  --termru-success: #276440;
+  --termru-danger: #a3333d;
+  --termru-danger-soft: #fbf0ef;
+  --termru-warning: #825713;
+  --termru-warning-soft: #faf3e4;
+  --termru-selection: #d7e9e0;
+  /* Text colour on filled controls: light fills take ink-free white text. */
+  --termru-on-accent: #ffffff;
+  --termru-on-success: #ffffff;
+  --termru-on-danger: #ffffff;
 
-  --termru-radius: 6px;
-  --termru-radius-lg: 10px;
+  /* A.03 geometry. */
+  --termru-space-1: 4px;
+  --termru-space-2: 8px;
+  --termru-space-3: 12px;
+  --termru-space-4: 16px;
+  --termru-space-5: 24px;
+  --termru-space-6: 32px;
+  --termru-space-7: 40px;
+  --termru-space-8: 48px;
+  --termru-space-9: 56px;
+  --termru-control-h: 40px;
+  --termru-input-h: 42px;
+  --termru-radius-input: 4px;
+  --termru-radius-button: 6px;
+  --termru-radius: var(--termru-radius-button);
+  --termru-radius-lg: 16px;
+  --termru-radius-pane: 0px;
+  --termru-border-w: 1px;
+  --termru-focus-w: 2px;
+  --termru-focus-offset: 2px;
+  --termru-page-inset-x: 48px;
+  --termru-page-inset-top: 32px;
+  --termru-titlebar-h: 36px;
+  --termru-nav-h: 64px;
 
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
+  /* A.03 type scale (px / line-height / weight). Mono is for addresses,
+     paths and shortcuts — not for the whole interface. */
+  --termru-font-ui: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --termru-font-mono:
+    'IBM Plex Mono', 'IBM Plex Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  --termru-text-title-size: 28px;
+  --termru-text-title-lh: 42px;
+  --termru-text-title-weight: 550;
+  --termru-text-heading-size: 20px;
+  --termru-text-heading-lh: 30px;
+  --termru-text-heading-weight: 560;
+  --termru-text-body-size: 14px;
+  --termru-text-body-lh: 21px;
+  --termru-text-control-size: 13px;
+  --termru-text-control-lh: 19.5px;
+  --termru-text-control-weight: 550;
+  --termru-text-secondary-size: 12px;
+  --termru-text-secondary-lh: 18px;
+  --termru-text-meta-size: 11px;
+  --termru-text-meta-lh: 16.5px;
+  --termru-text-terminal-size: 14px;
+  --termru-text-terminal-lh: 23.1px;
+
+  /* Doc B motion: one duration per class of change, one easing. */
+  --motion-fast: 100ms;
+  --motion-context: 160ms;
+  --motion-structure: 220ms;
+  --ease-quiet: cubic-bezier(0.2, 0, 0, 1);
+
+  font-family: var(--termru-font-ui);
+  font-size: var(--termru-text-body-size);
+  line-height: var(--termru-text-body-lh);
 }
 
+/* A.02 palette — dark: the same slots, re-derived. Filled controls take
+   dark text because the fills are bright on a dark canvas. */
 :root[data-theme='dark'] {
-  --termru-bg: #0f172a;
-  --termru-surface: #111c33;
-  --termru-fg: #e2e8f0;
-  --termru-muted: #94a3b8;
-  --termru-border: #26334d;
-  --termru-accent: #38bdf8;
-  --termru-danger: #f87171;
-  --termru-success: #4ade80;
+  color-scheme: dark;
+
+  --termru-surface: #1b211e;
+  --termru-canvas: #141816;
+  --termru-bg: var(--termru-canvas);
+  --termru-subtle: #212724;
+  --termru-terminal: #101413;
+  --termru-fg: #eef1ee;
+  --termru-muted: #a7b0ab;
+  --termru-faint: #7b857f;
+  --termru-border: #39413c;
+  --termru-accent: #63c2b1;
+  --termru-accent-soft: #173a34;
+  --termru-success: #5fbc8d;
+  --termru-danger: #f08f8a;
+  --termru-danger-soft: #3a1f1e;
+  --termru-warning: #d9a552;
+  --termru-warning-soft: #362a15;
+  --termru-selection: #26443c;
+  --termru-on-accent: #0f1a17;
+  --termru-on-success: #0f1a17;
+  --termru-on-danger: #0f1a17;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --termru-bg: #0f172a;
-    --termru-surface: #111c33;
-    --termru-fg: #e2e8f0;
-    --termru-muted: #94a3b8;
-    --termru-border: #26334d;
-    --termru-accent: #38bdf8;
-    --termru-danger: #f87171;
-    --termru-success: #4ade80;
+    color-scheme: dark;
+
+    --termru-surface: #1b211e;
+    --termru-canvas: #141816;
+    --termru-bg: var(--termru-canvas);
+    --termru-subtle: #212724;
+    --termru-terminal: #101413;
+    --termru-fg: #eef1ee;
+    --termru-muted: #a7b0ab;
+    --termru-faint: #7b857f;
+    --termru-border: #39413c;
+    --termru-accent: #63c2b1;
+    --termru-accent-soft: #173a34;
+    --termru-success: #5fbc8d;
+    --termru-danger: #f08f8a;
+    --termru-danger-soft: #3a1f1e;
+    --termru-warning: #d9a552;
+    --termru-warning-soft: #362a15;
+    --termru-selection: #26443c;
+    --termru-on-accent: #0f1a17;
+    --termru-on-success: #0f1a17;
+    --termru-on-danger: #0f1a17;
   }
+}
+
+/* Doc B.05 reduced motion: everything collapses to instant (structure
+   changes keep at most 80 ms of opacity). The preference (`on`/`off`)
+   overrides the operating-system setting. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion='off']) {
+    --motion-fast: 0ms;
+    --motion-context: 0ms;
+    --motion-structure: 80ms;
+  }
+}
+
+:root[data-reduced-motion='on'] {
+  --motion-fast: 0ms;
+  --motion-context: 0ms;
+  --motion-structure: 80ms;
+}
+
+/* The high-visibility focus preference widens the ring everywhere. */
+:root[data-focus-visibility='on'] {
+  --termru-focus-w: 3px;
+  --termru-focus-offset: 3px;
 }
 
 * {
@@ -62,13 +181,16 @@ body,
 }
 
 button {
-  padding: 0.3rem 0.6rem;
-  border-radius: var(--termru-radius);
-  border: 1px solid var(--termru-border);
+  min-height: var(--termru-control-h);
+  padding: 0 var(--termru-space-3);
+  border-radius: var(--termru-radius-button);
+  border: var(--termru-border-w) solid var(--termru-border);
   background: var(--termru-surface);
   color: var(--termru-fg);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: var(--termru-text-control-size);
+  line-height: var(--termru-text-control-lh);
+  font-weight: var(--termru-text-control-weight);
   cursor: pointer;
 }
 
@@ -84,8 +206,7 @@ button:disabled {
 button.primary {
   background: var(--termru-accent);
   border-color: var(--termru-accent);
-  color: #04121f;
-  font-weight: 600;
+  color: var(--termru-on-accent);
 }
 
 button.danger {
@@ -96,9 +217,16 @@ button.danger {
 input,
 select {
   font: inherit;
+  font-size: var(--termru-text-control-size);
+  border-radius: var(--termru-radius-input);
+}
+
+input:not([type='checkbox']):not([type='radio']),
+select {
+  min-height: var(--termru-input-h);
 }
 
 :focus-visible {
-  outline: 2px solid var(--termru-accent);
-  outline-offset: 1px;
+  outline: var(--termru-focus-w) solid var(--termru-accent);
+  outline-offset: var(--termru-focus-offset);
 }

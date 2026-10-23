@@ -257,7 +257,7 @@
 
   .badge.danger {
     background: var(--termru-danger);
-    color: #fff;
+    color: var(--termru-on-danger);
   }
 
   .dot {

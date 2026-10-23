@@ -1,39 +1,65 @@
 import type { ITheme } from '@xterm/xterm';
 
-/** xterm colour themes matching the app's design tokens. */
+/**
+ * Terminal colour slots (Doc A.06).
+ *
+ * The light set is the specification exactly: ANSI 0–7 / 8–15 as listed,
+ * background `#FDFEFB`, selection `#D7E9E0`, cursor `#17665E`. Bright
+ * colours deliberately keep dark hues on a light terminal, so a `ls` in
+ * bright white stays readable instead of vanishing into the background.
+ *
+ * The dark set is the same slot mapping with the hues opened up for a dark
+ * background (a light-terminal red is unreadable on `#101413`).
+ */
+export const LIGHT_TERMINAL_THEME = {
+  background: '#FDFEFB',
+  foreground: '#202925',
+  cursor: '#17665E',
+  cursorAccent: '#FDFEFB',
+  selectionBackground: '#D7E9E0',
+  black: '#202925',
+  red: '#A3333D',
+  green: '#276440',
+  yellow: '#825713',
+  blue: '#315D99',
+  magenta: '#78518C',
+  cyan: '#17665E',
+  white: '#626D67',
+  brightBlack: '#626D67',
+  brightRed: '#A3333D',
+  brightGreen: '#276440',
+  brightYellow: '#825713',
+  brightBlue: '#315D99',
+  brightMagenta: '#78518C',
+  brightCyan: '#17665E',
+  brightWhite: '#202925',
+} as const satisfies ITheme;
+
+export const DARK_TERMINAL_THEME = {
+  background: '#101413',
+  foreground: '#EEF1EE',
+  cursor: '#63C2B1',
+  cursorAccent: '#101413',
+  selectionBackground: '#26443C',
+  black: '#242A27',
+  red: '#F08F8A',
+  green: '#5FBC8D',
+  yellow: '#D9A552',
+  blue: '#7FA4DD',
+  magenta: '#B394D1',
+  cyan: '#63C2B1',
+  white: '#A7B0AB',
+  brightBlack: '#A7B0AB',
+  brightRed: '#F08F8A',
+  brightGreen: '#5FBC8D',
+  brightYellow: '#D9A552',
+  brightBlue: '#7FA4DD',
+  brightMagenta: '#B394D1',
+  brightCyan: '#63C2B1',
+  brightWhite: '#EEF1EE',
+} as const satisfies ITheme;
+
+/** xterm colour theme for the current app theme. */
 export function terminalTheme(dark: boolean): ITheme {
-  if (dark) {
-    return {
-      background: '#0f172a',
-      foreground: '#e2e8f0',
-      cursor: '#38bdf8',
-      cursorAccent: '#0f172a',
-      selectionBackground: '#33415580',
-      black: '#1e293b',
-      red: '#f87171',
-      green: '#4ade80',
-      yellow: '#fbbf24',
-      blue: '#60a5fa',
-      magenta: '#c084fc',
-      cyan: '#22d3ee',
-      white: '#cbd5e1',
-      brightBlack: '#64748b',
-    };
-  }
-  return {
-    background: '#f8fafc',
-    foreground: '#0f172a',
-    cursor: '#0284c7',
-    cursorAccent: '#f8fafc',
-    selectionBackground: '#cbd5e180',
-    black: '#334155',
-    red: '#dc2626',
-    green: '#16a34a',
-    yellow: '#ca8a04',
-    blue: '#2563eb',
-    magenta: '#9333ea',
-    cyan: '#0891b2',
-    white: '#e2e8f0',
-    brightBlack: '#94a3b8',
-  };
+  return dark ? DARK_TERMINAL_THEME : LIGHT_TERMINAL_THEME;
 }

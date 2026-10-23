@@ -91,14 +91,18 @@ vi.mock('@tauri-apps/api/core', () => {
           return {
             theme: 'dark',
             terminal: {
-              font_family: 'monospace',
+              font_family: 'IBM Plex Mono, monospace',
               font_size: 14,
               scrollback: 1000,
               cursor_blink: true,
               cursor_style: 'block',
               copy_on_select: false,
+              line_height: 1.65,
             },
             keybindings: {},
+            reduced_motion: 'system',
+            focus_visibility: false,
+            routine_notices: true,
           };
         case 'session_open':
           sessionChannel = args?.channel as typeof sessionChannel;
