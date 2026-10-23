@@ -333,6 +333,344 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
   - `docs/release-readiness.md`: what the release contains, the evidence per check (the commands and their results), the journey coverage, the decisions, the residual risks, the manual steps a maintainer has to do before the tag and the known gaps.
   - The instruction document itself (§23) was not available in this environment; the review uses the acceptance criteria the repository documents (the phases of this file, the ADRs and the threat model). This is stated in the document.
 
+## Phase 19 — UI/UX redesign (conformance to `./re-design/`)
+
+Source of truth is `re-design/*.svg`: **8 frames** (7 unique — `5.svg`, `6.svg` and `7.svg`
+are byte-identical, same md5) and **3 specification documents** written in Persian:
+
+- `9.svg` = **Doc A** — meanings, colors and current-state notes: principles, palette,
+  type + geometry, patterns, the state matrix, the host-key rule, accessibility, behavior
+  coverage (what must survive the redesign) and the illustrative sample data rules.
+- `11.svg` = **Doc B** — fast/quiet/immediate motion: timing tokens, terminal-view
+  lifetimes, the resize contract, motion ownership, reduced-motion, acceptance checklist.
+- `10.svg` = **Doc C** — Svelte + Sileo build decision: component/state decomposition,
+  the Sileo-is-React-only fact + island plan, the notify facade policy, motion trade-offs,
+  the delivery order and the deliverable checklist.
+
+The specification prose is Persian; **the product UI stays English** (Doc A: "English UI
+exactly as the shell"). Frames: `1` Hosts · `2` Sessions single pane · `3` Sessions split
+(+ toast + banner) · `4` Edit connection full page · `5/6/7` Folders three columns ·
+`8` Preferences.
+
+- [x] Design intake: every SVG rendered to PNG (headless Chrome, 1440 px wide, tall frames
+  sliced) and read end to end; frames compared by md5 (`5=6=7`); the three documents
+  transcribed into the decisions and tasks below.
+  - Verification: all 11 SVGs reviewed; no frame or doc section left unread.
+
+### R1 — Foundations: tokens, type, motion, theme
+
+- [ ] Token layer: retarget the existing `--termru-*` variables to the Doc A.02 palette
+  (surface `#FFFFFF`, canvas `#F4F5F2`, subtle `#FAFBF8`, terminal `#FDFEFB`, ink `#202925`,
+  muted `#626D67`, line `#DBE0DA`, accent `#17665E`, accentSoft `#EAF3EF`, success
+  `#276440`, danger `#A33330`, dangerSoft `#FBF0EF`, warning `#825713`, warningSoft,
+  selection `#D7E9E0`, faint `#87928B` for non-essential text only) and extend the set with
+  the Doc A.03 geometry: spacing scale 4/8/12/16/24/32/40/48/56, control height 40 (input
+  42), radius 4 input / 6 button / 0 pane, border 1px, focus 2px accent + 2px offset, page
+  inset 48 horizontal / 28-32 top, titlebar 36 / nav 64. Components keep their `var(--termru-*)`
+  names, so this is a value change plus additions — no mass rewrite.
+  - Verification: `app.css` is the only place UI hex lives (plus `terminal/theme.ts`);
+    `svelte-check` and vitest green.
+- [ ] Dark theme re-derived from the same semantic tokens (the frames ship light only),
+  every foreground/background pair ≥ 4.5:1 (Doc A.02 requires the check), terminal colors
+  from Doc A.06 (ANSI 0-7 / 8-15 as given, background `#FDFEFB`, selection `#D7E9E0`,
+  cursor `#17665E` on light; a matching dark set with the same slot mapping).
+  - Verification: an automated contrast test over the token pairs (light + dark) in vitest;
+    `terminal/theme.ts` mapped to the new slots and covered by a slot test.
+- [ ] Type scale + self-hosted fonts: Inter for the UI and IBM Plex Mono as the terminal
+  default (Doc A.03: page title 28/42 550, section heading 18-23, body 14/21, control
+  13/19.5, metadata 11/16.5, terminal 14/23.1), shipped as local `@fontsource-variable/*`
+  assets (SIL OFL) — **no remote font URLs** (CSP is `font-src 'self'`), system fallback
+  stack retained for a missing glyph/weight.
+  - Verification: license + review recorded in `docs/security/dependency-review.md`;
+    the hardening test still fails on any remote `src`/`href`.
+- [ ] Motion tokens per Doc B: `--motion-fast: 100ms`, `--motion-context: 160ms`,
+  `--motion-structure: 220ms`, `--ease-quiet: cubic-bezier(0.2, 0, 0, 1)`; one motion
+  property per element (B.04), no `transition: all`, no blur/filter, no spring/back/elastic
+  in app chrome, no entrance cascade, no bounce; terminal input/output/caret never animated;
+  reduced motion (`prefers-reduced-motion` **and** the new preference) collapses everything
+  to instant/opacity-only ≤ 80 ms (B.05).
+  - Verification: a source-scan test fails on `transition: all` / bounce easings; a
+    reduced-motion test drives the tokens.
+
+### R2 — Shell: titlebar, navigation, status bar, routing
+
+- [ ] Route store (`lib/stores/route.svelte.ts`): `hosts | sessions | folders | identities
+  | sync | preferences | host-edit`, hash-synced (survives dev reloads), last route persisted
+  in the workspace doc as an **additive** field (old documents without it still load).
+  Commands `route.*` join the registry + palette; `settings.open` (Mod+,) and `sync.open`
+  (Mod+Shift+S) become route jumps so every existing binding keeps working. The six routes
+  map to pages; dialogs stay dialogs (connect, host key, confirms).
+  - Verification: unit tests for transitions, hash round-trip and old-doc restore; registry
+    conflict tests still green; palette reaches every route.
+- [ ] AppShell: 36 px titlebar (`termru / desktop` breadcrumb + `data-tauri-drag-region`),
+  64 px AppNav (logo, Hosts, Sessions ⟨count⟩, Folders, Identities, Sync, Preferences —
+  active = bold + underline, never color alone — and the right-hand "n sessions connected"),
+  route outlet, StatusBar (left contextual line per route, right `SSH · Local workspace` +
+  `⌘ / Ctrl K Quick switch`).
+  - Verification: jsdom contract tests for nav items, counts and the per-route status line.
+- [ ] Window controls per platform (Doc A.01): macOS = `titleBarStyle: Overlay` + hidden
+  title + inset for the native traffic lights; Windows = `decorations: false` + custom
+  minimize/maximize/close + drag region; Linux = **native decorations kept** (the 36 px bar
+  is drag region + breadcrumb only) — a deliberate, documented deviation from the mockup's
+  Windows-style buttons, because shipping untestable CSD on the primary build platform is
+  the riskier choice; revisitable after an on-device pass.
+  - Verification: capability extended least-privilege (`core:window:allow-minimize`,
+    `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` — only after confirming
+    they are not already in `core:window:default`); Rust setup applies decorations per
+    `cfg(target_os)`; `cargo test -p termru-desktop` green.
+- [ ] `ContextConfirm.svelte` replaces every `window.confirm` (delete host/folder/identity)
+  per Doc A.05: title, body, `Cancel` focused initially, destructive confirm, focus returns
+  to the trigger, Escape cancels, no typed confirmation.
+  - Verification: jsdom test for focus + escape; a grep test proves no `window.confirm` /
+    `alert(` remains in `src/`.
+
+### R3 — Hosts page (frame 1)
+
+- [ ] Host table: columns STAR | HOST/ADDRESS | FOLDER | AUTHENTICATION | LAST SESSION |
+  ACTIONS. Authentication label derived from `host.auth`: `Identity · <identity name>`,
+  `Password · This device` (credential store), `Password · Ask on connect`,
+  `SSH agent`. Row actions: star toggle, `Open` (live session) / `Connect`, `Edit`, `⋯`
+  (ContextMenu: connect, edit, favorite, delete); double-click connects (the footer hint
+  says so).
+  - Verification: store/unit tests for label derivation; jsdom contract tests for the row
+    actions against the existing IPC shapes.
+- [ ] Header + filter row: `WORKSPACE / CONNECTION LIBRARY` breadcrumb, `Hosts` H1 with a
+  live count line ("Five saved connections. Two sessions running."), `+ New host`, search
+  (name, address, username, description, tag **names**; `Ctrl F`), folder dropdown,
+  `5 hosts · Recent activity ↓` count/sort line, filter tabs `All hosts ⟨n⟩` /
+  `Favorites ⟨n⟩` / `Recent` / `Unfiled ⟨n⟩`.
+  - Verification: store tests per tab (favorites set, recents order, unfiled = no folder);
+    search tests extended; existing host filter/sort tests kept.
+- [ ] "Your sessions are still running" banner while any session exists: names the running
+  hosts and `Return to <host>` jumps to the Sessions route with that tab active.
+  - Verification: jsdom test for presence/absence and the jump target.
+- [ ] LAST SESSION data: extend the `recent_list` IPC to return `last_used_at` next to the
+  host (the store already selects it and drops it in `repos/recents.rs`) → `Connected` when
+  a session is live, otherwise `Today, 09:18` / `Yesterday` / `18 Oct`, `—` when never used.
+  - Verification: Rust test for the new DTO; frontend date-format tests; the jsdom IPC
+    contract test updated (the command surface is internal, both sides ship in one artifact).
+- [ ] Windowed table rendering: rows render only for the viewport (+small overscan) at a
+  fixed row height — today's sidebar renders **every** row unbounded (Architecture Concern
+  below).
+  - Verification: perf test with the 10 000-host fixture — DOM row count stays < ~100,
+    filter keystroke stays within a frame budget; numbers recorded in `docs/performance.md`
+    and the incorrect "renders only the visible part" claim corrected.
+- [ ] State matrix (Doc A.05) on this page: loading (`aria-busy`, static placeholder, no
+  shimmer/stagger/cascade), empty (+ `New host`), filtered-empty (+ `Clear filters`), error
+  (message + Retry, never a stack trace), offline note (last sync + "changes are safe
+  locally").
+  - Verification: one jsdom test per state.
+
+### R4 — Sessions view (frames 2-3)
+
+- [ ] Session tab strip: name + status + close, rename on double-click, drag reorder,
+  `Ctrl+Tab` / `Ctrl+Shift+Tab` / `Ctrl+W` unchanged; `+ New session` opens the host picker
+  (palette host scope, as today). **Duplicate** and **Detach** (move to a new window) move
+  out of the tab into the toolbar, matching the frame.
+  - Verification: existing tab state-machine tests updated; jsdom contract for
+    `session_duplicate` / `window_open_session` wiring; `sessions` count in AppNav.
+- [ ] Session toolbar: `Connected` badge, `user@host:port`, folder path, `Split H`,
+  `Split V`, `Duplicate`, `Detach`, `More` (reconnect, close session, …).
+  - Verification: one jsdom test per action; every split/close shortcut still bound to the
+    same commands (`Mod+Shift+E/O/W`, `Mod+Alt+←/→`).
+- [ ] Pane chrome per the frames: header only on the focused pane (`host / …` label,
+  `ACTIVE PANE` marker, `cols × rows` from the fit addon), expand + close buttons only
+  (splits move to the toolbar), `rule 2px` divider, empty pane still offers the host list.
+  **Honest-data rule:** the label/footer may only show what the backend reports — host,
+  status, `cols × rows`, `UTF-8` and the input state are real; frame 2's `bash · /srv/atlas`
+  and `LF` are *not* derivable today (no shell/cwd in the session DTO), so they are omitted
+  until a backend field exists rather than faked. Tracked as a later backend item.
+  - Verification: jsdom tests for the pane header/footer; no invented strings in the source
+    (review + contract test).
+- [ ] Per-session footer (right): `Session actions`, `Reconnect`, `Close session`; status
+  bar left line: `<tab> · <state> [· n panes / 1 session] · <others>` plus "Connected N min
+  ago" derived from a frontend ready-timestamp (no backend change needed).
+  - Verification: jsdom tests for each status variant (ready/reconnecting/closed/failed).
+- [ ] Terminal lifetime per Doc B.02: persistent terminal registry
+  (`Map<sessionId, TerminalHandle>`) — route switches change **visibility only**; leaving
+  and returning to Sessions must not remount xterm, lose scrollback/selection/focus or touch
+  the PTY; `will-change` only during an action; output applied in batches (no per-chunk
+  reactive churn).
+  - Verification: element-identity test (mount → route away → route back → same xterm
+    element, no replay); the existing app-layer attach/replay E2E stays green.
+- [ ] Resize contract per Doc B.03: exactly one ResizeObserver owner, `requestAnimationFrame`
+  settle, coalesced sizes, `fit` once per settled size, direct commit when no layout
+  animation is running, divider drag updates every frame and settles on drag end; caret,
+  scrollback and focus survive every resize.
+  - Verification: unit test of the coalescing/settle helper; PTY `session_resize` fires once
+    per settle (existing resize behavior preserved); split-drag jsdom test.
+- [ ] Split hint banner (frame 3) with the real shortcut labels, shown only for a 2+-pane
+  tab; the `Host saved` toast lands above the panes.
+  - Verification: jsdom test for the banner condition.
+
+### R5 — Editors and settings as pages (frames 4-8)
+
+- [ ] Host editor becomes the full-page `host-edit` route (create + edit): breadcrumb
+  `HOSTS / <FOLDER> / <NAME>`, `01 CONNECTION` (name, username, address, port, inline
+  validation), `02 AUTHENTICATION` (Password ↔ Identity, password + `Show`, "Save in this
+  device's credential store" checkbox, "ask on connect" copy), `03 ORGANIZATION` (folder,
+  comment, favorite — **and tags**, which the frame omits but the product must keep), right
+  rail (`Unsaved changes`, `LOCAL CREDENTIAL` card, `CONNECTION PREVIEW` `user@host:port`,
+  identity/key hints), action bar `Cancel` / `Save host` / `Save & connect`; leaving with
+  unsaved changes asks first (Doc A.05).
+  - Verification: IPC contract shapes (`host_save`, `host_delete`, `secret_set`,
+    `identity_*`, dialog picker) unchanged; new tests for the preview string, validation
+    copy, unsaved-guard stay/discard, and the tag + key-file flows.
+- [ ] Folders page, three columns (frame 5): tree (All hosts / roots / children / Unfiled
+  with counts + the "one folder per host" footnote), center detail (breadcrumb, H1, host
+  cards with status + `Move ▾`, `Choose hosts`, `AVAILABLE TO MOVE` rows with
+  `Move here →`, the `ONE FOLDER, ALWAYS` note), right rail `EDIT FOLDER` (name, parent
+  select with cycle guard, `Cancel`/`Save folder`, and **Delete folder** with
+  `ContextConfirm` — kept from today's editor even though the frame does not show it),
+  `+ New folder` opens the rail blank with the current folder as parent.
+  - Verification: existing folder store tests + new parent-cycle and move tests; delete
+    semantics for the hosts of a removed folder unchanged.
+- [ ] Identities page (no frame → follows the Folders shell): list + rail editor — name,
+  comment, native key-file picker bind/unbind (`dialog:allow-open`), the bound path read
+  back from `identity_bindings`, fingerprint display, delete with confirm; key material is
+  never stored or shown as bytes.
+  - Verification: existing identity/path-validation tests + jsdom contract for
+    `identity_bind` / `identity_unbind` / `identity_delete`.
+- [ ] Sync page (no frame → same shell): server URL / email / password / device name
+  sign-in, status block (server, account, device, last sync, pending changes, conflicts),
+  `Sync now`, the conflict list with keep-local / take-remote, sign-out; offline and
+  `last_error` surfaced with the Doc A.05 offline copy.
+  - Verification: existing sync store tests + the sign-in argument contract test (shapes
+    unchanged); secrets still never leave the credential store.
+- [ ] Preferences page (frame 8): left column `TERMINAL / APPEARANCE` — font family, size,
+  line height, theme, the live appearance preview specimen, cursor style, scrollback — plus
+  `KEYBOARD SHORTCUTS` with macOS and Windows/Linux columns covering **every** command and
+  the existing change/reset recorder (the frame shows a 3-row specimen, the product keeps
+  the full remapping UI); right column `MOTION / ACCESSIBILITY` (Reduce motion
+  System/On/Off, High-visibility focus) and `NOTIFICATIONS / QUIET` (Routine notices, the
+  specimen toast + `Preview notice`, the quiet-feedback note); `Restore defaults` top right.
+  - Verification: new preference fields are **additive with serde defaults**
+    (`terminal.line_height`, `reduced_motion`, `focus_visibility`, `routine_notices`) in
+    `termru-core::Preferences` → old local JSON and old synced records load unchanged;
+    xterm receives `lineHeight`; the focus/reduced-motion flags drive the R1 tokens;
+    tests: defaults-from-old-JSON, round-trip, sync payload still secret-free.
+
+### R6 — Dialogs, state matrix, notifications (Doc A.05 + Doc C)
+
+- [ ] ConnectDialog + HostKeyDialog restyled to the spec: the host-key prompt shows
+  hostname, port and fingerprint (old **and** new when changed) with **only**
+  `Verify & connect` + `Cancel` — no skip, no auto-accept, no toast-only consent, no
+  auto-retry on a changed key (the backend default-deny stays authoritative); focus trap
+  and focus return; auth-failure copy offers `Edit credentials` + `Retry` and never loops
+  blindly.
+  - Verification: the existing default-deny prompt tests + new focus/label jsdom tests;
+    changed-key hard-warning rendering test.
+- [ ] State matrix implemented wherever Doc A.05 lists it: empty, loading, error, offline,
+  auth-failed, unsaved, disconnect (`Disconnected` + `Reconnect` in the same pane with the
+  scrollback preserved), delete (confirm, focus on `Cancel`).
+  - Verification: one jsdom test per applicable surface; the no-`window.confirm` grep test
+    from R2 stays green.
+- [ ] Notify facade (Doc C.04) in front of all notices: `notify({ key, kind, entityId?,
+  action? })` with a **whitelist of copy per key** (arbitrary terminal/IPC strings never
+  reach the notification library), dedup by `key + entityId`, bounded queue, `aria-live`
+  polite for routine notices and `role="alert"` for failures, 6000 ms default / sticky for
+  connection errors, `dismiss(id)` / `clear()`, action buttons reachable by keyboard without
+  autofocus, and **no secret material ever in a notice** (passwords, key material, tokens,
+  terminal buffer).
+  - Verification: tests for whitelist rejection, dedup, queue bound, roles, and a
+    "notice payload never contains secret material" test mirroring the logging audit.
+- [ ] Toaster presentation decision gate (Doc C.02/C.03/C.07 step 7): spike **Sileo**
+  (`sileo@0.1.6`, MIT, React ≥ 18 peer + `motion`) as one persistent React island mounted
+  from `onMount` with explicit `root.unmount()` cleanup on route change, **against** a
+  native Svelte toaster matching the visual specimen (radius 16, top-right, `top 124px /
+  right 24px`, light chrome). Decide with measured evidence: bundle delta
+  (react + react-dom + motion ≈ 45-60 KB gz), no focus steal from the terminal, teardown
+  correctness, reduced-motion path, maintenance surface. **Default unless the spike clearly
+  wins: the native Svelte toaster behind the same facade** (the facade makes the choice
+  reversible); the decision is written down as an ADR either way.
+  - Verification: route-change cleanup test, reduced-motion test, bundle-size note in
+    `docs/performance.md`.
+
+### R7 — Accessibility, keyboard, contrast
+
+- [ ] Focus and semantics: 2px accent ring + 2px offset everywhere (never color alone),
+  focus returns after deletes/dialogs, `aria-describedby` for label/description/error,
+  `aria-invalid` on failed validation, `title` + `aria-label` on every icon-only button
+  (closes the long-standing "icon tooltips" open item), tab semantics on AppNav and the
+  tab strip, status conveyed by color **and** text (`Connected` / `Offline` / `Error`),
+  password field offers masked + revealed states, no focus stolen from the terminal, no
+  secret in key/log/analytics/sync payload/toast.
+  - Verification: `axe-core` run in vitest against Hosts, Sessions, Host editor and
+    Preferences (zero serious/critical violations) + targeted focus tests.
+- [ ] Keyboard walkthrough parity: every current journey works without a mouse (palette,
+  splits, remapping, editors, confirms), no shortcut lost (registry + conflict tests
+  unchanged), `Tab` order follows the visual order of each page.
+  - Verification: written on-device checklist in `docs/` (this build machine has no window
+    manager — human pass required, listed in release-readiness).
+
+### R8 — Visual verification harness
+
+- [ ] Dev-only mock harness: fixture data + a fake session `Channel`, enabled only under
+  `import.meta.env.DEV` and a `?mock` query flag, so every route renders realistic content
+  in a plain browser; headless-Chrome screenshots at 1440×960 (and 760×1100 for the
+  collapse breakpoint, Doc A.03) captured for comparison against the frames.
+  - Verification: the hardening test asserts the mock module and fixture strings are
+    **absent from `dist/`** (dead-code eliminated in the production build) and no remote
+    URL appears anywhere.
+
+### R9 — Regression, performance, documentation
+
+- [ ] Full gates after every sub-phase and at the end: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`,
+  `cargo deny`, `npm run lint`, `npm run test`, `npm run build`; the UI↔IPC contract suite
+  updated for every touched surface; **no behavior change** in SSH, sync, cloud or the
+  store beyond the three listed deltas (recents `last_used_at`, additive preference
+  fields, window decoration/capability config).
+- [ ] Performance acceptance (Doc B.06) for what is measurable headlessly: hosts 10k
+  fixture paint/filter, route switch, split open, resize settle — no measured path over a
+  50 ms long task; results in `docs/performance.md`.
+- [ ] Documentation: CHANGELOG entry, `docs/limitations.md` (visual pass still needs a
+  human desktop; the Linux CSD deviation; shell/cwd labels deferred until the backend
+  reports them), `docs/security/dependency-review.md` (fontsource ± react/sileo), ADRs for
+  the shell/routing model and the notify/toaster decision, `docs/release-readiness.md`
+  delta, README/screenshots if captured.
+
+**Scope guardrails:** this phase must not touch the SSH engine, the sync protocol or the
+cloud API, the store schema (the recents change is a read-side DTO only), secret handling,
+or the CSP (only the additive window permissions). No new frameworks beyond the optional
+Sileo gate. The sidebar is not restyled — it is **replaced** by routed pages, which is the
+structural change the frames describe.
+
+**Architecture Concern** (reported proactively):
+
+**Problem:** the host list renders every row (`Sidebar` loops `hosts.grouped` with no
+windowing), while `docs/performance.md` claims the sidebar "only renders the visible part"
+— the code does not do that.
+
+**Why it matters:** 10 000 hosts ≈ tens of thousands of DOM nodes → slow first paint, janky
+search-as-you-type, growing memory.
+
+**Likely scale:** already measurable at ~1-2k hosts; painful by the 10k fixture the store
+suite uses.
+
+**Recommendation:** windowed rendering of the hosts table in R3 (fixed row height +
+overscan) and a correction of the performance document.
+
+**Priority:** Now — inside this phase.
+
+**Risks and mitigations:**
+
+1. Terminal remount regressions (highest functional risk) → element-identity test in R4 +
+   the existing attach/replay E2E.
+2. No visual verification on this machine → R8 harness with screenshots + a human pass
+   checklist in release-readiness.
+3. Per-platform titlebar behavior (Windows CSD / macOS overlay / Linux native) →
+   `cfg`-gated code, Linux keeps system decorations, each path flagged for on-device
+   verification.
+4. Internal IPC shape changes (`recent_list`, preferences) → contract tests updated in the
+   same commit; single artifact ships both sides.
+5. Sileo/React lifecycle and bundle cost → measured decision gate, facade keeps it
+   reversible.
+6. Preference/sync backward compatibility → additive serde defaults + old-JSON tests.
+
+**Execution order** (Doc C.07 adapted): R1 → R2 → R3 → R4 → R5 → R6 → R7 → R8 → R9,
+one commit per completed sub-phase, `TODO.md` updated and pushed with each step.
+
 ---
 
 ## Current status
