@@ -273,6 +273,15 @@ Legend: `[ ]` pending · `[x]` verified done · `[!]` blocked (details inline)
 
 ## Phase 15 — Publication (GitHub Releases + ghcr.io)
 
+- [x] `​`v0.1.1` is the latest release (2026-10-23): a re-pack of the
+  fixed `v0.1.0` so the fixed assets are unmistakable — and the
+  documentation release, because the install commands in
+  `docs/install.md` and the README used the lower-case file names
+  while the published assets are `Termru_*` with a capital T (GitHub
+  download URLs are case-sensitive: they returned HTTP 404). The file
+  names and the version now match the release they document, and the
+  changelog lists the startup-crash fix under `0.1.0`.
+
 
 - [x] Publish real `v0.1.0`: published on 2026-10-22. The tag `v0.1.0`
   passed the `verify` job (semver + manifest match), the four packages
