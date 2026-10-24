@@ -703,12 +703,14 @@ one commit per completed sub-phase, `TODO.md` updated and pushed with each step.
 in-app confirms) are done and pushed. Their verifications are recorded in the phase above.
 
 **CI failure fixed (runs #35/#36 were supply-chain, not code).** Every build/test job was
-green; `cargo deny` failed on the newly published advisory **RUSTSEC-2026-0385**
-(`ctutils` ≤0.4.3, non-constant-time mask generation — reached via `russh` → `ed25519-dalek`
-→ `aes-gcm`). Fixed with a minimal lockfile bump `ctutils 0.4.3 → 0.4.4` (the patched
-release; no manifest change was needed). Verified locally: `cargo deny check` → advisories,
-bans, licenses, sources all ok; `cargo test -p termru-core -p termru-ssh` green on the
-updated lock.
+green; `cargo deny` failed on two advisories from a RustCrypto disclosure wave, both reached
+via `russh` → `ed25519-dalek`/`rsa` → `aes-gcm`/`crypto-bigint`: **RUSTSEC-2026-0385**
+(`ctutils` ≤0.4.3) and **RUSTSEC-2026-0387** (`crypto-bigint` 0.7.5). Fixed with minimal
+lockfile bumps `ctutils → 0.4.5` and `crypto-bigint → 0.7.6` (both patched releases; no
+manifest change needed). Verified locally: `cargo deny check` → advisories, bans, licenses,
+sources all ok; `cargo test -p termru-ssh` (26 unit + 17 sshd integration) green on the
+updated lock; `cargo clippy -p termru-ssh -p termru-desktop --all-targets -D warnings`
+clean.
 
 **0.1.0 is ready to be tagged** (the tag itself needs the push credentials, which this
 environment does not have). 88 of the 99 items are done, 4 are blocked by the environment
