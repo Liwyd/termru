@@ -27,6 +27,10 @@ pub struct WorkspaceDoc {
     pub windows: Vec<WindowLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_window: Option<WindowId>,
+    /// The page the user was on (`hosts`, `sessions`, …). Additive: a
+    /// document written before routing existed has no value and loads fine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_route: Option<String>,
 }
 
 impl Default for WorkspaceDoc {
@@ -35,9 +39,22 @@ impl Default for WorkspaceDoc {
             version: WORKSPACE_DOC_VERSION,
             windows: Vec::new(),
             active_window: None,
+            last_route: None,
         }
     }
 }
+
+/// The routes the workspace document may name. Anything else is rejected:
+/// the document may arrive from a corrupted file or a future client.
+pub const KNOWN_ROUTES: [&str; 7] = [
+    "hosts",
+    "sessions",
+    "folders",
+    "identities",
+    "sync",
+    "preferences",
+    "host-edit",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,6 +135,11 @@ impl WorkspaceDoc {
             && !self.windows.iter().any(|w| w.id == active)
         {
             return Err(CoreError::validation("active_window does not exist"));
+        }
+        if let Some(route) = &self.last_route
+            && !KNOWN_ROUTES.contains(&route.as_str())
+        {
+            return Err(CoreError::validation("unknown last_route"));
         }
         for window in &self.windows {
             if window.tabs.len() > MAX_TABS_PER_WINDOW {
@@ -257,8 +279,25 @@ mod tests {
     }
 
     #[test]
-    fn roundtrips_through_json() {
+    fn accepts_known_last_route_and_rejects_unknown() {
         let mut doc = WorkspaceDoc::default();
+        for route in KNOWN_ROUTES {
+            doc.last_route = Some(route.to_string());
+            doc.validate().unwrap();
+        }
+        doc.last_route = Some("nonsense".to_string());
+        assert!(doc.validate().is_err());
+        // A document without a route (written before routing existed) loads.
+        doc.last_route = None;
+        doc.validate().unwrap();
+    }
+
+    #[test]
+    fn roundtrips_through_json() {
+        let mut doc = WorkspaceDoc {
+            last_route: Some("sessions".to_string()),
+            ..WorkspaceDoc::default()
+        };
         let tab = TabLayout {
             id: TabId::new(),
             title: Some("web".to_string()),

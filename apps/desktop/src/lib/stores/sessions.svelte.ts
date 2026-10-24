@@ -12,6 +12,7 @@ import {
   type TreeNode,
 } from '../pane-tree';
 import { errorMessage, hosts } from './hosts.svelte';
+import { route } from './route.svelte';
 import { toasts } from './toasts.svelte';
 import type { Host, SessionSecrets, SessionStatus, SessionUpdate, WorkspaceDoc } from '../types';
 
@@ -389,6 +390,9 @@ export class SessionStore {
         },
       ],
       active_window: windowId,
+      // Additive field: the page the user was on (documents from before
+      // routing simply lack it).
+      last_route: route.route,
     };
   }
 
@@ -403,6 +407,8 @@ export class SessionStore {
     } catch {
       return;
     }
+    // Restore the page the user was on (the URL hash wins on a dev reload).
+    route.restore(doc?.last_route);
     const windowLayout = doc?.windows?.[0];
     if (!windowLayout || windowLayout.tabs.length === 0) return;
 
@@ -437,9 +443,10 @@ export class SessionStore {
         root,
       });
     }
-    if (restored.length === 0) return;
-    this.tabs = restored;
-    this.activeId = restored[0].id;
+    if (restored.length > 0) {
+      this.tabs = restored;
+      this.activeId = restored[0].id;
+    }
   }
 
   /**

@@ -1,41 +1,37 @@
 <script lang="ts">
   import { hosts } from '../stores/hosts.svelte';
-  import { sessions } from '../stores/sessions.svelte';
-  import { sync } from '../stores/sync.svelte';
+  import { route } from '../stores/route.svelte';
   import { toasts } from '../stores/toasts.svelte';
+  import ContextConfirm from './ContextConfirm.svelte';
   import HostCard from './HostCard.svelte';
   import type { Host } from '../types';
 
-  let {
-    onconnect,
-    onopensync,
-    onopenidentities,
-    onopenfolders,
-  }: {
-    onconnect: (host: Host) => void;
-    onopensync: () => void;
-    onopenidentities: () => void;
-    onopenfolders: () => void;
-  } = $props();
+  let { onconnect }: { onconnect: (host: Host) => void } = $props();
+
+  let confirmOpen = $state(false);
+  let pendingDelete = $state<Host | null>(null);
 
   function edit(host: Host | null): void {
     hosts.editing = host;
     hosts.editorOpen = true;
+    route.edit(host);
   }
 
-  async function remove(host: Host): Promise<void> {
-    if (!window.confirm(`Delete host "${host.name}"?`)) return;
+  function remove(host: Host): void {
+    pendingDelete = host;
+    confirmOpen = true;
+  }
+
+  async function confirmedDelete(): Promise<void> {
+    const host = pendingDelete;
+    pendingDelete = null;
+    if (!host) return;
     await hosts.remove(host.id);
     toasts.success(`Deleted ${host.name}`);
   }
 </script>
 
-<aside class="sidebar">
-  <header>
-    <h2>Hosts</h2>
-    <button type="button" class="primary" onclick={() => edit(null)}>New</button>
-  </header>
-
+<div class="hostlist">
   <input
     type="search"
     placeholder="Search hosts"
@@ -44,7 +40,7 @@
   />
 
   {#if hosts.loading}
-    <p class="hint">Loading…</p>
+    <p class="hint" aria-busy="true">Loading…</p>
   {:else if hosts.error}
     <p class="hint error">{hosts.error}</p>
   {:else if hosts.visible.length === 0}
@@ -87,53 +83,21 @@
       </ul>
     </section>
   {/if}
+</div>
 
-  <footer>
-    <button type="button" class="identities" onclick={onopenfolders}>
-      <span>Folders</span>
-    </button>
-    <button type="button" class="identities" onclick={onopenidentities}>
-      <span>Identities</span>
-    </button>
-    <button type="button" class="sync" onclick={onopensync}>
-      <span>Sync</span>
-      {#if sync.conflictCount > 0}
-        <span class="badge danger" title="unresolved conflicts">{sync.conflictCount}</span>
-      {:else if sync.pending > 0}
-        <span class="badge" title="changes waiting to be pushed">{sync.pending}</span>
-      {:else if sync.signedIn}
-        <span class="dot" title="signed in"></span>
-      {/if}
-    </button>
-    {#if sessions.tabs.length > 0}
-      <span>{sessions.tabs.length} open session(s)</span>
-    {/if}
-  </footer>
-</aside>
+<ContextConfirm
+  bind:open={confirmOpen}
+  title={pendingDelete ? `Delete host “${pendingDelete.name}”?` : 'Delete host?'}
+  body="The host profile is removed from this device. Running sessions are not closed."
+  onconfirm={() => void confirmedDelete()}
+/>
 
 <style>
-  .sidebar {
+  .hostlist {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-    width: 20rem;
-    min-width: 16rem;
-    padding: 0.85rem;
-    border-right: 1px solid var(--termru-border);
-    background: var(--termru-surface);
-    overflow-y: auto;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 0.95rem;
-    font-weight: 600;
+    min-width: 0;
   }
 
   input[type='search'] {
@@ -216,55 +180,5 @@
 
   .hint.error {
     color: var(--termru-danger);
-  }
-
-  footer {
-    margin-top: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.75rem;
-    color: var(--termru-muted);
-  }
-
-  .sync {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    width: 100%;
-    padding: 0.3rem 0.4rem;
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius);
-    background: var(--termru-bg);
-    color: var(--termru-fg);
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-
-  .sync:hover {
-    border-color: var(--termru-accent);
-  }
-
-  .badge {
-    margin-left: auto;
-    padding: 0 0.35rem;
-    border-radius: 999px;
-    background: var(--termru-accent);
-    color: var(--termru-bg);
-    font-size: 0.68rem;
-    font-weight: 600;
-  }
-
-  .badge.danger {
-    background: var(--termru-danger);
-    color: var(--termru-on-danger);
-  }
-
-  .dot {
-    margin-left: auto;
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--termru-success);
   }
 </style>

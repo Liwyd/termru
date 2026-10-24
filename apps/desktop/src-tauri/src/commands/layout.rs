@@ -76,6 +76,7 @@ mod tests {
                 bounds: None,
             }],
             active_window: None,
+            last_route: None,
         }
     }
 

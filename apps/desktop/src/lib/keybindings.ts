@@ -29,12 +29,18 @@ export type CommandId =
   | 'pane.splitDown'
   | 'pane.close'
   | 'pane.next'
-  | 'pane.previous';
+  | 'pane.previous'
+  | 'route.hosts'
+  | 'route.sessions'
+  | 'route.folders'
+  | 'route.identities'
+  | 'route.sync'
+  | 'route.preferences';
 
 export interface Command {
   id: CommandId;
   title: string;
-  /** Default accelerator, in `Mod+Shift+K` notation. */
+  /** Default accelerator, in `Mod+Shift+K` notation. Empty = unbound. */
   accelerator: string;
   /** Grouping in the palette. */
   group: string;
@@ -120,17 +126,28 @@ export const COMMANDS: Command[] = [
   { id: 'pane.close', title: 'Close the pane', accelerator: 'Mod+Shift+W', group: 'Panes' },
   { id: 'pane.next', title: 'Next pane', accelerator: 'Mod+Alt+ArrowRight', group: 'Panes' },
   { id: 'pane.previous', title: 'Previous pane', accelerator: 'Mod+Alt+ArrowLeft', group: 'Panes' },
+  // Route commands are reachable from the palette; they carry no default
+  // accelerator so they never collide with page-specific keys. The nav and
+  // `settings.open` / `sync.open` cover the keyboard paths.
+  { id: 'route.hosts', title: 'Go to Hosts', accelerator: '', group: 'Navigate' },
+  { id: 'route.sessions', title: 'Go to Sessions', accelerator: '', group: 'Navigate' },
+  { id: 'route.folders', title: 'Go to Folders', accelerator: '', group: 'Navigate' },
+  { id: 'route.identities', title: 'Go to Identities', accelerator: '', group: 'Navigate' },
+  { id: 'route.sync', title: 'Go to Sync', accelerator: '', group: 'Navigate' },
+  { id: 'route.preferences', title: 'Go to Preferences', accelerator: '', group: 'Navigate' },
 ];
 
 /**
  * Finds conflicting bindings: the same accelerator bound to two different
- * commands. Returns the offending pairs.
+ * commands. Returns the offending pairs. Unbound commands (empty
+ * accelerator) never conflict.
  */
 export function findConflicts(
   bindings: Keybinding[],
 ): { accelerator: string; commands: string[] }[] {
   const byAccelerator = new Map<string, Set<string>>();
   for (const binding of bindings) {
+    if (!binding.accelerator.trim()) continue;
     const key = normalizeAccelerator(binding.accelerator);
     const commands = byAccelerator.get(key) ?? new Set<string>();
     commands.add(binding.commandId);
@@ -158,10 +175,15 @@ export function defaultBindings(): Keybinding[] {
  *
  * An override for a command that does not exist is ignored — the map is
  * synced between devices, and a device may know more commands than another.
+ * Unbound commands (empty accelerator) are kept out of the list: they are
+ * palette-only and must never capture a key.
  */
 export function effectiveBindings(overrides: Record<string, string> = {}): Keybinding[] {
   const known = new Set(COMMANDS.map((command) => command.id));
-  return COMMANDS.map((command) => ({
+  return COMMANDS.filter((command) => {
+    const accelerator = overrides[command.id] ?? command.accelerator;
+    return known.has(command.id) && accelerator.trim().length > 0;
+  }).map((command) => ({
     commandId: command.id,
     accelerator:
       known.has(command.id) && overrides[command.id] ? overrides[command.id] : command.accelerator,
@@ -187,9 +209,11 @@ export function conflictFor(
   bindings: Keybinding[],
   except?: CommandId,
 ): CommandId | null {
+  if (!accelerator.trim()) return null;
   const wanted = normalizeAccelerator(accelerator);
   for (const binding of bindings) {
     if (binding.commandId === except) continue;
+    if (!binding.accelerator.trim()) continue;
     if (normalizeAccelerator(binding.accelerator) === wanted) return binding.commandId;
   }
   return null;

@@ -80,6 +80,7 @@ fn build() -> tauri::Result<tauri::App> {
             let store = termru_store::Store::open(&data_dir.join("termru.sqlite"))
                 .map_err(Box::<dyn std::error::Error>::from)?;
             app.manage(AppState::new(store, handle, data_dir));
+            apply_window_decorations(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -132,6 +133,30 @@ fn build() -> tauri::Result<tauri::App> {
 /// Keeps the non-blocking writer's flush guard alive for the process
 /// lifetime (dropping it would stop writing to the log file).
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+
+/// The window chrome differs per platform (Doc A.01): Linux keeps the
+/// native decorations (the in-app titlebar is a drag region + breadcrumb
+/// only — documented deviation from the mockup), Windows turns decorations
+/// off for the custom minimize/maximize/close controls, and macOS uses the
+/// overlay titlebar for the native traffic lights (also set in
+/// `tauri.macos.conf.json`, which is the only place `hiddenTitle` can be
+/// configured).
+fn apply_window_decorations(app: &tauri::App) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_decorations(false);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = app;
+}
 
 /// Logs to stderr **and** to a daily rotating file in the app data dir.
 /// Secrets never reach the log: credential values are never formatted.

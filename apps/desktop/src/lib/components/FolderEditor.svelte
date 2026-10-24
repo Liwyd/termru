@@ -3,6 +3,7 @@
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { Group } from '../types';
+  import ContextConfirm from './ContextConfirm.svelte';
 
   let { open: visible = $bindable(false) }: { open?: boolean } = $props();
 
@@ -10,6 +11,8 @@
   let parentId = $state('');
   let error = $state<string | null>(null);
   let busy = $state(false);
+  let confirmOpen = $state(false);
+  let pendingDelete = $state<Group | null>(null);
 
   function close(): void {
     visible = false;
@@ -61,9 +64,15 @@
     }
   }
 
-  async function remove(group: Group): Promise<void> {
-    if (!window.confirm(`Delete the folder "${group.name}"? The hosts stay, without a folder.`))
-      return;
+  function remove(group: Group): void {
+    pendingDelete = group;
+    confirmOpen = true;
+  }
+
+  async function confirmedDelete(): Promise<void> {
+    const group = pendingDelete;
+    pendingDelete = null;
+    if (!group) return;
     try {
       await api.groupDelete(group.id);
       await hosts.load();
@@ -141,6 +150,13 @@
     </div>
   </div>
 {/if}
+
+<ContextConfirm
+  bind:open={confirmOpen}
+  title={pendingDelete ? `Delete the folder “${pendingDelete.name}”?` : 'Delete folder?'}
+  body="The hosts stay, without a folder."
+  onconfirm={() => void confirmedDelete()}
+/>
 
 <style>
   .backdrop {

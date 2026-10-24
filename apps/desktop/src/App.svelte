@@ -10,30 +10,27 @@
   } from './lib/keybindings';
   import { errorMessage, hosts } from './lib/stores/hosts.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
+  import { route } from './lib/stores/route.svelte';
   import { sessions } from './lib/stores/sessions.svelte';
   import { shortcuts } from './lib/stores/shortcuts.svelte';
   import { sync } from './lib/stores/sync.svelte';
   import { toasts } from './lib/stores/toasts.svelte';
+  import AppShell from './lib/components/AppShell.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
-  import HostEditor from './lib/components/HostEditor.svelte';
-  import FolderEditor from './lib/components/FolderEditor.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
-  import IdentityEditor from './lib/components/IdentityEditor.svelte';
-  import SettingsPanel from './lib/components/SettingsPanel.svelte';
-  import Sidebar from './lib/components/Sidebar.svelte';
-  import SyncPanel from './lib/components/SyncPanel.svelte';
-  import TabBar from './lib/components/TabBar.svelte';
-  import SplitView from './lib/components/SplitView.svelte';
   import Toasts from './lib/components/Toasts.svelte';
+  import FoldersPage from './lib/pages/FoldersPage.svelte';
+  import HostEditPage from './lib/pages/HostEditPage.svelte';
+  import HostsPage from './lib/pages/HostsPage.svelte';
+  import IdentitiesPage from './lib/pages/IdentitiesPage.svelte';
+  import PreferencesPage from './lib/pages/PreferencesPage.svelte';
+  import SessionsPage from './lib/pages/SessionsPage.svelte';
+  import SyncPage from './lib/pages/SyncPage.svelte';
   import type { Host, SessionSecrets } from './lib/types';
 
   let pendingHost = $state<Host | null>(null);
   let pendingSecretStored = $state(false);
-  let syncOpen = $state(false);
-  let settingsOpen = $state(false);
-  let identitiesOpen = $state(false);
-  let foldersOpen = $state(false);
 
   // Apply the preferred theme to the document (design tokens follow it).
   // The motion and focus preferences drive the token overrides of Doc B.05
@@ -45,9 +42,14 @@
     document.documentElement.dataset.focusVisibility = prefs.prefs.focus_visibility ? 'on' : '';
   });
 
+  // Closing the host editor (save or cancel) leaves the host-edit route.
+  $effect(() => {
+    if (route.route === 'host-edit' && !hosts.editorOpen) route.go('hosts');
+  });
+
   onMount(() => {
     void (async () => {
-      // The preferences come first: the settings dialog copies them when it
+      // The preferences come first: the settings page copies them when it
       // opens, and a slow load would show the defaults.
       await prefs.load();
       await hosts.load();
@@ -105,8 +107,10 @@
       case 'host.new':
         hosts.editorOpen = true;
         hosts.editing = null;
+        route.edit(null);
         break;
       case 'host.search':
+        if (route.route !== 'hosts') route.go('hosts');
         document.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
         break;
       case 'view.toggleTheme': {
@@ -131,11 +135,28 @@
         break;
       }
       case 'sync.open':
-        syncOpen = true;
-        void sync.load();
+        route.go('sync');
         break;
       case 'settings.open':
-        settingsOpen = true;
+        route.go('preferences');
+        break;
+      case 'route.hosts':
+        route.go('hosts');
+        break;
+      case 'route.sessions':
+        route.go('sessions');
+        break;
+      case 'route.folders':
+        route.go('folders');
+        break;
+      case 'route.identities':
+        route.go('identities');
+        break;
+      case 'route.sync':
+        route.go('sync');
+        break;
+      case 'route.preferences':
+        route.go('preferences');
         break;
       case 'pane.splitRight':
         sessions.splitActive('columns');
@@ -192,6 +213,7 @@
         return;
       }
       sessions.attachTab(sessionId, host);
+      route.go('sessions');
     } catch (err) {
       toasts.error(errorMessage(err));
     }
@@ -215,40 +237,28 @@
   function openTab(host: Host, secrets: SessionSecrets, remember = false): void {
     sessions.open(host, secrets, remember);
     pendingHost = null;
+    // The session is the point of the app: show it right away.
+    route.go('sessions');
   }
 </script>
 
-<div class="app">
-  <Sidebar
-    onconnect={requestConnect}
-    onopensync={() => (syncOpen = true)}
-    onopenidentities={() => (identitiesOpen = true)}
-    onopenfolders={() => (foldersOpen = true)}
-  />
-
-  <main>
-    <div class="tabbar" role="tablist" aria-label="Open sessions">
-      {#each sessions.tabs as tab (tab.id)}
-        <TabBar {tab} active={tab.id === sessions.activeId} />
-      {/each}
-    </div>
-
-    <div class="content">
-      {#if sessions.tabs.length === 0}
-        <div class="empty">
-          <h1>Termru</h1>
-          <p>Select a host on the left to start a terminal session.</p>
-        </div>
-      {:else}
-        {#each sessions.tabs as tab (tab.id)}
-          <div class="pane" class:hidden={tab.id !== sessions.activeId}>
-            <SplitView node={tab.root} {tab} />
-          </div>
-        {/each}
-      {/if}
-    </div>
-  </main>
-</div>
+<AppShell>
+  {#if route.route === 'hosts'}
+    <HostsPage onconnect={(host) => void requestConnect(host)} />
+  {:else if route.route === 'sessions'}
+    <SessionsPage />
+  {:else if route.route === 'folders'}
+    <FoldersPage />
+  {:else if route.route === 'identities'}
+    <IdentitiesPage />
+  {:else if route.route === 'sync'}
+    <SyncPage />
+  {:else if route.route === 'preferences'}
+    <PreferencesPage />
+  {:else if route.route === 'host-edit'}
+    <HostEditPage />
+  {/if}
+</AppShell>
 
 {#if pendingHost}
   <ConnectDialog
@@ -261,12 +271,7 @@
   />
 {/if}
 
-<HostEditor onmanageidentities={() => (identitiesOpen = true)} />
 <HostKeyDialog />
-<FolderEditor bind:open={foldersOpen} />
-<IdentityEditor bind:open={identitiesOpen} />
-<SyncPanel bind:open={syncOpen} />
-<SettingsPanel bind:open={settingsOpen} />
 <CommandPalette />
 <Toasts />
 
@@ -275,67 +280,6 @@
 {/if}
 
 <style>
-  .app {
-    display: flex;
-    height: 100%;
-    min-height: 0;
-  }
-
-  main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .tabbar {
-    display: flex;
-    align-items: flex-end;
-    gap: 0.2rem;
-    min-height: 2rem;
-    padding: 0.2rem 0.4rem 0;
-    border-bottom: 1px solid var(--termru-border);
-    background: var(--termru-surface);
-    overflow-x: auto;
-  }
-
-  .content {
-    flex: 1;
-    min-height: 0;
-    position: relative;
-  }
-
-  .pane {
-    position: absolute;
-    inset: 0;
-  }
-
-  .pane.hidden {
-    display: none;
-  }
-
-  .empty {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    color: var(--termru-muted);
-  }
-
-  .empty h1 {
-    margin: 0;
-    font-size: 1.3rem;
-    color: var(--termru-fg);
-  }
-
-  .empty p {
-    margin: 0;
-    font-size: 0.85rem;
-  }
-
   .sr-only {
     position: absolute;
     width: 1px;

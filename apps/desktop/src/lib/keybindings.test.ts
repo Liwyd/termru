@@ -113,8 +113,18 @@ describe('user overrides', () => {
 
   it('ignore an override for an unknown command', () => {
     const bindings = effectiveBindings({ 'does.not.exist': 'Mod+Q' });
-    expect(bindings).toHaveLength(COMMANDS.length);
+    expect(bindings).toHaveLength(COMMANDS.filter((c) => c.accelerator).length);
     expect(bindings.some((binding) => binding.accelerator === 'Mod+Q')).toBe(false);
+  });
+
+  it('leave unbound commands (empty accelerator) out of the key handlers', () => {
+    const bindings = effectiveBindings();
+    // The route.* commands are palette-only: they must never capture a key.
+    expect(bindings.some((binding) => binding.commandId.startsWith('route.'))).toBe(false);
+    // Even a user override cannot make an unbound command grab keys by
+    // accident — an empty default stays out unless the user binds it.
+    const rebound = effectiveBindings({ 'route.hosts': 'Mod+Shift+H' });
+    expect(rebound.some((binding) => binding.commandId === 'route.hosts')).toBe(true);
   });
 
   it('report the accelerator of a command', () => {

@@ -157,6 +157,8 @@ export interface WorkspaceDoc {
   version: number;
   windows: WindowLayout[];
   active_window?: string | null;
+  /** The last page the user was on; absent in documents from before routing. */
+  last_route?: string | null;
 }
 
 /** The kind of a synced record (mirrors `termru_core::sync::RecordKind`). */

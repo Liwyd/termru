@@ -11,6 +11,7 @@
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
+import { route } from '../stores/route.svelte';
 import type { SessionUpdate } from '../types';
 
 interface InvokeCall {
@@ -193,6 +194,10 @@ describe('desktop UI ↔ Tauri contract', () => {
 
   beforeEach(() => {
     invokeCalls.length = 0;
+    // The route store is a module singleton: every test starts on Hosts.
+    route.route = 'hosts';
+    route.editHost = null;
+    window.location.hash = '#hosts';
     identities = [
       {
         id: 'identity-1',
@@ -375,8 +380,16 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('web-1');
     });
 
-    setTimeout(() => console.log('RAW TIMER FIRED', Date.now()), 100);
-    setTimeout(() => console.log('RAW TIMER 750 FIRED', Date.now()), 750);
+    // The panes live on the Sessions route now. The nav label carries the
+    // open-tab count badge, so the match is loose on purpose.
+    const sessionsNav = Array.from(target.querySelectorAll('button')).find((candidate) =>
+      candidate.textContent?.includes('Sessions'),
+    );
+    expect(sessionsNav).toBeTruthy();
+    click(sessionsNav as HTMLElement);
+    await vi.waitFor(() => {
+      expect(target.querySelector('[role="tablist"]')).not.toBeNull();
+    });
 
     // The split command of the registry.
     window.dispatchEvent(

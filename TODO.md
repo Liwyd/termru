@@ -409,35 +409,44 @@ exactly as the shell"). Frames: `1` Hosts · `2` Sessions single pane · `3` Ses
 
 ### R2 — Shell: titlebar, navigation, status bar, routing
 
-- [ ] Route store (`lib/stores/route.svelte.ts`): `hosts | sessions | folders | identities
+- [x] Route store (`lib/stores/route.svelte.ts`): `hosts | sessions | folders | identities
   | sync | preferences | host-edit`, hash-synced (survives dev reloads), last route persisted
   in the workspace doc as an **additive** field (old documents without it still load).
   Commands `route.*` join the registry + palette; `settings.open` (Mod+,) and `sync.open`
   (Mod+Shift+S) become route jumps so every existing binding keeps working. The six routes
   map to pages; dialogs stay dialogs (connect, host key, confirms).
-  - Verification: unit tests for transitions, hash round-trip and old-doc restore; registry
-    conflict tests still green; palette reaches every route.
-- [ ] AppShell: 36 px titlebar (`termru / desktop` breadcrumb + `data-tauri-drag-region`),
+  - Verification: unit tests for transitions, hash round-trip and old-doc restore
+    (`route.test.ts`); registry conflict tests still green — unbound (empty-accelerator)
+    commands are excluded from `effectiveBindings` and never conflict; palette reaches every
+    route via `route.*`; Rust `WorkspaceDoc.last_route` validated against a known-route
+    allowlist (`accepts_known_last_route_and_rejects_unknown`).
+- [x] AppShell: 36 px titlebar (`termru / desktop` breadcrumb + `data-tauri-drag-region`),
   64 px AppNav (logo, Hosts, Sessions ⟨count⟩, Folders, Identities, Sync, Preferences —
   active = bold + underline, never color alone — and the right-hand "n sessions connected"),
   route outlet, StatusBar (left contextual line per route, right `SSH · Local workspace` +
   `⌘ / Ctrl K Quick switch`).
-  - Verification: jsdom contract tests for nav items, counts and the per-route status line.
-- [ ] Window controls per platform (Doc A.01): macOS = `titleBarStyle: Overlay` + hidden
+  - Verification: jsdom contract tests for nav items, counts and the per-route status line
+    (`shell-contract.test.ts`); the app-contract suite updated for the routed shell (route
+    singleton reset per test, Sessions nav for the split test); opening a session jumps to
+    the Sessions route; Sidebar replaced by routed pages (`Sidebar.svelte` removed,
+    `HostList.svelte` extracted onto the Hosts page).
+- [x] Window controls per platform (Doc A.01): macOS = `titleBarStyle: Overlay` + hidden
   title + inset for the native traffic lights; Windows = `decorations: false` + custom
   minimize/maximize/close + drag region; Linux = **native decorations kept** (the 36 px bar
   is drag region + breadcrumb only) — a deliberate, documented deviation from the mockup's
   Windows-style buttons, because shipping untestable CSD on the primary build platform is
   the riskier choice; revisitable after an on-device pass.
   - Verification: capability extended least-privilege (`core:window:allow-minimize`,
-    `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` — only after confirming
-    they are not already in `core:window:default`); Rust setup applies decorations per
-    `cfg(target_os)`; `cargo test -p termru-desktop` green.
-- [ ] `ContextConfirm.svelte` replaces every `window.confirm` (delete host/folder/identity)
+    `allow-toggle-maximize`, `allow-close`, `allow-start-dragging` — confirmed **not** in
+    `core:window:default` via the generated ACL manifest); Rust setup applies decorations per
+    `cfg(target_os)` (+ `tauri.macos.conf.json` / `tauri.windows.conf.json` for the
+    builder-only options); `cargo test -p termru-desktop` green.
+- [x] `ContextConfirm.svelte` replaces every `window.confirm` (delete host/folder/identity)
   per Doc A.05: title, body, `Cancel` focused initially, destructive confirm, focus returns
   to the trigger, Escape cancels, no typed confirmation.
-  - Verification: jsdom test for focus + escape; a grep test proves no `window.confirm` /
-    `alert(` remains in `src/`.
+  - Verification: jsdom test for focus + escape (`shell-contract.test.ts`); a source-scan
+    test (`no-native-dialogs.test.ts`) proves no `window.confirm` / `alert(` remains in
+    `src/`.
 
 ### R3 — Hosts page (frame 1)
 
@@ -689,6 +698,17 @@ one commit per completed sub-phase, `TODO.md` updated and pushed with each step.
 ---
 
 ## Current status
+
+**Redesign phase (19) in progress:** R1 (tokens) and R2 (shell, routing, window controls,
+in-app confirms) are done and pushed. Their verifications are recorded in the phase above.
+
+**CI failure fixed (runs #35/#36 were supply-chain, not code).** Every build/test job was
+green; `cargo deny` failed on the newly published advisory **RUSTSEC-2026-0385**
+(`ctutils` ≤0.4.3, non-constant-time mask generation — reached via `russh` → `ed25519-dalek`
+→ `aes-gcm`). Fixed with a minimal lockfile bump `ctutils 0.4.3 → 0.4.4` (the patched
+release; no manifest change was needed). Verified locally: `cargo deny check` → advisories,
+bans, licenses, sources all ok; `cargo test -p termru-core -p termru-ssh` green on the
+updated lock.
 
 **0.1.0 is ready to be tagged** (the tag itself needs the push credentials, which this
 environment does not have). 88 of the 99 items are done, 4 are blocked by the environment
