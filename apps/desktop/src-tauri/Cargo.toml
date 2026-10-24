@@ -38,7 +38,7 @@ termru-core = { workspace = true }
 termru-store = { workspace = true }
 termru-ssh = { workspace = true }
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 # HTTP client for the cloud sync API. The rustls backend with the native
 # trust store: a self-hosted server with a private certificate works, and no
 # OpenSSL or cmake is needed to build it.
