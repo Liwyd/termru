@@ -231,7 +231,21 @@
     } catch {
       pendingSecretStored = false;
     }
+    // The hosts table shows the same fact in its Authentication column.
+    if (host.auth.type === 'password') hosts.markPasswordStored(host.id, pendingSecretStored);
     pendingHost = host;
+  }
+
+  /** The "Open" row action: jumps to the running session of a host. */
+  function openHost(host: Host): void {
+    for (const tab of sessions.tabs) {
+      const pane = tab.panes.find((entry) => entry.host?.id === host.id);
+      if (pane) {
+        sessions.focusPane(pane);
+        break;
+      }
+    }
+    route.go('sessions');
   }
 
   function openTab(host: Host, secrets: SessionSecrets, remember = false): void {
@@ -244,7 +258,7 @@
 
 <AppShell>
   {#if route.route === 'hosts'}
-    <HostsPage onconnect={(host) => void requestConnect(host)} />
+    <HostsPage onconnect={(host) => void requestConnect(host)} onopen={openHost} />
   {:else if route.route === 'sessions'}
     <SessionsPage />
   {:else if route.route === 'folders'}

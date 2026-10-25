@@ -15,13 +15,22 @@ pub struct Recents<'a> {
 
 const MAX_RECENTS: usize = 50;
 
+/// A recently-used host together with its last connection time (ms since
+/// the epoch), which the hosts table shows in its "Last session" column.
+#[derive(Debug, Clone)]
+pub struct RecentHost {
+    pub host: Host,
+    pub last_used_at: i64,
+}
+
 fn row_recent(row: &Row<'_>) -> rusqlite::Result<(Host, i64)> {
     Ok((super::hosts::row_to_host(row)?, row.get(17)?))
 }
 
 impl Recents<'_> {
-    /// Most recently used hosts (visible only), limited to [`MAX_RECENTS`].
-    pub fn list(&self) -> Result<Vec<Host>, StoreError> {
+    /// Most recently used hosts (visible only), limited to [`MAX_RECENTS`],
+    /// each with the time it was last connected (newest first).
+    pub fn list(&self) -> Result<Vec<RecentHost>, StoreError> {
         self.store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(&format!(
@@ -32,16 +41,18 @@ impl Recents<'_> {
                     cols = super::hosts::HOST_COLUMNS,
                 ))
                 .map_err(StoreError::Sqlite)?;
-            let mut hosts = stmt
+            let entries = stmt
                 .query_map([], row_recent)
                 .map_err(StoreError::Sqlite)?
                 .collect::<Result<Vec<(Host, i64)>, _>>()
-                .map_err(StoreError::Sqlite)?
-                .into_iter()
-                .map(|(h, _)| h)
-                .collect::<Vec<_>>();
+                .map_err(StoreError::Sqlite)?;
+            let (mut hosts, times): (Vec<Host>, Vec<i64>) = entries.into_iter().unzip();
             super::hosts::fetch_tags(conn, &mut hosts)?;
-            Ok(hosts)
+            Ok(hosts
+                .into_iter()
+                .zip(times)
+                .map(|(host, last_used_at)| RecentHost { host, last_used_at })
+                .collect())
         })
     }
 
@@ -94,6 +105,12 @@ mod tests {
         }
         let recents = repos.recents().list().unwrap();
         assert_eq!(recents.len(), 5);
-        assert_eq!(recents[0].name, "h4");
+        assert_eq!(recents[0].host.name, "h4");
+        // The last connection time travels with the host (the hosts table
+        // shows it as "Last session"), and it descends with the order.
+        assert!(recents[0].last_used_at > 0);
+        for pair in recents.windows(2) {
+            assert!(pair[0].last_used_at >= pair[1].last_used_at);
+        }
     }
 }

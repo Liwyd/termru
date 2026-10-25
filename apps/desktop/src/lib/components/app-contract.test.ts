@@ -12,6 +12,7 @@ import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
 import { route } from '../stores/route.svelte';
+import { sessions } from '../stores/sessions.svelte';
 import type { SessionUpdate } from '../types';
 
 interface InvokeCall {
@@ -58,7 +59,7 @@ vi.mock('@tauri-apps/api/core', () => {
           // The backend answers with the saved host: the editor closes.
           return { ...(args?.host as Record<string, unknown>) };
         case 'recent_list':
-          return [];
+          return [{ host: HOST, last_used_at: 1_760_000_000_000 }];
         case 'identity_list':
           return identities;
         case 'group_list':
@@ -198,6 +199,10 @@ describe('desktop UI ↔ Tauri contract', () => {
     route.route = 'hosts';
     route.editHost = null;
     window.location.hash = '#hosts';
+    // The session store is a singleton too: a session left by the previous
+    // test would turn the row's "Connect" into "Open".
+    sessions.tabs = [];
+    sessions.activeId = null;
     identities = [
       {
         id: 'identity-1',
@@ -305,6 +310,36 @@ describe('desktop UI ↔ Tauri contract', () => {
     expect(written).toBe('hello from the shell');
   });
 
+  it('returns from the hosts banner to the running session tab', async () => {
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('web-1');
+    });
+    click(findButton(target, 'Connect'));
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Connect to web-1');
+    });
+    type(target.querySelector('input[type="password"]') as HTMLInputElement, 'hunter2');
+    target
+      .querySelector('form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => {
+      expect(route.route).toBe('sessions');
+    });
+
+    // The session keeps running while the user organizes the hosts page.
+    route.route = 'hosts';
+    window.location.hash = '#hosts';
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('Your sessions are still running');
+    });
+
+    click(findButton(target, '↗ Return to web-1'));
+    await vi.waitFor(() => {
+      expect(route.route).toBe('sessions');
+    });
+    expect(sessions.active?.title).toBe('web-1');
+  });
+
   it('signs in to the sync server with the documented arguments', async () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('web-1');
@@ -380,14 +415,17 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('web-1');
     });
 
-    // The panes live on the Sessions route now. The nav label carries the
-    // open-tab count badge, so the match is loose on purpose.
-    const sessionsNav = Array.from(target.querySelectorAll('button')).find((candidate) =>
-      candidate.textContent?.includes('Sessions'),
-    );
-    expect(sessionsNav).toBeTruthy();
-    click(sessionsNav as HTMLElement);
+    // The test opens its own session: the split needs a pane to split.
+    click(findButton(target, 'Connect'));
     await vi.waitFor(() => {
+      expect(target.textContent).toContain('Connect to web-1');
+    });
+    type(target.querySelector('input[type="password"]') as HTMLInputElement, 'hunter2');
+    target
+      .querySelector('form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => {
+      expect(route.route).toBe('sessions');
       expect(target.querySelector('[role="tablist"]')).not.toBeNull();
     });
 
@@ -427,15 +465,15 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('web-1');
     });
 
-    const card = target.querySelector('.card') as HTMLElement;
-    expect(card).not.toBeNull();
-    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    const row = target.querySelector('.row') as HTMLElement;
+    expect(row).not.toBeNull();
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
 
     await vi.waitFor(() => {
       expect(target.textContent).toContain('Add to favorites');
     });
 
-    // The menu offers the actions of the host. The card has its own
+    // The menu offers the actions of the host. The row has its own
     // "Connect" button, so the one of the menu is picked explicitly.
     const menuButtons = Array.from(target.querySelectorAll('.menu button')) as HTMLButtonElement[];
     const menuConnect = menuButtons.find((button) => button.textContent === 'Connect');
@@ -444,7 +482,7 @@ describe('desktop UI ↔ Tauri contract', () => {
 
     // The connection dialog opens for the host.
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Password');
+      expect(target.textContent).toContain('Connect to web-1');
     });
   });
 

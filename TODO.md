@@ -450,40 +450,71 @@ exactly as the shell"). Frames: `1` Hosts · `2` Sessions single pane · `3` Ses
 
 ### R3 — Hosts page (frame 1)
 
-- [ ] Host table: columns STAR | HOST/ADDRESS | FOLDER | AUTHENTICATION | LAST SESSION |
+- [x] Host table: columns STAR | HOST/ADDRESS | FOLDER | AUTHENTICATION | LAST SESSION |
   ACTIONS. Authentication label derived from `host.auth`: `Identity · <identity name>`,
   `Password · This device` (credential store), `Password · Ask on connect`,
   `SSH agent`. Row actions: star toggle, `Open` (live session) / `Connect`, `Edit`, `⋯`
   (ContextMenu: connect, edit, favorite, delete); double-click connects (the footer hint
   says so).
-  - Verification: store/unit tests for label derivation; jsdom contract tests for the row
-    actions against the existing IPC shapes.
-- [ ] Header + filter row: `WORKSPACE / CONNECTION LIBRARY` breadcrumb, `Hosts` H1 with a
+  - Verification: `lib/auth-label.ts` unit tests (all four auth kinds incl. the missing
+    identity); `host-table.test.ts` jsdom tests for every row action (star, open/connect,
+    edit, menu items), Enter-key connect, the `Connected` pill and the folder path. The
+    credential-store answer is read lazily per visible password row (`secret_has`), cached
+    per host and invalidated when a secret is saved (`markPasswordStored` from the connect
+    path and from `sessions.markSecret`).
+- [x] Header + filter row: `WORKSPACE / CONNECTION LIBRARY` breadcrumb, `Hosts` H1 with a
   live count line ("Five saved connections. Two sessions running."), `+ New host`, search
   (name, address, username, description, tag **names**; `Ctrl F`), folder dropdown,
   `5 hosts · Recent activity ↓` count/sort line, filter tabs `All hosts ⟨n⟩` /
   `Favorites ⟨n⟩` / `Recent` / `Unfiled ⟨n⟩`.
-  - Verification: store tests per tab (favorites set, recents order, unfiled = no folder);
-    search tests extended; existing host filter/sort tests kept.
-- [ ] "Your sessions are still running" banner while any session exists: names the running
+  - Verification: `count-line.ts` unit tests (spelled numbers, session pluralization);
+    store tests per tab (favorites set, recents order, unfiled = no folder, nested-folder
+    restriction, search+folder+tab combination, `clearFilters`); search tests cover name,
+    address, username, description and tag *names* (never tag ids) through both `visible`
+    (palette) and `rows` (table). The count/sort line and the banner sentence are single
+    computed expressions (multi-expression text nodes break `textContent` assertions).
+- [x] "Your sessions are still running" banner while any session exists: names the running
   hosts and `Return to <host>` jumps to the Sessions route with that tab active.
-  - Verification: jsdom test for presence/absence and the jump target.
-- [ ] LAST SESSION data: extend the `recent_list` IPC to return `last_used_at` next to the
+  - Verification: jsdom test for presence/absence and the jump target (banner names the
+    host, the button label is `↗ Return to <host>`, pressing it sets the route to
+    `sessions` and focuses that session's tab); the banner sentence itself is built by a
+    derived so the host names sit in one text node.
+- [x] LAST SESSION data: extend the `recent_list` IPC to return `last_used_at` next to the
   host (the store already selects it and drops it in `repos/recents.rs`) → `Connected` when
   a session is live, otherwise `Today, 09:18` / `Yesterday` / `18 Oct`, `—` when never used.
-  - Verification: Rust test for the new DTO; frontend date-format tests; the jsdom IPC
-    contract test updated (the command surface is internal, both sides ship in one artifact).
-- [ ] Windowed table rendering: rows render only for the viewport (+small overscan) at a
+  - Verification: `repos/recents.rs::recents_order_and_bound` asserts `last_used_at > 0`
+    and descending order; the command DTO test `recent_host_wire_shape_carries_the_last_used_at_next_to_the_host`
+    asserts the wire keys (`last_used_at`, `host.name`, `host.address`); `last-session.ts`
+    unit tests cover today/yesterday/recent-date/old-date/never; the jsdom IPC mock returns
+    the new shape and the table test asserts `Connected` vs a formatted date vs `—`.
+- [x] Windowed table rendering: rows render only for the viewport (+small overscan) at a
   fixed row height — today's sidebar renders **every** row unbounded (Architecture Concern
   below).
-  - Verification: perf test with the 10 000-host fixture — DOM row count stays < ~100,
-    filter keystroke stays within a frame budget; numbers recorded in `docs/performance.md`
-    and the incorrect "renders only the visible part" claim corrected.
-- [ ] State matrix (Doc A.05) on this page: loading (`aria-busy`, static placeholder, no
+  - Verification: `host-table.test.ts` renders 10 000 hosts and asserts < 100 DOM rows
+    (16: 10 visible + 6 overscan at the fixed 66 px row height; jsdom reports a 0 px
+    viewport, so the fallback window applies); `hosts-page.test.ts` runs the same fixture
+    end to end. The perf test asserts the store's own filter work (measured
+    4.7–4.8 ms per keystroke idle, 7.7 ms clearing the search, 3.5 ms switching a
+    tab; ~26 ms under the full suite's 21-worker load on 2 cores; test budget 50 ms,
+    design goal one frame = 16.7 ms) plus a coarse total guard (150 ms including the
+    unstable jsdom flush) and < 100 DOM rows. The store work was made sub-frame: `$state.raw` arrays
+    (a deep proxy pass costs ~50 ms), one `$derived` search index and one `$derived`
+    pre-sorted set built per data change (every keystroke/tab switch is then a pure
+    filter — re-sorting 10 000 hosts cost ~155 ms), single-pass tab counts with the
+    recents map hoisted (three `filter` passes cost ~30 ms), and a codepoint name
+    compare (`localeCompare` costs ~4 µs/call = 0.5 s over 10 000). Numbers recorded in
+    `docs/performance.md` (new "hosts table (frontend)" section) and the incorrect
+    "renders only the visible part" claim corrected to point at the windowed table.
+- [x] State matrix (Doc A.05) on this page: loading (`aria-busy`, static placeholder, no
   shimmer/stagger/cascade), empty (+ `New host`), filtered-empty (+ `Clear filters`), error
   (message + Retry, never a stack trace), offline note (last sync + "changes are safe
   locally").
-  - Verification: one jsdom test per state.
+  - Verification: one jsdom test per state in `hosts-page.test.ts` (loading shows
+    `aria-busy` + static placeholder rows; empty offers `+ New host`; filtered-empty
+    offers `Clear filters` and restores the full table; error shows the message + `Retry`
+    without a stack trace; the offline note appears on a dispatched `offline` event with
+    the last-sync text and the "changes are safe locally" copy and disappears on
+    `online`).
 
 ### R4 — Sessions view (frames 2-3)
 
@@ -677,6 +708,12 @@ overscan) and a correction of the performance document.
 
 **Priority:** Now — inside this phase.
 
+**Architecture Concern — RESOLVED in R3.** The hosts page now renders a windowed
+table (fixed 66 px row height, 6 rows of overscan: 16 DOM rows at the 10 000-host
+fixture), and `docs/performance.md` was corrected and extended with the measured
+frontend numbers. The old `HostList`/`HostCard` components (which looped every
+row) are deleted.
+
 **Risks and mitigations:**
 
 1. Terminal remount regressions (highest functional risk) → element-identity test in R4 +
@@ -699,8 +736,16 @@ one commit per completed sub-phase, `TODO.md` updated and pushed with each step.
 
 ## Current status
 
-**Redesign phase (19) in progress:** R1 (tokens) and R2 (shell, routing, window controls,
-in-app confirms) are done and pushed. Their verifications are recorded in the phase above.
+**Redesign phase (19) in progress:** R1 (tokens), R2 (shell, routing, window
+controls, in-app confirms) and R3 (hosts page: windowed table, filters, tabs,
+sessions banner, state matrix, `last_used_at` in the recents IPC) are done and
+pushed. Their verifications are recorded in the phase above.
+
+R3 also closed the Architecture Concern below: the hosts table renders a window
+of rows (16 DOM rows at 10 000 hosts), the store's filter work is inside a frame
+(4.7–7.7 ms measured, budget 16.7 ms — `$state.raw` arrays, one derived search
+index, one derived pre-sorted set, single-pass counts, codepoint name compare),
+and `docs/performance.md` carries the numbers and the corrected claim.
 
 **CI failure fixed (runs #35/#36 were supply-chain, not code).** Every build/test job was
 green; `cargo deny` failed on two advisories from a RustCrypto disclosure wave, both reached

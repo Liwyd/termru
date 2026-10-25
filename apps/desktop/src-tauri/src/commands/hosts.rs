@@ -26,10 +26,28 @@ pub fn host_save(state: State<'_, AppState>, mut host: Host) -> Result<Host, Com
     Ok(host)
 }
 
+/// A recently-used host as the frontend sees it: the host profile next to
+/// the last connection time (ms since the epoch) for the "Last session"
+/// column of the hosts table.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RecentHost {
+    pub host: Host,
+    pub last_used_at: i64,
+}
+
 /// Recently connected hosts (most recent first).
 #[tauri::command]
-pub fn recent_list(state: State<'_, AppState>) -> Result<Vec<Host>, CommandError> {
-    Ok(hosts(&state).recents().list()?)
+pub fn recent_list(state: State<'_, AppState>) -> Result<Vec<RecentHost>, CommandError> {
+    Ok(hosts(&state)
+        .recents()
+        .list()?
+        .into_iter()
+        .map(|entry| RecentHost {
+            host: entry.host,
+            last_used_at: entry.last_used_at,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -155,4 +173,22 @@ pub fn identity_bind(
 pub fn identity_unbind(state: State<'_, AppState>, id: IdentityId) -> Result<(), CommandError> {
     hosts(&state).identities().unbind(id)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_host_wire_shape_carries_the_last_used_at_next_to_the_host() {
+        let host = Host::new("web".into(), "web.example.com".into(), "deploy".into());
+        let dto = RecentHost {
+            host,
+            last_used_at: 1_760_000_000_000,
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["last_used_at"], 1_760_000_000_000_i64);
+        assert_eq!(json["host"]["name"], "web");
+        assert_eq!(json["host"]["address"], "web.example.com");
+    }
 }

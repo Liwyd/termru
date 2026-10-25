@@ -601,6 +601,8 @@ export class SessionStore {
       // The credential store holds it now: do not keep it in the frontend.
       if (password) target.secrets.password = undefined;
       if (passphrase) target.secrets.passphrase = undefined;
+      // The hosts table shows the same fact in its Authentication column.
+      if (password) hosts.markPasswordStored(target.host.id, true);
       toasts.success('The secret was stored in your system credential store.');
     } catch (err) {
       toasts.error(errorMessage(err));

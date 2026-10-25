@@ -22,6 +22,12 @@ export interface Host {
   deleted: boolean;
 }
 
+/** A recently-used host with its last connection time (ms since epoch). */
+export interface RecentHost {
+  host: Host;
+  last_used_at: number;
+}
+
 export interface Identity {
   id: string;
   name: string;
