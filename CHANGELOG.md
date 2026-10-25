@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-10-25
+
+The first release of the UI/UX redesign (Phase 19, R1–R3 of the plan in
+`TODO.md`): a new visual language, a routed shell and a rebuilt hosts page.
+Everything is covered by the test suites; the remaining redesign steps
+(sessions view, editors as pages, dialogs, accessibility pass) follow in
+later releases.
+
+### Added
+
+* Design-token layer per the redesign specification: a retargeted palette,
+  a spacing/geometry scale, a type scale with self-hosted Inter and IBM
+  Plex Mono fonts (no remote font URLs — the CSP stays `font-src 'self'`),
+  and motion tokens with a reduced-motion collapse.
+* A dark theme re-derived from the same semantic tokens, every text pair
+  verified at ≥ 4.5:1 contrast, and the terminal color scheme from the
+  specification.
+* A routed application shell: a 36 px titlebar, a 64 px navigation
+  (Hosts · Sessions · Folders · Identities · Sync · Preferences), a status
+  bar with a per-route line, a hash-synced route store and `route.*`
+  palette commands. Per-platform window controls (macOS overlay, Windows
+  custom titlebar, Linux keeps the native decorations — documented).
+* The hosts page (frame 1): a windowed host table (STAR · HOST/ADDRESS ·
+  FOLDER · AUTHENTICATION · LAST SESSION · ACTIONS) that renders ~16 DOM
+  rows at 10,000 hosts, filter tabs with live counts, a search over name,
+  address, username, description and tag *names* (`Ctrl F`), a folder
+  dropdown with nested paths, a spelled count line ("Five saved
+  connections. Two sessions running."), a "your sessions are still
+  running" banner that jumps back to a live session, and the full state
+  matrix (loading, empty, filtered-empty, error, offline note).
+* In-app confirmation dialogs replace every `window.confirm`.
+
+### Changed
+
+* `recent_list` now returns `last_used_at` next to each host, so the
+  table can show `Connected` / `Today, 09:18` / `Yesterday` / `18 Oct` /
+  `—` (internal IPC; both sides ship in one artifact).
+* The host list renders a window of rows and filters inside a frame at
+  10,000 hosts (measured: 4.7–7.7 ms of store work per keystroke; the
+  same interaction cost 2.2 s before — see `docs/performance.md`).
+* Preferences gained additive fields with serde defaults
+  (`reduced_motion`, `focus_visibility`, `routine_notices`,
+  `terminal.line_height`); old local and synced records load unchanged.
+
 ## [0.1.0-rc.1] — 2026-10-22
 
 The pre-release that exercised the release pipeline: the packages, the
