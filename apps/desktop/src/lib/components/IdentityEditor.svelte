@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { open } from '@tauri-apps/plugin-dialog';
   import { api } from '../ipc';
+  import { openFile } from '../ipc-backend';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { Identity } from '../types';
@@ -71,11 +71,7 @@
   /** Opens the native file picker and binds the chosen key. */
   async function chooseKey(identity: Identity): Promise<void> {
     try {
-      const selected = await open({
-        multiple: false,
-        directory: false,
-        title: 'Choose a private key file',
-      });
+      const selected = await openFile({ title: 'Choose a private key file' });
       if (typeof selected !== 'string' || selected.length === 0) return;
       await api.identityBind(identity.id, selected);
       bindings = { ...bindings, [identity.id]: selected };

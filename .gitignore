@@ -49,3 +49,6 @@ secrets.json
 
 # Docker local overrides
 compose.override.yaml
+
+# Screenshots from scripts/screens.sh
+/screens/

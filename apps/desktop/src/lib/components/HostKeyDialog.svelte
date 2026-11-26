@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { api } from '../ipc';
+  import { listen, type UnlistenFn } from '../ipc-backend';
   import { toasts } from '../stores/toasts.svelte';
   import type { HostKeyPromptRequest } from '../types';
 

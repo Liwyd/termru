@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-import type { Channel } from '@tauri-apps/api/core';
+import { invoke } from './ipc-backend';
+import type { Channel } from './ipc-backend';
 import type {
   ConflictView,
   Group,

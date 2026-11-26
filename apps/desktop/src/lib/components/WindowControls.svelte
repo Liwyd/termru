@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { currentWindow } from '../ipc-backend';
   import { uiPlatform } from '../platform';
 
   // Linux keeps native decorations (documented deviation from the mockup):
@@ -8,8 +9,7 @@
 
   async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> {
     // Loaded on demand so tests and non-Tauri builds never touch the API.
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    const win = getCurrentWindow();
+    const win = await currentWindow();
     if (action === 'minimize') await win.minimize();
     else if (action === 'toggleMaximize') await win.toggleMaximize();
     else await win.close();

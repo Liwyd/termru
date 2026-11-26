@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { Channel } from '@tauri-apps/api/core';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import { WebglAddon } from '@xterm/addon-webgl';
   import { api } from '../ipc';
+  import { Channel } from '../ipc-backend';
   import { errorMessage } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { sessions } from '../stores/sessions.svelte';
