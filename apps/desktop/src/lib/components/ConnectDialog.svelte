@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusTrap } from '../actions/focus-trap';
   import type { Host, SessionSecrets } from '../types';
 
   let {
@@ -24,8 +25,10 @@
   function submit(event: SubmitEvent): void {
     event.preventDefault();
     busy = true;
+    // An empty field sends no secret at all: the backend then falls back to
+    // the credential store (an empty string would be used as the password).
     const secrets: SessionSecrets = {};
-    if (needsPassword) secrets.password = password;
+    if (needsPassword) secrets.password = password.length > 0 ? password : undefined;
     if (needsPassphrase) secrets.passphrase = passphrase.length > 0 ? passphrase : undefined;
     onsubmit(secrets, remember);
   }
@@ -38,7 +41,13 @@
     if (event.target === event.currentTarget) oncancel();
   }}
 >
-  <div class="dialog" role="dialog" aria-modal="true" aria-label="Connect to host">
+  <div
+    class="dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Connect to host"
+    use:focusTrap={{ onescape: oncancel }}
+  >
     <form onsubmit={submit}>
       <h2>Connect to {host.name}</h2>
       <p class="target">{host.username}@{host.address}:{host.port}</p>
@@ -46,14 +55,19 @@
       {#if needsPassword}
         <label>
           Password
-          <input type="password" bind:value={password} autocomplete="current-password" />
+          <input
+            type="password"
+            bind:value={password}
+            autocomplete="current-password"
+            data-autofocus
+          />
         </label>
       {/if}
 
       {#if needsPassphrase}
         <label>
           Passphrase for the private key
-          <input type="password" bind:value={passphrase} autocomplete="off" />
+          <input type="password" bind:value={passphrase} autocomplete="off" data-autofocus />
         </label>
       {/if}
 

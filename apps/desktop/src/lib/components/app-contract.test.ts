@@ -11,6 +11,7 @@
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
+import { connectFlow } from '../stores/connect.svelte';
 import { route } from '../stores/route.svelte';
 import { sessions } from '../stores/sessions.svelte';
 import type { SessionUpdate } from '../types';
@@ -150,8 +151,11 @@ vi.mock('@xterm/xterm', () => {
     rows = 24;
     options: Record<string, unknown> = {};
     onData(_handler: (data: string) => void) {}
+    onSelectionChange(_handler: () => void) {}
+    attachCustomKeyEventHandler(_handler: (event: KeyboardEvent) => boolean) {}
     loadAddon(_addon: unknown) {}
     open(_element: HTMLElement) {}
+    reset() {}
     write(data: Uint8Array) {
       terminalWrites.push(data);
     }
@@ -203,6 +207,9 @@ describe('desktop UI ↔ Tauri contract', () => {
     // test would turn the row's "Connect" into "Open".
     sessions.tabs = [];
     sessions.activeId = null;
+    // The connect flow is a singleton as well: a dialog left open by the
+    // previous test must not leak into this one.
+    connectFlow.cancel();
     identities = [
       {
         id: 'identity-1',
@@ -589,11 +596,13 @@ describe('desktop UI ↔ Tauri contract', () => {
     const change = findButton(target, 'Change');
     click(change);
 
-    // A combination that another command already uses is refused.
+    // A combination that another command already uses is refused (New tab
+    // is Ctrl+Shift+T on Linux and Windows, where Ctrl+T belongs to the shell).
     target.querySelector('.dialog')?.dispatchEvent(
       new KeyboardEvent('keydown', {
-        key: 't',
+        key: 'T',
         ctrlKey: true,
+        shiftKey: true,
         bubbles: true,
         cancelable: true,
       }),

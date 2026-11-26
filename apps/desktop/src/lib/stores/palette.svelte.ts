@@ -14,21 +14,32 @@ export interface PaletteEntry {
 
 class PaletteStore {
   open = $state(false);
-  query = $state('');
   entries = $state<PaletteEntry[]>([]);
   selected = $state(0);
+  #query = $state('');
+
+  /** The search text. Typing starts the choice over at the best match. */
+  get query(): string {
+    return this.#query;
+  }
+
+  set query(value: string) {
+    this.#query = value;
+    this.selected = 0;
+  }
 
   /** Opens the palette with the given entries. */
   show(entries: PaletteEntry[]): void {
     this.entries = entries;
-    this.query = '';
+    this.#query = '';
     this.selected = 0;
     this.open = true;
   }
 
   hide(): void {
     this.open = false;
-    this.query = '';
+    this.#query = '';
+    this.selected = 0;
     this.entries = [];
   }
 

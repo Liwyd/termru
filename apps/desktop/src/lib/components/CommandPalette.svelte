@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusTrap } from '../actions/focus-trap';
   import { palette } from '../stores/palette.svelte';
 
   let input: HTMLInputElement | undefined = $state();
@@ -20,9 +21,6 @@
     } else if (event.key === 'Enter') {
       event.preventDefault();
       palette.choose();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      palette.hide();
     }
   }
 </script>
@@ -35,7 +33,13 @@
       if (event.target === event.currentTarget) palette.hide();
     }}
   >
-    <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div
+      class="palette"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+      use:focusTrap={{ onescape: () => palette.hide(), initialFocus: 'input' }}
+    >
       <input
         bind:this={input}
         bind:value={palette.query}

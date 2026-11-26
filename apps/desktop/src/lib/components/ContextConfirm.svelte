@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { focusTrap } from '../actions/focus-trap';
 
   /**
    * The in-app confirmation for destructive actions (Doc A.05): title,
@@ -20,20 +20,6 @@
     onconfirm: () => void;
   } = $props();
 
-  let cancelButton = $state<HTMLButtonElement | null>(null);
-  /** The element that had the focus before the dialog opened. */
-  let trigger: HTMLElement | null = null;
-
-  $effect(() => {
-    if (!open) return;
-    trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    void tick().then(() => cancelButton?.focus());
-    return () => {
-      trigger?.focus();
-      trigger = null;
-    };
-  });
-
   function cancel(): void {
     open = false;
   }
@@ -41,13 +27,6 @@
   function confirm(): void {
     open = false;
     onconfirm();
-  }
-
-  function onkeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      cancel();
-    }
   }
 </script>
 
@@ -64,12 +43,12 @@
       aria-labelledby="confirm-title"
       aria-describedby="confirm-body"
       tabindex="-1"
-      {onkeydown}
+      use:focusTrap={{ onescape: cancel }}
     >
       <h2 id="confirm-title">{title}</h2>
       <p id="confirm-body">{body}</p>
       <div class="actions">
-        <button type="button" bind:this={cancelButton} onclick={cancel}>Cancel</button>
+        <button type="button" data-autofocus onclick={cancel}>Cancel</button>
         <button type="button" class="destructive" onclick={confirm}>{confirmLabel}</button>
       </div>
     </div>

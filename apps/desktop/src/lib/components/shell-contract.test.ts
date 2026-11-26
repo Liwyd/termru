@@ -10,10 +10,34 @@ import AppNav from './AppNav.svelte';
 import StatusBar from './StatusBar.svelte';
 import ContextConfirm from './ContextConfirm.svelte';
 import { route, ROUTE_IDS } from '../stores/route.svelte';
-import { sessions } from '../stores/sessions.svelte';
+import { sessions, type Pane } from '../stores/sessions.svelte';
+import type { SessionStatus } from '../types';
 
 function click(element: Element): void {
   element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
+/** A pane in a given state, for the counters. */
+function pane(id: string, status: SessionStatus): Pane {
+  return {
+    id,
+    sessionId: status.state === 'ready' ? `s-${id}` : null,
+    host: null,
+    title: id,
+    status,
+    secrets: {},
+    generation: 0,
+    exitCode: null,
+    dead: false,
+    errorMessage: null,
+    awaitingReconnect: false,
+    hadReady: status.state === 'ready',
+    lastFailure: null,
+    duplicateFrom: null,
+    restored: false,
+    attachTo: null,
+    rememberSecret: false,
+  };
 }
 
 describe('AppNav', () => {
@@ -59,8 +83,8 @@ describe('AppNav', () => {
       {
         id: 't1',
         title: 'web-1',
-        panes: [],
-        activePaneId: null,
+        panes: [pane('p1', { state: 'ready' })],
+        activePaneId: 'p1',
         root: { kind: 'leaf', pane: 'p1' },
       },
     ];
@@ -68,6 +92,41 @@ describe('AppNav', () => {
     expect(target.textContent).toContain('Sessions');
     expect(target.textContent).toContain('1');
     expect(target.textContent).toContain('1 session connected');
+  });
+
+  it('counts the connected panes, not the tabs', () => {
+    // One tab with two panes: one connected, one still connecting.
+    sessions.tabs = [
+      {
+        id: 't1',
+        title: 'web-1',
+        panes: [pane('p1', { state: 'ready' }), pane('p2', { state: 'connecting' })],
+        activePaneId: 'p1',
+        root: {
+          kind: 'split',
+          id: 's',
+          direction: 'columns',
+          ratio: 0.5,
+          first: { kind: 'leaf', pane: 'p1' },
+          second: { kind: 'leaf', pane: 'p2' },
+        },
+      },
+    ];
+    flushSync();
+    expect(target.textContent).toContain('1 session connected');
+
+    // A tab that is not connected counts for nothing.
+    sessions.tabs = [
+      {
+        id: 't2',
+        title: 'db-1',
+        panes: [pane('p3', { state: 'failed', category: 'network', message: 'refused' })],
+        activePaneId: 'p3',
+        root: { kind: 'leaf', pane: 'p3' },
+      },
+    ];
+    flushSync();
+    expect(target.textContent).toContain('No sessions connected');
   });
 });
 

@@ -59,6 +59,12 @@ export const api = {
   sessionDuplicate: (id: string, geometry: SessionGeometry, channel: Channel<SessionUpdate>) =>
     invoke<string>('session_duplicate', { id, geometry, channel }),
   sessionClose: (id: string) => invoke<void>('session_close', { id }),
+  /**
+   * Releases the views the calling window holds on a session, without
+   * closing it (a tab moved to another window). The backend command is
+   * requested; callers treat a failure as "nothing to release".
+   */
+  sessionDetach: (id: string) => invoke<void>('session_detach', { id }),
   sessionWrite: (id: string, data: number[]) => invoke<void>('session_write', { id, data }),
   sessionResize: (id: string, cols: number, rows: number) =>
     invoke<void>('session_resize', { id, cols, rows }),

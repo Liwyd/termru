@@ -9,6 +9,13 @@
  * Accelerators use the notation `Mod+Shift+K`:
  * * `Mod` = Ctrl on Linux/Windows, Cmd on macOS
  * * `Ctrl` / `Alt` / `Shift` are explicit
+ * * `Plus` / `Minus` name the `+` and `-` keys (`+` is the separator)
+ *
+ * The app shortcuts share the keyboard with a shell. On macOS `Cmd+<letter>`
+ * never reaches a shell, but on Linux and Windows `Ctrl+<letter>` is a
+ * readline/terminal control (Ctrl+W deletes a word, Ctrl+D ends input,
+ * Ctrl+K kills the line…). The commands that would collide therefore have a
+ * second default for Linux and Windows: `Ctrl+Shift+<letter>`.
  */
 
 export type CommandId =
@@ -42,6 +49,11 @@ export interface Command {
   title: string;
   /** Default accelerator, in `Mod+Shift+K` notation. Empty = unbound. */
   accelerator: string;
+  /**
+   * The default on Linux and Windows when `accelerator` would collide with
+   * a shell control. Absent = the same as `accelerator`.
+   */
+  pcAccelerator?: string;
   /** Grouping in the palette. */
   group: string;
 }
@@ -61,13 +73,39 @@ export function primaryModifier(): 'Ctrl' | 'Cmd' {
   return isMac() ? 'Cmd' : 'Ctrl';
 }
 
+/**
+ * The parts of an accelerator. A stored `Ctrl++` (from before `Plus` had a
+ * name) still means Ctrl and the plus key.
+ */
+function splitAccelerator(accelerator: string): string[] {
+  const canonical = accelerator.trim().replace(/\+\+$/, '+Plus');
+  return canonical.split('+').map((part) => part.trim());
+}
+
 /** Expands `Mod` to the platform modifier. */
 export function expandAccelerator(accelerator: string): string {
   const mod = primaryModifier();
-  return accelerator
-    .split('+')
-    .map((part) => (part.trim() === 'Mod' ? mod : part.trim()))
+  return splitAccelerator(accelerator)
+    .map((part) => (part === 'Mod' ? mod : part))
     .join('+');
+}
+
+/** The default accelerator of a command on this platform. */
+export function defaultAccelerator(command: Command, mac: boolean = isMac()): string {
+  return mac ? command.accelerator : (command.pcAccelerator ?? command.accelerator);
+}
+
+/** How an accelerator is shown to the user (`⌘K` on macOS, `Ctrl+Shift+P` elsewhere). */
+export function acceleratorLabel(accelerator: string, mac: boolean = isMac()): string {
+  const parts = splitAccelerator(accelerator).map((part) => {
+    if (part === 'Mod') return mac ? 'Cmd' : 'Ctrl';
+    if (part === 'Plus') return '+';
+    if (part === 'Minus') return '-';
+    return part;
+  });
+  if (!mac) return parts.join('+');
+  const glyphs: Record<string, string> = { Cmd: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' };
+  return parts.map((part) => glyphs[part] ?? part).join('');
 }
 
 /** Normalizes an accelerator for comparison: sorted, canonical case. */
@@ -98,14 +136,50 @@ function modifierRank(part: string): number {
 
 /** Every command the app knows, with its default accelerator. */
 export const COMMANDS: Command[] = [
-  { id: 'palette.open', title: 'Command palette', accelerator: 'Mod+K', group: 'General' },
-  { id: 'tab.new', title: 'New tab', accelerator: 'Mod+T', group: 'Tabs' },
-  { id: 'tab.close', title: 'Close tab', accelerator: 'Mod+W', group: 'Tabs' },
+  {
+    id: 'palette.open',
+    title: 'Command palette',
+    accelerator: 'Mod+K',
+    pcAccelerator: 'Mod+Shift+P',
+    group: 'General',
+  },
+  {
+    id: 'tab.new',
+    title: 'New tab',
+    accelerator: 'Mod+T',
+    pcAccelerator: 'Mod+Shift+T',
+    group: 'Tabs',
+  },
+  {
+    id: 'tab.close',
+    title: 'Close tab',
+    accelerator: 'Mod+W',
+    pcAccelerator: 'Mod+Shift+W',
+    group: 'Tabs',
+  },
   { id: 'tab.next', title: 'Next tab', accelerator: 'Mod+Tab', group: 'Tabs' },
   { id: 'tab.previous', title: 'Previous tab', accelerator: 'Mod+Shift+Tab', group: 'Tabs' },
-  { id: 'tab.duplicate', title: 'Duplicate tab', accelerator: 'Mod+D', group: 'Tabs' },
-  { id: 'host.new', title: 'Add host', accelerator: 'Mod+N', group: 'Hosts' },
-  { id: 'host.search', title: 'Search hosts', accelerator: 'Mod+F', group: 'Hosts' },
+  {
+    id: 'tab.duplicate',
+    title: 'Duplicate tab',
+    accelerator: 'Mod+D',
+    pcAccelerator: 'Mod+Shift+D',
+    group: 'Tabs',
+  },
+  {
+    id: 'host.new',
+    title: 'Add host',
+    accelerator: 'Mod+N',
+    pcAccelerator: 'Mod+Shift+N',
+    group: 'Hosts',
+  },
+  {
+    id: 'host.search',
+    title: 'Search hosts',
+    accelerator: 'Mod+F',
+    pcAccelerator: 'Mod+Shift+F',
+    group: 'Hosts',
+  },
   { id: 'view.toggleTheme', title: 'Toggle theme', accelerator: 'Mod+Shift+L', group: 'View' },
   { id: 'view.increaseFont', title: 'Increase font size', accelerator: 'Mod+Plus', group: 'View' },
   { id: 'view.decreaseFont', title: 'Decrease font size', accelerator: 'Mod+Minus', group: 'View' },
@@ -123,7 +197,14 @@ export const COMMANDS: Command[] = [
     accelerator: 'Mod+Shift+O',
     group: 'Panes',
   },
-  { id: 'pane.close', title: 'Close the pane', accelerator: 'Mod+Shift+W', group: 'Panes' },
+  {
+    id: 'pane.close',
+    title: 'Close the pane',
+    accelerator: 'Mod+Shift+W',
+    // Ctrl+Shift+W closes the tab on Linux and Windows.
+    pcAccelerator: 'Mod+Shift+Q',
+    group: 'Panes',
+  },
   { id: 'pane.next', title: 'Next pane', accelerator: 'Mod+Alt+ArrowRight', group: 'Panes' },
   { id: 'pane.previous', title: 'Previous pane', accelerator: 'Mod+Alt+ArrowLeft', group: 'Panes' },
   // Route commands are reachable from the palette; they carry no default
@@ -163,10 +244,10 @@ export function findConflicts(
 }
 
 /** Default bindings derived from the command table. */
-export function defaultBindings(): Keybinding[] {
+export function defaultBindings(mac: boolean = isMac()): Keybinding[] {
   return COMMANDS.map((command) => ({
     commandId: command.id,
-    accelerator: command.accelerator,
+    accelerator: defaultAccelerator(command, mac),
   }));
 }
 
@@ -179,14 +260,12 @@ export function defaultBindings(): Keybinding[] {
  * palette-only and must never capture a key.
  */
 export function effectiveBindings(overrides: Record<string, string> = {}): Keybinding[] {
-  const known = new Set(COMMANDS.map((command) => command.id));
   return COMMANDS.filter((command) => {
-    const accelerator = overrides[command.id] ?? command.accelerator;
-    return known.has(command.id) && accelerator.trim().length > 0;
+    const accelerator = overrides[command.id] ?? defaultAccelerator(command);
+    return accelerator.trim().length > 0;
   }).map((command) => ({
     commandId: command.id,
-    accelerator:
-      known.has(command.id) && overrides[command.id] ? overrides[command.id] : command.accelerator,
+    accelerator: overrides[command.id] ? overrides[command.id] : defaultAccelerator(command),
   }));
 }
 
@@ -195,7 +274,8 @@ export function acceleratorFor(
   commandId: CommandId,
   overrides: Record<string, string> = {},
 ): string {
-  return overrides[commandId] ?? COMMANDS.find((c) => c.id === commandId)?.accelerator ?? '';
+  const command = COMMANDS.find((entry) => entry.id === commandId);
+  return overrides[commandId] ?? (command ? defaultAccelerator(command) : '');
 }
 
 /**
@@ -237,24 +317,34 @@ export function eventToAccelerator(event: KeyboardEvent): string | null {
   const key = event.key;
   if (!key || MODIFIER_KEYS.has(key)) return null;
 
+  // `+` and `-` have names (`+` separates the parts). Their shifted forms
+  // (`=` is `+` on a US keyboard, `_` is `-`) are the same key, and the
+  // shift they need is not part of the shortcut.
+  const named = key === '+' ? 'Plus' : key === '-' || key === '_' ? 'Minus' : null;
+
   const parts: string[] = [];
   if (event.ctrlKey) parts.push('Ctrl');
   if (event.altKey) parts.push('Alt');
-  if (event.shiftKey) parts.push('Shift');
+  if (event.shiftKey && named === null) parts.push('Shift');
   if (event.metaKey) parts.push('Cmd');
 
   // A single character is stored in upper case, a named key (F5, ArrowLeft)
   // as it is.
-  const name = key.length === 1 ? key.toUpperCase() : key;
-  parts.push(name);
+  parts.push(named ?? (key.length === 1 ? key.toUpperCase() : key));
   return parts.join('+');
+}
+
+/** Whether an event's key is the key an accelerator names. */
+function keyMatches(eventKey: string, accelKey: string): boolean {
+  const wanted = accelKey.toLowerCase();
+  if (wanted === 'plus') return eventKey === '+' || eventKey === '=';
+  if (wanted === 'minus') return eventKey === '-' || eventKey === '_';
+  return eventKey.toLowerCase() === wanted;
 }
 
 /** A key event matches an accelerator. */
 export function eventMatches(event: KeyboardEvent, accelerator: string): boolean {
-  const parts = expandAccelerator(accelerator)
-    .split('+')
-    .map((part) => part.trim());
+  const parts = splitAccelerator(expandAccelerator(accelerator));
   const key = parts[parts.length - 1];
   const modifiers = new Set(parts.slice(0, -1));
 
@@ -262,11 +352,27 @@ export function eventMatches(event: KeyboardEvent, accelerator: string): boolean
   const wantsCmd = modifiers.has('Cmd');
   const wantsAlt = modifiers.has('Alt');
   const wantsShift = modifiers.has('Shift');
+  // `+` and `-` are typed with Shift on many layouts: Shift does not decide.
+  const shiftFree = /^(plus|minus)$/i.test(key);
 
   if (wantsCtrl !== event.ctrlKey) return false;
   if (wantsCmd !== event.metaKey) return false;
   if (wantsAlt !== event.altKey) return false;
-  if (wantsShift !== event.shiftKey) return false;
+  if (!shiftFree && wantsShift !== event.shiftKey) return false;
 
-  return event.key.toLowerCase() === key.toLowerCase();
+  return keyMatches(event.key, key);
+}
+
+/**
+ * The command a key event is bound to, if any. The terminal uses this to
+ * leave app shortcuts to the window instead of sending them to the shell.
+ */
+export function matchBinding(
+  event: KeyboardEvent,
+  overrides: Record<string, string> = {},
+): Keybinding | null {
+  for (const binding of effectiveBindings(overrides)) {
+    if (eventMatches(event, binding.accelerator)) return binding;
+  }
+  return null;
 }

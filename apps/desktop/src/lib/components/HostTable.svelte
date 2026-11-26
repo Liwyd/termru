@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { hosts } from '../stores/hosts.svelte';
   import { authLabel } from '../auth-label';
   import { formatLastSession } from '../last-session';
@@ -37,6 +38,8 @@
   let scrollTop = $state(0);
   let viewportHeight = $state(FALLBACK_HEIGHT);
   let selectedId = $state<string | null>(null);
+  /** The row that owns the table's single tab stop (roving tabindex). */
+  let activeId = $state<string | null>(null);
 
   let menuOpen = $state(false);
   let menuX = $state(0);
@@ -65,6 +68,16 @@
     );
     return { start, end, slice: rows.slice(start, end) };
   });
+  /**
+   * The row that is the tab stop: the last one focused, or the first one on
+   * screen. It is always a rendered row, so the table never loses its stop
+   * when the active row is scrolled out of the window.
+   */
+  const rovingId = $derived(
+    visibleRows.slice.some((host) => host.id === activeId)
+      ? activeId
+      : (visibleRows.slice[0]?.id ?? null),
+  );
   const padTop = $derived(visibleRows.start * ROW_HEIGHT);
   const padBottom = $derived(Math.max(0, rows.length - visibleRows.end) * ROW_HEIGHT);
 
@@ -154,6 +167,67 @@
   function select(host: Host): void {
     selectedId = host.id;
   }
+
+  /** Moves the focus to the row at `index` (scrolling it into the window). */
+  async function focusRow(index: number): Promise<void> {
+    const target = rows[Math.max(0, Math.min(rows.length - 1, index))];
+    if (!target || !body) return;
+    const top = rows.indexOf(target) * ROW_HEIGHT;
+    if (top < body.scrollTop) body.scrollTop = top;
+    else if (top + ROW_HEIGHT > body.scrollTop + viewportHeight) {
+      body.scrollTop = top + ROW_HEIGHT - viewportHeight;
+    }
+    scrollTop = body.scrollTop;
+    activeId = target.id;
+    await tick();
+    Array.from(body.querySelectorAll<HTMLElement>('[data-host-id]'))
+      .find((element) => element.dataset.hostId === target.id)
+      ?.focus();
+  }
+
+  /** Keyboard on a focused row: arrows move, Enter connects, E / F2 edits. */
+  function onRowKeyDown(event: KeyboardEvent, host: Host): void {
+    if (event.target !== event.currentTarget) return;
+    const index = rows.indexOf(host);
+    switch (event.key) {
+      case 'Enter':
+        event.preventDefault();
+        activate(host);
+        break;
+      case 'ArrowDown':
+        event.preventDefault();
+        void focusRow(index + 1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        void focusRow(index - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        void focusRow(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        void focusRow(rows.length - 1);
+        break;
+      case 'PageDown':
+        event.preventDefault();
+        void focusRow(index + Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1));
+        break;
+      case 'PageUp':
+        event.preventDefault();
+        void focusRow(index - Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1));
+        break;
+      case 'F2':
+      case 'e':
+      case 'E':
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        event.preventDefault();
+        select(host);
+        onedit(host);
+        break;
+    }
+  }
 </script>
 
 <div class="table" role="table" aria-label="Hosts" aria-rowcount={rows.length + 1}>
@@ -173,21 +247,20 @@
         class="row"
         class:selected={selectedId === host.id}
         role="row"
-        tabindex="-1"
+        tabindex={rovingId === host.id ? 0 : -1}
+        data-host-id={host.id}
         aria-rowindex={visibleRows.start + i + 2}
         onclick={() => select(host)}
+        onfocus={() => (activeId = host.id)}
         ondblclick={() => activate(host)}
-        onkeydown={(event) => {
-          if (event.key !== 'Enter' || event.target !== event.currentTarget) return;
-          event.preventDefault();
-          activate(host);
-        }}
+        onkeydown={(event) => onRowKeyDown(event, host)}
         oncontextmenu={(event) => openMenuAtPointer(host, event)}
       >
         <span class="star-cell" role="cell">
           <button
             type="button"
             class="star"
+            tabindex={rovingId === host.id ? 0 : -1}
             class:favorite={host.favorite}
             aria-label={host.favorite
               ? `Remove ${host.name} from favorites`
@@ -220,6 +293,7 @@
           <button
             type="button"
             class="primary"
+            tabindex={rovingId === host.id ? 0 : -1}
             onclick={(event) => {
               event.stopPropagation();
               activate(host);
@@ -227,6 +301,7 @@
           >
           <button
             type="button"
+            tabindex={rovingId === host.id ? 0 : -1}
             onclick={(event) => {
               event.stopPropagation();
               select(host);
@@ -236,6 +311,7 @@
           <button
             type="button"
             class="more"
+            tabindex={rovingId === host.id ? 0 : -1}
             aria-label="More actions for {host.name}"
             aria-haspopup="menu"
             aria-expanded={menuOpen && menuHost?.id === host.id}

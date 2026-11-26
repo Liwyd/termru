@@ -1,197 +1,119 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { Terminal } from '@xterm/xterm';
-  import { FitAddon } from '@xterm/addon-fit';
-  import { WebglAddon } from '@xterm/addon-webgl';
-  import { api } from '../ipc';
-  import { Channel } from '../ipc-backend';
-  import { errorMessage } from '../stores/hosts.svelte';
+  import { matchBinding } from '../keybindings';
+  import { connectFlow } from '../stores/connect.svelte';
   import { prefs } from '../stores/prefs.svelte';
-  import { sessions } from '../stores/sessions.svelte';
-  import { decodeBase64, encodeUtf8 } from '../terminal/codec';
-  import { terminalTheme } from '../terminal/theme';
+  import { appearanceFromPrefs } from '../terminal/appearance';
+  import { pushSize, sendInput, startConnection } from '../terminal/connect';
+  import {
+    applyAppearance,
+    createTerminal,
+    fitTerminal,
+    isVisible,
+    remeasure,
+    setAccelerated,
+    whenFontsReady,
+  } from '../terminal/create';
+  import { attachTerminal, detachTerminal, getTerminal } from '../terminal/registry';
+  import type { TerminalHandle } from '../terminal/registry';
   import type { Pane } from '../stores/sessions.svelte';
-  import type { SessionUpdate } from '../types';
 
+  /**
+   * Hosts the terminal of a pane.
+   *
+   * The xterm instance lives in the terminal registry, not in this
+   * component: mounting re-parents its element into the container, and
+   * unmounting detaches it without disposing it, so the scrollback and the
+   * session survive a route change, a split or an unsplit. The terminal is
+   * disposed by the session store when the pane is really removed.
+   */
   let { pane }: { pane: Pane } = $props();
 
+  /** Where the terminal's element is shown (the padded wrapper). */
   let container: HTMLDivElement | undefined = $state();
-  let term = $state<Terminal | null>(null);
-  let fitAddon: FitAddon | null = null;
-  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The terminal of the pane, once this component mounted. */
+  let handle = $state.raw<TerminalHandle | null>(null);
+  let fitTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
-    const instance = new Terminal({
-      fontFamily: prefs.prefs.terminal.font_family,
-      fontSize: prefs.prefs.terminal.font_size,
-      lineHeight: prefs.prefs.terminal.line_height,
-      scrollback: prefs.prefs.terminal.scrollback,
-      cursorBlink: prefs.prefs.terminal.cursor_blink,
-      cursorStyle: prefs.prefs.terminal.cursor_style,
-      theme: terminalTheme(prefs.isDark),
-      allowProposedApi: true,
-    });
-    const fit = new FitAddon();
-    instance.loadAddon(fit);
-    instance.open(container as HTMLDivElement);
-    term = instance;
-    fitAddon = fit;
-
-    // WebGL renderer when available; the DOM renderer stays as fallback.
-    try {
-      const webgl = new WebglAddon();
-      instance.loadAddon(webgl);
-    } catch {
-      // No WebGL context (software rendering, blocked GPU): keep the DOM
-      // renderer — slower, but correct.
-    }
-
-    instance.onData((data) => {
-      const sessionId = pane.sessionId;
-      if (!sessionId) return;
-      void api.sessionWrite(sessionId, encodeUtf8(data)).catch(() => {
-        // The session ended between the keystroke and the write; the status
-        // stream tells the user what happened.
+    const host = container as HTMLDivElement;
+    const paneId = pane.id;
+    const existing = getTerminal(paneId);
+    const instance =
+      existing ??
+      createTerminal(paneId, host, appearanceFromPrefs(), {
+        onData: (data) => sendInput(paneId, data),
+        isAppKey: (event) => matchBinding(event, prefs.prefs.keybindings) !== null,
       });
-    });
+    attachTerminal(instance, host);
+    // The theme or the font may have changed while the terminal was away.
+    applyAppearance(instance, appearanceFromPrefs());
+    handle = instance;
 
     const observer = new ResizeObserver(() => scheduleFit());
-    observer.observe(container as HTMLDivElement);
+    observer.observe(host);
     scheduleFit();
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || !event.shiftKey) return;
-      if (event.key === 'C' || event.key === 'c') {
-        const selection = instance.getSelection();
-        if (!selection) return;
-        event.preventDefault();
-        void navigator.clipboard?.writeText(selection).catch(() => undefined);
-      } else if (event.key === 'V' || event.key === 'v') {
-        event.preventDefault();
-        void navigator.clipboard
-          ?.readText()
-          .then((text) => {
-            if (text.length > 0) instance.paste(text);
-          })
-          .catch(() => undefined);
-      }
+    // A web font that finishes loading changes the cell size: measure again
+    // and fit to the new grid.
+    const onFontsLoaded = (): void => {
+      remeasure(instance);
+      scheduleFit();
     };
-    (container as HTMLDivElement).addEventListener('keydown', onKeyDown);
+    document.fonts?.addEventListener?.('loadingdone', onFontsLoaded);
 
     return () => {
+      document.fonts?.removeEventListener?.('loadingdone', onFontsLoaded);
       observer.disconnect();
-      (container as HTMLDivElement).removeEventListener('keydown', onKeyDown);
-      if (resizeTimer) clearTimeout(resizeTimer);
-      instance.dispose();
-      term = null;
-      fitAddon = null;
+      if (fitTimer) clearTimeout(fitTimer);
+      // A hidden terminal gives its GPU context back; the buffer stays.
+      setAccelerated(instance, false);
+      detachTerminal(instance, host);
+      handle = null;
     };
   });
 
-  // Appearance changes (font size, theme) apply to the live terminal.
+  // Appearance changes (font, theme, scrollback, cursor) apply to the live
+  // terminal; a change of the cell size needs a new fit.
   $effect(() => {
-    const instance = term;
+    const instance = handle;
     if (!instance) return;
-    const { font_family, font_size, line_height, cursor_blink, cursor_style } =
-      prefs.prefs.terminal;
-    instance.options.fontFamily = font_family;
-    instance.options.fontSize = font_size;
-    instance.options.lineHeight = line_height;
-    instance.options.cursorBlink = cursor_blink;
-    instance.options.cursorStyle = cursor_style;
-    instance.options.theme = terminalTheme(prefs.isDark);
+    const appearance = appearanceFromPrefs();
+    if (applyAppearance(instance, appearance)) scheduleFit();
   });
 
   // (Re)connect whenever the pane asks for a new connection attempt.
-  // `untrack` keeps the effect bound to `generation` only: reading
-  // `pane.sessionId` inside `connect` must not re-trigger it.
+  // `untrack` keeps the effect bound to `generation` and the terminal only:
+  // reading `pane.sessionId` while connecting must not re-trigger it. A
+  // remount finds the terminal already connected for this generation.
   $effect(() => {
+    const instance = handle;
     const generation = pane.generation;
+    if (!instance) return;
     untrack(() => {
-      void connect(generation);
+      void startConnection(pane, instance, generation);
     });
   });
 
-  async function connect(generation: number): Promise<void> {
-    // An empty pane has no host: there is nothing to connect to.
-    if (!pane.host) return;
-
-    // A previous attempt may still own a backend session: close it so the
-    // backend never keeps an orphaned session.
-    if (pane.sessionId) {
-      const previous = pane.sessionId;
-      pane.sessionId = null;
-      try {
-        await api.sessionClose(previous);
-      } catch {
-        // Already gone — nothing to clean up.
-      }
-    }
-
-    const channel = new Channel<SessionUpdate>();
-    channel.onmessage = (update) => {
-      if (update.kind === 'data') {
-        term?.write(decodeBase64(update.base64));
-        return;
-      }
-      sessions.applyUpdate(pane, update);
-    };
-
-    const geometry = currentGeometry();
-    try {
-      if (pane.attachTo) {
-        // The session lives in another window: attach to it (the backend
-        // sends the replay buffer, then the live stream).
-        await api.sessionAttach(pane.attachTo, channel);
-        if (pane.generation !== generation) return;
-        pane.sessionId = pane.attachTo;
-        return;
-      }
-      const id = pane.duplicateFrom
-        ? await api.sessionDuplicate(pane.duplicateFrom, geometry, channel)
-        : await api.sessionOpen(
-            pane.host.id,
-            { cols: geometry.cols, rows: geometry.rows, secrets: pane.secrets },
-            channel,
-          );
-      if (pane.generation !== generation) {
-        // Superseded by a newer attempt: drop this session immediately.
-        void api.sessionClose(id).catch(() => {});
-        return;
-      }
-      pane.sessionId = id;
-    } catch (err) {
-      if (pane.generation === generation) {
-        sessions.fail(pane, errorMessage(err));
-      }
-    }
-  }
-
-  function currentGeometry(): { cols: number; rows: number } {
-    if (term) return { cols: term.cols, rows: term.rows };
-    return { cols: 80, rows: 24 };
-  }
-
   function scheduleFit(): void {
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      if (!fitAddon || !term) return;
-      const element = container as HTMLDivElement | undefined;
-      if (!element || element.offsetWidth === 0 || element.offsetHeight === 0) {
-        // Hidden pane: nothing to fit (xterm would compute a 0x0 grid).
-        return;
-      }
-      try {
-        fitAddon.fit();
-      } catch {
-        return;
-      }
-      const sessionId = pane.sessionId;
-      if (!sessionId) return;
-      void api.sessionResize(sessionId, term.cols, term.rows).catch(() => {
-        // Resize failures are transient (session closing).
-      });
-    }, 120);
+    if (fitTimer) clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => void refit(), 120);
+  }
+
+  async function refit(): Promise<void> {
+    const instance = handle;
+    if (!instance) return;
+    if (!isVisible(instance)) {
+      // A hidden pane keeps no GPU context and computes no 0x0 grid.
+      setAccelerated(instance, false);
+      return;
+    }
+    await whenFontsReady(instance);
+    if (handle !== instance || !isVisible(instance)) return;
+    setAccelerated(instance, true);
+    const changed = fitTerminal(instance);
+    const sessionId = pane.sessionId;
+    if (changed && sessionId) pushSize(instance, sessionId);
   }
 </script>
 
@@ -218,16 +140,20 @@
   {:else if pane.dead}
     <div class="overlay dead" role="alert">
       <p class="dead-title">
-        {#if pane.exitCode !== null}
+        {#if pane.restored}
+          Not connected
+        {:else if pane.exitCode !== null}
           Process exited with code {pane.exitCode}
         {:else}
           Connection closed
         {/if}
       </p>
-      {#if pane.errorMessage}
+      {#if pane.restored}
+        <p class="dead-detail muted">Reconnect to {pane.host?.name ?? 'the host'} to continue.</p>
+      {:else if pane.errorMessage}
         <p class="dead-detail">{pane.errorMessage}</p>
       {/if}
-      <button type="button" onclick={() => sessions.retry(pane)}>Reconnect</button>
+      <button type="button" onclick={() => void connectFlow.reconnect(pane)}>Reconnect</button>
     </div>
   {/if}
 </div>
@@ -237,11 +163,16 @@
     position: relative;
     height: 100%;
     min-height: 0;
-    background: var(--termru-bg);
+    background: var(--termru-terminal);
   }
 
+  /* The padding sits on this wrapper: the fit addon measures the terminal
+     surface inside it, which has none. */
   .terminal {
     height: 100%;
+    padding: 12px 16px;
+    background: var(--termru-terminal);
+    overflow: hidden;
   }
 
   .overlay {
@@ -252,7 +183,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.75rem;
-    background: color-mix(in srgb, var(--termru-bg) 88%, transparent);
+    background: color-mix(in srgb, var(--termru-terminal) 88%, transparent);
     color: var(--termru-muted);
     font-size: 0.9rem;
   }
@@ -272,6 +203,10 @@
     max-width: 40rem;
     text-align: center;
     font-size: 0.85rem;
+  }
+
+  .dead-detail.muted {
+    color: var(--termru-muted);
   }
 
   .spinner {

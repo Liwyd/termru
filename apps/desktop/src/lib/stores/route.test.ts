@@ -95,3 +95,97 @@ describe('route store', () => {
     expect(ids.length).toBe(7);
   });
 });
+
+describe('navigating back', () => {
+  beforeEach(() => {
+    window.location.hash = '';
+  });
+
+  it('returns to the page the user came from, not always to hosts', () => {
+    const store = new RouteStore();
+    store.go('sessions');
+    store.go('preferences');
+    store.back();
+    expect(store.route).toBe('sessions');
+    expect(window.location.hash).toBe('#sessions');
+  });
+
+  it('walks back through several pages and falls back to hosts at the start', () => {
+    const store = new RouteStore();
+    store.go('folders');
+    store.go('identities');
+    store.go('sync');
+    store.back();
+    expect(store.route).toBe('identities');
+    store.back();
+    expect(store.route).toBe('folders');
+    store.back();
+    expect(store.route).toBe('hosts');
+    // Nothing left to return to: the fallback, whatever it is.
+    store.back('sessions');
+    expect(store.route).toBe('sessions');
+  });
+
+  it('remembers pages reached through the URL hash as well', () => {
+    const store = new RouteStore();
+    store.go('folders');
+    window.location.hash = '#preferences';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    store.back();
+    expect(store.route).toBe('folders');
+  });
+
+  it('does not count the page it is already on', () => {
+    const store = new RouteStore();
+    store.go('folders');
+    store.go('folders');
+    store.back();
+    expect(store.route).toBe('hosts');
+  });
+});
+
+describe('the host editor route', () => {
+  beforeEach(() => {
+    window.location.hash = '';
+  });
+
+  const host = { id: 'h1' } as Parameters<RouteStore['edit']>[0];
+  const draft = {
+    host: { id: 'h1', name: 'typed so far' } as NonNullable<Parameters<RouteStore['edit']>[0]>,
+    authType: 'private_key' as const,
+    identityId: 'i1',
+    groupId: '',
+    tags: ['t1'],
+  };
+
+  it('opens with edit(host) alone and edit(null) means a new host', () => {
+    const store = new RouteStore();
+    store.edit(null);
+    expect(store.route).toBe('host-edit');
+    expect(store.editHost).toBeNull();
+    store.edit(host);
+    expect(store.editHost).toEqual(host);
+  });
+
+  it('parks the unsaved form while another page is open, and keeps the host', () => {
+    const store = new RouteStore();
+    store.edit(host);
+    store.leaveEditor(draft, 'identities');
+    expect(store.route).toBe('identities');
+    expect(store.draft).toEqual(draft);
+    expect(store.editHost).toEqual(host);
+
+    // The identities page's Close goes back to the editor.
+    store.back();
+    expect(store.route).toBe('host-edit');
+    expect(store.draft).toEqual(draft);
+  });
+
+  it('forgets a parked form when another edit starts', () => {
+    const store = new RouteStore();
+    store.edit(host);
+    store.leaveEditor(draft, 'identities');
+    store.edit(null);
+    expect(store.draft).toBeNull();
+  });
+});

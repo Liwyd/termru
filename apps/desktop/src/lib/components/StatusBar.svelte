@@ -1,8 +1,36 @@
 <script lang="ts">
+  import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import { route } from '../stores/route.svelte';
   import { hosts } from '../stores/hosts.svelte';
+  import { prefs } from '../stores/prefs.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
+
+  // The network state is read from the window's own events: `navigator.onLine`
+  // alone is not reactive.
+  let online = $state(true);
+  $effect(() => {
+    online = navigator.onLine;
+    const apply = (event: Event) => {
+      online = event.type !== 'offline';
+    };
+    window.addEventListener('online', apply);
+    window.addEventListener('offline', apply);
+    return () => {
+      window.removeEventListener('online', apply);
+      window.removeEventListener('offline', apply);
+    };
+  });
+
+  /** The real state of the sync, not a constant. */
+  const syncState = $derived(
+    !sync.signedIn ? 'Local workspace' : online ? 'Sync · signed in' : 'Sync · offline',
+  );
+
+  /** The palette chord, as the user has it bound. */
+  const paletteHint = $derived(
+    acceleratorLabel(acceleratorFor('palette.open', prefs.prefs.keybindings)),
+  );
 
   /**
    * The left line is contextual: one honest sentence about the current
@@ -44,8 +72,8 @@
 <footer class="statusbar" role="status">
   <span class="context">{context}</span>
   <span class="right">
-    <span>SSH · Local workspace</span>
-    <span class="hint">⌘ / Ctrl K Quick switch</span>
+    <span>SSH · {syncState}</span>
+    <span class="hint">{paletteHint} Quick switch</span>
   </span>
 </footer>
 

@@ -11,6 +11,7 @@ import {
   toLayoutNode,
   type TreeNode,
 } from '../pane-tree';
+import { disposeTerminal } from '../terminal/registry';
 import { errorMessage, hosts } from './hosts.svelte';
 import { route } from './route.svelte';
 import { toasts } from './toasts.svelte';
@@ -48,6 +49,11 @@ export interface Pane {
   attachTo: string | null;
   /** Store the secret in the OS credential store once connected. */
   rememberSecret: boolean;
+  /**
+   * Set when the user supplied new secrets for a reconnect: the old session
+   * (which holds the old credentials) is replaced instead of retried.
+   */
+  freshConnect?: boolean;
 }
 
 export interface Tab {
@@ -81,10 +87,29 @@ function newPaneId(): string {
 export class SessionStore {
   tabs = $state<Tab[]>([]);
   activeId = $state<string | null>(null);
+  /**
+   * The label of the window this store lives in. A session window (opened
+   * by "Move to a new window") is labelled `session-<id>`.
+   */
+  windowLabel = $state<string | null>(null);
+  /** True once the saved layout was read (or there was none). */
+  layoutLoaded = $state(false);
   #layoutTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The pending reconnect watchdog of every pane (one at a time). */
+  #watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** True in a window opened for a moved session. */
+  get isSessionWindow(): boolean {
+    return this.windowLabel?.startsWith('session-') === true;
+  }
 
   get active(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? null;
+  }
+
+  /** The pane with the given id, as the store holds it. */
+  paneById(paneId: string): Pane | null {
+    return this.#storedPane({ id: paneId } as Pane);
   }
 
   /** The pane with the focus, if any. */
@@ -221,7 +246,12 @@ export class SessionStore {
   }
 
   /** Fills an empty pane with a host and connects it. */
-  async connectPane(pane: Pane, host: Host, secrets: SessionSecrets = {}): Promise<void> {
+  async connectPane(
+    pane: Pane,
+    host: Host,
+    secrets: SessionSecrets = {},
+    remember = false,
+  ): Promise<void> {
     const found = this.#resolve(this.tabOfPane(pane.id)?.id ?? '', pane.id);
     if (!found) return;
     const { tab, pane: target } = found;
@@ -231,6 +261,7 @@ export class SessionStore {
     target.dead = false;
     target.errorMessage = null;
     target.secrets = secrets;
+    target.rememberSecret = remember;
     target.generation += 1;
     if (tab.title === 'New pane' || tab.panes.length === 1) tab.title = host.name;
     this.scheduleLayoutSave();
@@ -282,7 +313,12 @@ export class SessionStore {
           toasts.error(errorMessage(err));
         }
       }
+      // The session is gone: closing the tab must not close it again.
+      stored.sessionId = null;
     }
+    // The pane is really removed: only now does its terminal go away.
+    this.#clearWatchdog(pane.id);
+    disposeTerminal(pane.id);
     const root = removeNode(tab.root, pane.id);
     const panes = tab.panes.filter((entry) => entry.id !== pane.id);
     if (!root || panes.length === 0) {
@@ -309,11 +345,26 @@ export class SessionStore {
         }
       }
     }
-    this.tabs = this.tabs.filter((entry) => entry.id !== tab.id);
+    for (const pane of stored.panes) {
+      this.#clearWatchdog(pane.id);
+      disposeTerminal(pane.id);
+    }
+    this.#removeTab(tab.id);
+  }
+
+  /** Drops a tab from the list (its sessions are already closed or moved). */
+  #removeTab(tabId: string): void {
+    this.tabs = this.tabs.filter((entry) => entry.id !== tabId);
     this.scheduleLayoutSave();
-    if (this.activeId === tab.id) {
+    if (this.activeId === tabId) {
       const next = this.tabs[this.tabs.length - 1];
       this.activeId = next ? next.id : null;
+    }
+    // A session window with nothing left to show closes itself.
+    if (this.isSessionWindow && this.tabs.length === 0 && this.windowLabel) {
+      void api.windowClose(this.windowLabel).catch(() => {
+        // The window is already closing.
+      });
     }
   }
 
@@ -322,6 +373,7 @@ export class SessionStore {
     if (trimmed.length === 0) return;
     const stored = this.tabs.find((entry) => entry.id === tab.id) ?? tab;
     stored.title = trimmed;
+    this.scheduleLayoutSave();
   }
 
   setActive(id: string): void {
@@ -361,6 +413,11 @@ export class SessionStore {
   }
 
   async saveLayout(): Promise<void> {
+    // A session window shows one moved session: it never owns the layout
+    // (the main window's `window-main` document would be overwritten).
+    if (this.isSessionWindow) return;
+    // Before the saved layout is read, an empty store must not replace it.
+    if (!this.layoutLoaded && this.tabs.length === 0) return;
     const doc = this.toLayoutDoc();
     try {
       await api.layoutSave(doc);
@@ -401,6 +458,14 @@ export class SessionStore {
    * a reconnect affordance, because the credentials are not stored.
    */
   async restoreLayout(): Promise<void> {
+    try {
+      await this.#restoreLayout();
+    } finally {
+      this.layoutLoaded = true;
+    }
+  }
+
+  async #restoreLayout(): Promise<void> {
     let doc: WorkspaceDoc | null = null;
     try {
       doc = await api.layoutLoad();
@@ -454,10 +519,11 @@ export class SessionStore {
    * moved). The session itself is not restarted.
    */
   attachTab(sessionId: string, host: Host): Tab {
+    // The session id is NOT set yet: the terminal view attaches to
+    // `attachTo` (it never closes it) and records the id once attached.
     const pane: Pane = {
       ...this.#newPane(host, {}, false),
       id: newPaneId(),
-      sessionId,
       status: { state: 'connecting' },
       attachTo: sessionId,
     };
@@ -474,30 +540,76 @@ export class SessionStore {
   }
 
   /**
-   * Moves a tab to a new window. The session keeps running in the
-   * background; the new window attaches to it.
+   * Moves a tab to new windows: every connected pane gets a window that
+   * attaches to its session. The sessions keep running in the background;
+   * only the views move. Panes that are not connected stay in the tab.
    */
   async moveToNewWindow(tab: Tab): Promise<void> {
-    const pane = this.activePaneOf(tab);
-    if (!pane?.sessionId) return;
-    try {
-      await api.windowOpenSession(pane.sessionId, tab.title);
-      // The view moves: drop it here without closing the session.
-      this.tabs = this.tabs.filter((entry) => entry.id !== tab.id);
-      if (this.activeId === tab.id) {
-        const next = this.tabs[this.tabs.length - 1];
-        this.activeId = next ? next.id : null;
+    const stored = this.tabs.find((entry) => entry.id === tab.id) ?? tab;
+    const movable = stored.panes.filter(
+      (pane) => pane.sessionId !== null && pane.status.state === 'ready',
+    );
+    if (movable.length === 0) return;
+
+    const moved: Pane[] = [];
+    for (const pane of movable) {
+      if (!pane.sessionId) continue;
+      const title = stored.panes.length > 1 ? pane.title : stored.title;
+      try {
+        await api.windowOpenSession(pane.sessionId, title);
+        moved.push(pane);
+      } catch (err) {
+        toasts.error(errorMessage(err));
       }
-    } catch (err) {
-      toasts.error(errorMessage(err));
+    }
+    if (moved.length === 0) return;
+
+    // The views move: drop them here without closing the sessions. The
+    // main window must stop receiving their output.
+    for (const pane of moved) {
+      if (pane.sessionId) await this.#detachView(pane.sessionId);
+      this.#clearWatchdog(pane.id);
+      disposeTerminal(pane.id);
+    }
+
+    const movedIds = new Set(moved.map((pane) => pane.id));
+    let root: TreeNode | null = stored.root;
+    for (const id of movedIds) root = root ? removeNode(root, id) : null;
+    const remaining = stored.panes.filter((pane) => !movedIds.has(pane.id));
+    if (!root || remaining.length === 0) {
+      this.#removeTab(stored.id);
+      return;
+    }
+    stored.root = root;
+    stored.panes = remaining;
+    if (stored.activePaneId && movedIds.has(stored.activePaneId)) {
+      stored.activePaneId = collectPanes(root)[0] ?? null;
+    }
+    this.scheduleLayoutSave();
+  }
+
+  /**
+   * Tells the backend this window no longer shows a session. Best effort:
+   * an older backend has no such command, and the session is never closed.
+   */
+  async #detachView(sessionId: string): Promise<void> {
+    try {
+      await api.sessionDetach(sessionId);
+    } catch {
+      // Unsupported or already gone: the view is dropped here regardless.
     }
   }
 
   /** Applies a backend status event to a pane. */
   applyStatus(pane: Pane, status: SessionStatus): void {
-    const target = this.#storedPane(pane) ?? pane;
+    // A pane that was removed meanwhile must not be updated by a late event.
+    const target = this.#storedPane(pane);
+    if (!target) return;
     target.status = status;
     target.errorMessage = null;
+
+    // Only `closed` arms the watchdog; any other state settles the wait.
+    if (status.state !== 'closed') this.#clearWatchdog(target.id);
 
     switch (status.state) {
       case 'ready':
@@ -548,14 +660,26 @@ export class SessionStore {
     return category === 'network' || category === 'timeout';
   }
 
+  /** Arms the watchdog of a pane; a previous one is replaced, never stacked. */
   private armWatchdog(pane: Pane): void {
-    setTimeout(() => {
-      if (pane.awaitingReconnect) {
-        pane.dead = true;
-        pane.awaitingReconnect = false;
-        pane.errorMessage = pane.errorMessage ?? 'connection lost';
-      }
-    }, RECONNECT_WATCHDOG_MS);
+    this.#clearWatchdog(pane.id);
+    this.#watchdogs.set(
+      pane.id,
+      setTimeout(() => {
+        this.#watchdogs.delete(pane.id);
+        if (pane.awaitingReconnect) {
+          pane.dead = true;
+          pane.awaitingReconnect = false;
+          pane.errorMessage = pane.errorMessage ?? 'connection lost';
+        }
+      }, RECONNECT_WATCHDOG_MS),
+    );
+  }
+
+  #clearWatchdog(paneId: string): void {
+    const timer = this.#watchdogs.get(paneId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.#watchdogs.delete(paneId);
   }
 
   /** Applies a channel update to a pane. */
@@ -573,13 +697,27 @@ export class SessionStore {
     }
   }
 
-  /** Forces a fresh connection for a pane (retry after failure). */
-  retry(pane: Pane): void {
+  /**
+   * Forces a new connection attempt for a pane (retry after failure).
+   *
+   * New secrets (collected by the connect dialog) mean the old session, which
+   * holds the old credentials, is replaced by a fresh one.
+   */
+  retry(pane: Pane, secrets?: SessionSecrets, remember?: boolean): void {
     const target = this.#storedPane(pane) ?? pane;
+    this.#clearWatchdog(target.id);
     target.dead = false;
+    target.awaitingReconnect = false;
     target.errorMessage = null;
     target.exitCode = null;
+    // A restored pane connects only when the user asks: this is the ask.
+    target.restored = false;
     target.status = { state: 'connecting' };
+    if (secrets) {
+      target.secrets = secrets;
+      target.freshConnect = true;
+      if (remember !== undefined) target.rememberSecret = remember;
+    }
     target.generation += 1;
   }
 

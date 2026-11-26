@@ -1,4 +1,5 @@
 import { api } from '../ipc';
+import { toasts } from './toasts.svelte';
 import type { Group, Host, Identity, RecentHost, Tag } from '../types';
 
 /** The filter tabs of the hosts page (frame 1). */
@@ -18,7 +19,10 @@ export class HostsStore {
   /** The labels of the hosts. */
   tags = $state.raw<Tag[]>([]);
   loading = $state(false);
+  /** The reason the hosts could not be loaded (the page error state). */
   error = $state<string | null>(null);
+  /** The reason the last `save` failed (shown by the editor). */
+  saveError = $state<string | null>(null);
   query = $state('');
   /** The active filter tab of the hosts table. */
   filterTab = $state<HostFilterTab>('all');
@@ -28,9 +32,10 @@ export class HostsStore {
   recentAt = $state.raw<Record<string, number>>({});
   /** Known state of the stored password per host id; unknown = absent. */
   passwordStored = $state.raw<Record<string, boolean>>({});
-  /** Editor dialog state: `editing` = host being edited (`null` = new host). */
-  editorOpen = $state(false);
-  editing = $state<Host | null>(null);
+  /** True once the hosts were read successfully (a refresh keeps them on screen). */
+  loaded = $state(false);
+  /** Set to ask the hosts page to focus its search field (consumed there). */
+  searchFocus = $state(false);
 
   /**
    * Hosts matching the search box, in table order (the command palette
@@ -197,8 +202,16 @@ export class HostsStore {
     return options.sort((a, b) => a.label.localeCompare(b.label));
   }
 
+  /**
+   * Reads everything from the local store.
+   *
+   * The skeleton and the page error belong to the first load only: a later
+   * refresh (after a sync, a created folder…) keeps the data on screen and
+   * reports a failure as a notice instead of replacing the table.
+   */
   async load(): Promise<void> {
-    this.loading = true;
+    const first = !this.loaded;
+    if (first) this.loading = true;
     this.error = null;
     try {
       const [hosts, identities, recents, groups, tags] = await Promise.all([
@@ -213,8 +226,10 @@ export class HostsStore {
       this.recentAt = recentMap(recents);
       this.groups = (groups ?? []).filter((group) => !group.deleted);
       this.tags = (tags ?? []).filter((tag) => !tag.deleted);
+      this.loaded = true;
     } catch (err) {
-      this.error = errorMessage(err);
+      if (first) this.error = errorMessage(err);
+      else toasts.error(`Could not refresh the hosts: ${errorMessage(err)}`);
     } finally {
       this.loading = false;
     }
@@ -249,7 +264,13 @@ export class HostsStore {
     this.passwordStored = { ...this.passwordStored, [hostId]: stored };
   }
 
+  /**
+   * Saves a host. Returns null when the store refused it; the reason is in
+   * `saveError` for the editor to show next to the form. A failed mutation
+   * never replaces the hosts table with an error page.
+   */
   async save(host: Host): Promise<Host | null> {
+    this.saveError = null;
     try {
       const saved = await api.hostSave(host);
       // Raw state: the array is replaced, never written into.
@@ -258,17 +279,20 @@ export class HostsStore {
         : [...this.hosts, saved];
       return saved;
     } catch (err) {
-      this.error = errorMessage(err);
+      this.saveError = errorMessage(err);
       return null;
     }
   }
 
-  async remove(id: string): Promise<void> {
+  /** Deletes a host. Returns false (after a notice) when the store refused. */
+  async remove(id: string): Promise<boolean> {
     try {
       await api.hostDelete(id);
       this.hosts = this.hosts.filter((host) => host.id !== id);
+      return true;
     } catch (err) {
-      this.error = errorMessage(err);
+      toasts.error(`Could not delete the host: ${errorMessage(err)}`);
+      return false;
     }
   }
 
@@ -281,7 +305,7 @@ export class HostsStore {
         entry.id === host.id ? { ...entry, favorite: next } : entry,
       );
     } catch (err) {
-      this.error = errorMessage(err);
+      toasts.error(`Could not update the favorite: ${errorMessage(err)}`);
     }
   }
 }

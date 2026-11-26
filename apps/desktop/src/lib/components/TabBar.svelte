@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { autofocus } from '../actions/autofocus';
   import { sessions } from '../stores/sessions.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import type { Tab } from '../stores/sessions.svelte';
@@ -8,8 +9,13 @@
   /** The pane that carries the tab: its status is the status of the tab. */
   const pane = $derived(sessions.activePaneOf(tab));
 
+  /** Duplicating or moving needs a connected session to work from. */
+  const canClone = $derived(pane?.status.state === 'ready' && pane.sessionId !== null);
+
   let renaming = $state(false);
   let draftTitle = $state('');
+  /** Escape was pressed: the blur that follows must not commit. */
+  let renameCancelled = false;
   let dragIndex = $state<number | null>(null);
   let dropIndex = $state<number | null>(null);
 
@@ -36,12 +42,33 @@
 
   function startRename(): void {
     draftTitle = tab.title;
+    renameCancelled = false;
     renaming = true;
   }
 
+  /** Enter or blur: keeps the new name (an empty name keeps the old one). */
   function commitRename(): void {
-    sessions.rename(tab, draftTitle);
+    if (!renaming || renameCancelled) return;
     renaming = false;
+    sessions.rename(tab, draftTitle);
+  }
+
+  /** Escape: back to the old name. */
+  function cancelRename(): void {
+    renameCancelled = true;
+    renaming = false;
+  }
+
+  /** Keyboard on the tab itself: Enter or Space opens it, F2 renames it. */
+  function onTabKeyDown(event: KeyboardEvent): void {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      sessions.setActive(tab.id);
+    } else if (event.key === 'F2') {
+      event.preventDefault();
+      startRename();
+    }
   }
 </script>
 
@@ -53,6 +80,7 @@
   aria-selected={active}
   tabindex="0"
   draggable="true"
+  onkeydown={onTabKeyDown}
   ondragstart={(event) => onDragStart(event, sessions.tabs.indexOf(tab))}
   ondragover={(event) => onDragOver(event, sessions.tabs.indexOf(tab))}
   ondragleave={() => (dropIndex = null)}
@@ -65,11 +93,15 @@
   {#if renaming}
     <input
       class="rename"
+      aria-label="Tab name"
       bind:value={draftTitle}
+      use:autofocus
       onblur={commitRename}
       onkeydown={(event) => {
+        // The keys of the field stay in the field (the tab has its own).
+        event.stopPropagation();
         if (event.key === 'Enter') commitRename();
-        if (event.key === 'Escape') renaming = false;
+        else if (event.key === 'Escape') cancelRename();
       }}
       onclick={(event) => event.stopPropagation()}
     />
@@ -93,7 +125,7 @@
     class="close"
     aria-label={`Duplicate ${tab.title}`}
     title="Duplicate session"
-    disabled={!pane?.sessionId}
+    disabled={!canClone}
     onclick={() => sessions.duplicate(tab)}
   >
     ⧉
@@ -104,7 +136,7 @@
     class="close"
     aria-label={`Move ${tab.title} to a new window`}
     title="Move to a new window"
-    disabled={!pane?.sessionId}
+    disabled={!canClone}
     onclick={() => void sessions.moveToNewWindow(tab)}
   >
     ↗

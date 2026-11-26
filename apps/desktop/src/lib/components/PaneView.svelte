@@ -1,14 +1,32 @@
 <script lang="ts">
   import { sessions } from '../stores/sessions.svelte';
+  import { connectFlow } from '../stores/connect.svelte';
   import { hosts } from '../stores/hosts.svelte';
+  import { route } from '../stores/route.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import Terminal from './Terminal.svelte';
   import type { Pane } from '../stores/sessions.svelte';
 
   let { pane, focused }: { pane: Pane; focused: boolean } = $props();
 
-  /** The hosts offered in an empty pane. */
-  const candidates = $derived(hosts.hosts.slice(0, 8));
+  /** What the user typed to find a host for an empty pane. */
+  let query = $state('');
+
+  /** Every host that matches the search (not only the first few). */
+  const candidates = $derived.by(() => {
+    const needle = query.trim().toLowerCase();
+    const all = hosts.sortedAll;
+    if (!needle) return all;
+    return all.filter((host) =>
+      [host.name, host.address, host.username].some((field) =>
+        field.toLowerCase().includes(needle),
+      ),
+    );
+  });
+
+  function pick(host: (typeof candidates)[number]): void {
+    void connectFlow.pick(pane, host);
+  }
 </script>
 
 <section class="pane" class:focused aria-label={pane.title}>
@@ -74,23 +92,45 @@
 
   <div class="body">
     {#if pane.host}
-      <Terminal {pane} />
+      {#key pane.id}
+        <Terminal {pane} />
+      {/key}
     {:else}
       <div class="empty">
         <p>No session in this pane.</p>
-        {#if candidates.length > 0}
-          <ul>
-            {#each candidates as host (host.id)}
-              <li>
-                <button type="button" onclick={() => void sessions.connectPane(pane, host)}>
-                  {host.name}
-                  <span class="address">{host.username}@{host.address}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+        {#if hosts.hosts.length > 0}
+          <input
+            type="search"
+            class="filter"
+            placeholder="Search hosts"
+            aria-label="Search hosts for this pane"
+            bind:value={query}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' && candidates[0]) {
+                event.preventDefault();
+                pick(candidates[0]);
+              }
+            }}
+          />
+          {#if candidates.length > 0}
+            <ul>
+              {#each candidates as host (host.id)}
+                <li>
+                  <button type="button" onclick={() => pick(host)}>
+                    {host.name}
+                    <span class="address">{host.username}@{host.address}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="hint">No host matches “{query.trim()}”.</p>
+          {/if}
         {:else}
-          <p class="hint">Add a host in the sidebar first.</p>
+          <p class="hint">No saved hosts yet.</p>
+          <button type="button" class="primary new" onclick={() => route.edit(null)}>
+            New host
+          </button>
         {/if}
       </div>
     {/if}
@@ -165,6 +205,9 @@
 
   .empty {
     height: 100%;
+    min-height: 0;
+    padding: 0.75rem 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -185,7 +228,27 @@
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
-    max-width: 22rem;
+    width: min(22rem, 90%);
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .empty .filter {
+    width: min(22rem, 90%);
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--termru-border);
+    border-radius: var(--termru-radius);
+    background: var(--termru-surface);
+    color: var(--termru-fg);
+    font: inherit;
+  }
+
+  .empty .new {
+    width: auto;
+    text-align: center;
+    background: var(--termru-accent);
+    border-color: var(--termru-accent);
+    color: var(--termru-on-accent);
   }
 
   .empty button {

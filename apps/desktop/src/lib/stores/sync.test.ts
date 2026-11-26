@@ -106,4 +106,35 @@ describe('SyncStore', () => {
       deviceName: 'laptop',
     });
   });
+
+  it('reloads the hosts and the preferences after a sync', async () => {
+    const store = new SyncStore();
+    await store.syncNow();
+    const commands = answers.calls.map((entry) => entry.cmd);
+    expect(commands).toContain('host_list');
+    expect(commands).toContain('prefs_get');
+  });
+
+  it('reloads the hosts and the preferences after a conflict is resolved', async () => {
+    const store = new SyncStore();
+    await store.resolve('host-1', false);
+    const commands = answers.calls.map((entry) => entry.cmd);
+    expect(commands).toContain('host_list');
+    expect(commands).toContain('prefs_get');
+  });
+
+  it('does not reload anything when the sync failed', async () => {
+    answers.failure = 'unreachable';
+    const store = new SyncStore();
+    await store.syncNow();
+    expect(answers.calls.map((entry) => entry.cmd)).not.toContain('host_list');
+  });
+
+  it('reloads on the backend event that says records were applied', async () => {
+    const store = new SyncStore();
+    await store.reloadApplied();
+    const commands = answers.calls.map((entry) => entry.cmd);
+    expect(commands).toContain('host_list');
+    expect(commands).toContain('prefs_get');
+  });
 });

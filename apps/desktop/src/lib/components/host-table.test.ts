@@ -4,7 +4,7 @@
  * windowed rendering of a very large list.
  */
 
-import { flushSync, mount } from 'svelte';
+import { flushSync, mount, tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HostTable from './HostTable.svelte';
 import { hosts } from '../stores/hosts.svelte';
@@ -274,3 +274,91 @@ describe('HostTable windowing', () => {
 function click(element: Element): void {
   element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
+
+describe('HostTable keyboard', () => {
+  /** The row takes the focus a microtask after the key (it waits for the DOM). */
+  async function settle(): Promise<void> {
+    await tick();
+    await tick();
+  }
+
+  function key(element: Element, name: string, init: KeyboardEventInit = {}): void {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, ...init }));
+  }
+
+  function rowOf(root: ParentNode, name: string): HTMLElement {
+    const row = Array.from(root.querySelectorAll<HTMLElement>('.row')).find((entry) =>
+      entry.textContent?.includes(name),
+    );
+    if (!row) throw new Error(`row "${name}" not found`);
+    return row;
+  }
+
+  it('has one tab stop: the first row, and only the buttons of that row', () => {
+    const rendered = render([host('a'), host('b'), host('c')]);
+    target = rendered.target;
+    const rows = Array.from(target.querySelectorAll<HTMLElement>('.row'));
+    expect(rows.map((row) => row.tabIndex)).toEqual([0, -1, -1]);
+    // The buttons of the other rows are not tab stops.
+    expect(rows[0].querySelector('button')?.tabIndex).toBe(0);
+    expect(rows[1].querySelector('button')?.tabIndex).toBe(-1);
+    expect(rows[2].querySelector('button')?.tabIndex).toBe(-1);
+  });
+
+  it('moves the focus and the tab stop with the arrow keys', async () => {
+    const rendered = render([host('a'), host('b'), host('c')]);
+    target = rendered.target;
+    const first = rowOf(target, 'a.test');
+    first.focus();
+
+    key(first, 'ArrowDown');
+    await settle();
+    const second = rowOf(target, 'b.test');
+    expect(document.activeElement).toBe(second);
+    expect(second.tabIndex).toBe(0);
+    expect(first.tabIndex).toBe(-1);
+
+    key(second, 'End');
+    await settle();
+    expect(document.activeElement).toBe(rowOf(target, 'c.test'));
+    key(rowOf(target, 'c.test'), 'ArrowDown');
+    await settle();
+    // The last row stays the last.
+    expect(document.activeElement).toBe(rowOf(target, 'c.test'));
+
+    key(rowOf(target, 'c.test'), 'Home');
+    await settle();
+    expect(document.activeElement).toBe(rowOf(target, 'a.test'));
+    key(rowOf(target, 'a.test'), 'ArrowUp');
+    await settle();
+    expect(document.activeElement).toBe(rowOf(target, 'a.test'));
+  });
+
+  it('connects on Enter and edits on E or F2', () => {
+    const web = host('web');
+    const rendered = render([web]);
+    target = rendered.target;
+    const row = rowOf(target, 'web.test');
+    row.focus();
+
+    key(row, 'Enter');
+    expect(rendered.handlers.onconnect).toHaveBeenCalledWith(web);
+
+    key(row, 'e');
+    key(row, 'F2');
+    expect(rendered.handlers.onedit).toHaveBeenCalledTimes(2);
+
+    // A chord with a modifier belongs to the app, not to the row.
+    key(row, 'e', { ctrlKey: true });
+    expect(rendered.handlers.onedit).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the keys of its buttons to them', () => {
+    const web = host('web');
+    const rendered = render([web]);
+    target = rendered.target;
+    const connect = findButton(target, 'Connect');
+    key(connect, 'e');
+    expect(rendered.handlers.onedit).not.toHaveBeenCalled();
+  });
+});

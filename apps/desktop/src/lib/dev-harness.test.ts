@@ -146,6 +146,7 @@ describe('mock backend: command coverage', () => {
       return api.sessionDuplicate(id, { cols: 80, rows: 24 }, recordingChannel().channel);
     },
     sessionClose: async () => api.sessionClose(await openProbeSession()),
+    sessionDetach: async () => api.sessionDetach(await openProbeSession()),
     sessionWrite: async () => api.sessionWrite(await openProbeSession(), [108, 115, 13]),
     sessionResize: async () => api.sessionResize(await openProbeSession(), 100, 30),
     sessionList: () => api.sessionList(),

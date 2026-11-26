@@ -1,6 +1,7 @@
 /**
  * Source guard: destructive confirmations use the in-app ContextConfirm
- * dialog (Doc A.05), never the browser's `window.confirm` / `alert`.
+ * dialog (Doc A.05), never the browser's `window.confirm` / `alert` /
+ * `prompt` (a rename is an inline input).
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -26,6 +27,14 @@ describe('no native dialogs', () => {
     const offenders = sourceFiles(join(__dirname, '..'))
       .map((file) => ({ file, text: readFileSync(file, 'utf8') }))
       .filter(({ text }) => /window\.confirm\s*\(|(^|[^.\w])alert\s*\(/m.test(text))
+      .map(({ file }) => file);
+    expect(offenders).toEqual([]);
+  });
+
+  it('never calls window.prompt or prompt in app source', () => {
+    const offenders = sourceFiles(join(__dirname, '..'))
+      .map((file) => ({ file, text: readFileSync(file, 'utf8') }))
+      .filter(({ text }) => /window\.prompt\s*\(|(^|[^.\w])prompt\s*\(/m.test(text))
       .map(({ file }) => file);
     expect(offenders).toEqual([]);
   });

@@ -4,7 +4,13 @@
 
   const items: RouteId[] = ['hosts', 'sessions', 'folders', 'identities', 'sync', 'preferences'];
 
+  /** Open tabs (the badge on Sessions). */
   const openCount = $derived(sessions.tabs.length);
+  /** Sessions that are connected right now (a tab may hold several panes). */
+  const connectedCount = $derived(
+    sessions.tabs.flatMap((tab) => tab.panes).filter((pane) => pane.status.state === 'ready')
+      .length,
+  );
 </script>
 
 <nav class="appnav" aria-label="Primary">
@@ -33,8 +39,8 @@
   </ul>
 
   <span class="connected">
-    {#if openCount > 0}
-      {openCount} session{openCount === 1 ? '' : 's'} connected
+    {#if connectedCount > 0}
+      {connectedCount} session{connectedCount === 1 ? '' : 's'} connected
     {:else}
       No sessions connected
     {/if}

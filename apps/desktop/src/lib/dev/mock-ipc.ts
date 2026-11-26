@@ -762,10 +762,25 @@ function scheduleStartup(): void {
 }
 
 /**
+ * A session that is already connected, with its whole transcript in the
+ * replay buffer and no view yet: the terminal that shows it attaches (like
+ * the window of a moved tab) and receives the replay.
+ */
+function connectedSession(host: Host): MockSession {
+  const variants = variantsFor(host);
+  const count = openCounts.get(host.id) ?? 0;
+  openCounts.set(host.id, count + 1);
+  const session = createSession(host, variants[count % variants.length]);
+  session.status = { state: 'ready' };
+  for (const chunk of transcript(session, host)) sendData(session, chunk);
+  return session;
+}
+
+/**
  * `?demo`: the restored panes count as connected, so the hosts page shows
  * live sessions before the Sessions page is ever opened (the terminals
- * reconnect when that page mounts). Like a real connection, they also make
- * their hosts the most recent ones (the order of frame 1).
+ * attach to them when that page mounts). Like a real connection, they also
+ * make their hosts the most recent ones (the order of frame 1).
  */
 async function connectRestoredPanes(): Promise<void> {
   const [{ sessions: store }, { hosts }] = await Promise.all([
@@ -781,11 +796,14 @@ async function connectRestoredPanes(): Promise<void> {
       if (!pane.host || !pane.restored) continue;
       const host = state.hosts.find((entry) => entry.id === pane.host?.id);
       if (!host) continue;
-      const session = createSession(host, 'generic');
-      session.status = { state: 'ready' };
+      const session = connectedSession(host);
       state.recents.set(host.id, connectedAt.get(host.id) ?? todayAt(9, 20));
       pane.sessionId = session.id;
+      pane.restored = false;
       store.applyStatus(pane, { state: 'ready' });
+      // A restored pane waits for the user; this one was "connected" behind
+      // the scenes, so its terminal is asked to show the session.
+      pane.generation += 1;
     }
   }
   await hosts.refreshRecents();
@@ -799,8 +817,6 @@ async function openEditor(name: string): Promise<void> {
   ]);
   const host = name === 'new' ? null : (hosts.hosts.find((entry) => entry.name === name) ?? null);
   if (name !== 'new' && !host) return;
-  hosts.editing = host;
-  hosts.editorOpen = true;
   route.edit(host);
 }
 
@@ -965,6 +981,11 @@ const handlers: Record<string, Handler> = {
   },
   session_close: (args) => {
     closeSession(sessionOf(arg<string>(args, 'id')));
+    return null;
+  },
+  session_detach: (args) => {
+    // Releases the views of the caller; the session keeps running.
+    sessionOf(arg<string>(args, 'id')).views = [];
     return null;
   },
   session_write: (args) => {

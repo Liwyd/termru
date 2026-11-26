@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { listen, type UnlistenFn } from '../ipc-backend';
+  import { errorMessage } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { HostKeyPromptRequest } from '../types';
 
@@ -10,14 +12,22 @@
     request: HostKeyPromptRequest;
   }
 
-  let prompt = $state<PromptMessage | null>(null);
+  /**
+   * The prompts waiting for an answer, oldest first. A second prompt that
+   * arrives while the first is open waits its turn: it must never replace
+   * (and so silently drop) a question the user has not answered.
+   */
+  let queue = $state<PromptMessage[]>([]);
+  const prompt = $derived(queue[0] ?? null);
 
   onMount(() => {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
 
     void listen<PromptMessage>('host-key-prompt', (event) => {
-      prompt = event.payload;
+      const incoming = event.payload;
+      if (queue.some((entry) => entry.id === incoming.id)) return;
+      queue = [...queue, incoming];
     }).then((fn) => {
       if (cancelled) {
         fn();
@@ -33,19 +43,29 @@
   });
 
   async function answer(trust: boolean): Promise<void> {
-    if (!prompt) return;
     const current = prompt;
-    prompt = null;
-    const accepted = await api.hostKeyPromptResolve(current.id, trust);
-    if (!accepted) {
-      toasts.info('The host-key prompt is no longer active.');
+    if (!current) return;
+    queue = queue.slice(1);
+    try {
+      const accepted = await api.hostKeyPromptResolve(current.id, trust);
+      if (!accepted) {
+        toasts.info('The host-key prompt is no longer active.');
+      }
+    } catch (err) {
+      toasts.error(`Could not answer the host-key prompt: ${errorMessage(err)}`);
     }
   }
 </script>
 
 {#if prompt}
   <div class="backdrop" role="presentation">
-    <div class="dialog" role="alertdialog" aria-modal="true" aria-label="Host key confirmation">
+    <div
+      class="dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-label="Host key confirmation"
+      use:focusTrap={{ onescape: () => void answer(false) }}
+    >
       {#if prompt.request.state === 'unknown'}
         <h2>Unknown host key</h2>
         <p class="target">{prompt.request.host}:{prompt.request.port}</p>
@@ -74,8 +94,15 @@
         </p>
       {/if}
 
+      {#if queue.length > 1}
+        <p class="hint">
+          {queue.length - 1} more host key {queue.length === 2 ? 'question' : 'questions'} waiting.
+        </p>
+      {/if}
+
       <div class="actions">
-        <button type="button" onclick={() => answer(false)}>Reject</button>
+        <!-- The safe answer takes the focus: an Enter by habit rejects. -->
+        <button type="button" data-autofocus onclick={() => answer(false)}>Reject</button>
         <button type="button" class="danger" onclick={() => answer(true)}>Trust</button>
       </div>
     </div>

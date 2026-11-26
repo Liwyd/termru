@@ -1,11 +1,24 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { COMMANDS, effectiveBindings, type CommandId } from '../keybindings';
+  import { focusTrap } from '../actions/focus-trap';
+  import { COMMANDS, effectiveBindings, expandAccelerator, type CommandId } from '../keybindings';
+  import { errorMessage } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { shortcuts } from '../stores/shortcuts.svelte';
   import { toasts } from '../stores/toasts.svelte';
 
-  let { open = $bindable(false) }: { open?: boolean } = $props();
+  let {
+    open = $bindable(false),
+    embedded = false,
+    onclose,
+  }: {
+    /** Modal mode: whether the dialog is shown. */
+    open?: boolean;
+    /** Renders as a page section (no backdrop, always shown). */
+    embedded?: boolean;
+    /** Called when the panel is closed (page mode: go back). */
+    onclose?: () => void;
+  } = $props();
 
   // The terminal default of the design (Doc A.03): IBM Plex Mono with the
   // platform monospace as the fallback for a missing glyph.
@@ -18,6 +31,10 @@
   $effect(() => {
     if (shortcuts.recording !== null) dialog?.focus();
   });
+
+  // Leaving the panel (any way) ends a recording that is still running:
+  // a recorder left on would swallow every shortcut of the app.
+  $effect(() => () => shortcuts.cancel());
 
   // A copy of the preferences, so a change is only applied when the user
   // saves it.
@@ -36,7 +53,7 @@
   // untracked: a later change of the preferences (the theme is also changed
   // by the palette) must not wipe what the user is editing.
   $effect(() => {
-    if (!open) return;
+    if (!open && !embedded) return;
     const current = untrack(() => prefs.prefs);
     draft = {
       theme: current.theme,
@@ -54,7 +71,15 @@
   const bindings = $derived(effectiveBindings(draft.keybindings));
 
   function acceleratorOf(commandId: CommandId): string {
-    return bindings.find((binding) => binding.commandId === commandId)?.accelerator ?? '';
+    const accelerator = bindings.find((binding) => binding.commandId === commandId)?.accelerator;
+    return accelerator ? expandAccelerator(accelerator) : '';
+  }
+
+  /** Closes the panel by any path (✕, backdrop, Cancel, Escape, Save). */
+  function close(): void {
+    shortcuts.cancel();
+    open = false;
+    onclose?.();
   }
 
   /** Captures the next key combination. */
@@ -75,22 +100,28 @@
   }
 
   async function save(): Promise<void> {
-    await prefs.update({
-      ...prefs.prefs,
-      theme: draft.theme,
-      terminal: {
-        ...prefs.prefs.terminal,
-        font_family: draft.font_family.trim() || DEFAULT_FONT_FAMILY,
-        font_size: Math.min(72, Math.max(6, draft.font_size)),
-        scrollback: Math.min(1_000_000, Math.max(1000, draft.scrollback)),
-        cursor_blink: draft.cursor_blink,
-        cursor_style: draft.cursor_style,
-        copy_on_select: draft.copy_on_select,
-      },
-      keybindings: { ...draft.keybindings },
-    });
+    try {
+      await prefs.update({
+        ...prefs.prefs,
+        theme: draft.theme,
+        terminal: {
+          ...prefs.prefs.terminal,
+          font_family: draft.font_family.trim() || DEFAULT_FONT_FAMILY,
+          font_size: Math.min(72, Math.max(6, draft.font_size)),
+          scrollback: Math.min(1_000_000, Math.max(1000, draft.scrollback)),
+          cursor_blink: draft.cursor_blink,
+          cursor_style: draft.cursor_style,
+          copy_on_select: draft.copy_on_select,
+        },
+        keybindings: { ...draft.keybindings },
+      });
+    } catch (err) {
+      // The store refused the settings: keep the panel open and say so.
+      toasts.error(`Could not save the settings: ${errorMessage(err)}`);
+      return;
+    }
     toasts.success('Settings saved.');
-    open = false;
+    close();
   }
 
   function reset(): void {
@@ -105,124 +136,136 @@
   }
 </script>
 
-{#if open}
+{#snippet panel()}
+  <div
+    class="dialog"
+    class:embedded
+    role={embedded ? 'region' : 'dialog'}
+    aria-modal={embedded ? undefined : 'true'}
+    aria-label="Settings"
+    tabindex="-1"
+    bind:this={dialog}
+    onkeydown={onKeyDown}
+    use:focusTrap={{
+      enabled: !embedded,
+      // Escape first ends a recording that is running, then closes the panel.
+      onescape: () => (shortcuts.recording !== null ? shortcuts.cancel() : close()),
+    }}
+  >
+    <header>
+      <h2>Settings</h2>
+      {#if !embedded}
+        <button type="button" class="ghost" onclick={close} aria-label="Close">✕</button>
+      {/if}
+    </header>
+
+    <section>
+      <h3>Appearance</h3>
+
+      <label>
+        <span>Theme</span>
+        <select bind:value={draft.theme}>
+          <option value="system">Follow the system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Font family</span>
+        <input type="text" bind:value={draft.font_family} placeholder={DEFAULT_FONT_FAMILY} />
+      </label>
+
+      <label>
+        <span>Font size</span>
+        <input type="number" min="6" max="72" bind:value={draft.font_size} />
+      </label>
+
+      <label>
+        <span>Scrollback (lines)</span>
+        <input type="number" min="1000" max="1000000" step="1000" bind:value={draft.scrollback} />
+      </label>
+    </section>
+
+    <section>
+      <h3>Terminal</h3>
+
+      <label>
+        <span>Cursor style</span>
+        <select bind:value={draft.cursor_style}>
+          <option value="block">Block</option>
+          <option value="bar">Bar</option>
+          <option value="underline">Underline</option>
+        </select>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.cursor_blink} />
+        <span>Blinking cursor</span>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.copy_on_select} />
+        <span>Copy the selection automatically</span>
+      </label>
+    </section>
+
+    <section>
+      <h3>Shortcuts</h3>
+
+      <ul class="shortcuts">
+        {#each COMMANDS as command (command.id)}
+          <li>
+            <span class="title">{command.title}</span>
+            <span class="group">{command.group}</span>
+            <kbd class:recording={shortcuts.recording === command.id}>
+              {shortcuts.recording === command.id ? 'press a key…' : acceleratorOf(command.id)}
+            </kbd>
+            {#if shortcuts.recording === command.id}
+              <button type="button" onclick={() => shortcuts.cancel()}>Cancel</button>
+            {:else}
+              <button type="button" onclick={() => shortcuts.start(command.id)}>Change</button>
+              {#if draft.keybindings[command.id]}
+                <button type="button" class="ghost" onclick={() => resetBinding(command.id)}
+                  >Reset</button
+                >
+              {/if}
+            {/if}
+          </li>
+        {/each}
+      </ul>
+
+      {#if shortcuts.conflict}
+        <p class="conflict" role="alert">{shortcuts.conflict}</p>
+      {/if}
+
+      {#if Object.keys(draft.keybindings).length > 0}
+        <button type="button" onclick={resetBindings}>Reset all shortcuts</button>
+      {/if}
+    </section>
+
+    <p class="hint">
+      These settings follow the <code>preferences</code> record, so they are synced with your other devices.
+      Secrets are never part of it.
+    </p>
+
+    <div class="actions">
+      <button type="button" onclick={reset}>Reset</button>
+      <button type="button" onclick={close}>Cancel</button>
+      <button type="button" class="primary" onclick={() => void save()}>Save</button>
+    </div>
+  </div>
+{/snippet}
+
+{#if embedded}
+  {@render panel()}
+{:else if open}
   <div
     class="backdrop"
     role="presentation"
-    onclick={(e) => e.target === e.currentTarget && (open = false)}
+    onclick={(e) => e.target === e.currentTarget && close()}
   >
-    <div
-      class="dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Settings"
-      tabindex="-1"
-      bind:this={dialog}
-      onkeydown={onKeyDown}
-    >
-      <header>
-        <h2>Settings</h2>
-        <button type="button" class="ghost" onclick={() => (open = false)} aria-label="Close"
-          >✕</button
-        >
-      </header>
-
-      <section>
-        <h3>Appearance</h3>
-
-        <label>
-          <span>Theme</span>
-          <select bind:value={draft.theme}>
-            <option value="system">Follow the system</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-
-        <label>
-          <span>Font family</span>
-          <input type="text" bind:value={draft.font_family} placeholder={DEFAULT_FONT_FAMILY} />
-        </label>
-
-        <label>
-          <span>Font size</span>
-          <input type="number" min="6" max="72" bind:value={draft.font_size} />
-        </label>
-
-        <label>
-          <span>Scrollback (lines)</span>
-          <input type="number" min="1000" max="1000000" step="1000" bind:value={draft.scrollback} />
-        </label>
-      </section>
-
-      <section>
-        <h3>Terminal</h3>
-
-        <label>
-          <span>Cursor style</span>
-          <select bind:value={draft.cursor_style}>
-            <option value="block">Block</option>
-            <option value="bar">Bar</option>
-            <option value="underline">Underline</option>
-          </select>
-        </label>
-
-        <label class="check">
-          <input type="checkbox" bind:checked={draft.cursor_blink} />
-          <span>Blinking cursor</span>
-        </label>
-
-        <label class="check">
-          <input type="checkbox" bind:checked={draft.copy_on_select} />
-          <span>Copy the selection automatically</span>
-        </label>
-      </section>
-
-      <section>
-        <h3>Shortcuts</h3>
-
-        <ul class="shortcuts">
-          {#each COMMANDS as command (command.id)}
-            <li>
-              <span class="title">{command.title}</span>
-              <span class="group">{command.group}</span>
-              <kbd class:recording={shortcuts.recording === command.id}>
-                {shortcuts.recording === command.id ? 'press a key…' : acceleratorOf(command.id)}
-              </kbd>
-              {#if shortcuts.recording === command.id}
-                <button type="button" onclick={() => shortcuts.cancel()}>Cancel</button>
-              {:else}
-                <button type="button" onclick={() => shortcuts.start(command.id)}>Change</button>
-                {#if draft.keybindings[command.id]}
-                  <button type="button" class="ghost" onclick={() => resetBinding(command.id)}
-                    >Reset</button
-                  >
-                {/if}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-
-        {#if shortcuts.conflict}
-          <p class="conflict" role="alert">{shortcuts.conflict}</p>
-        {/if}
-
-        {#if Object.keys(draft.keybindings).length > 0}
-          <button type="button" onclick={resetBindings}>Reset all shortcuts</button>
-        {/if}
-      </section>
-
-      <p class="hint">
-        These settings follow the <code>preferences</code> record, so they are synced with your other
-        devices. Secrets are never part of it.
-      </p>
-
-      <div class="actions">
-        <button type="button" onclick={reset}>Reset</button>
-        <button type="button" onclick={() => (open = false)}>Cancel</button>
-        <button type="button" class="primary" onclick={() => void save()}>Save</button>
-      </div>
-    </div>
+    {@render panel()}
   </div>
 {/if}
 
@@ -249,6 +292,24 @@
     border: 1px solid var(--termru-border);
     background: var(--termru-surface);
     color: var(--termru-fg);
+  }
+
+  /* Page mode: in flow, scrolls itself and keeps the inset of every page. */
+  .dialog.embedded {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    overflow: auto;
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .dialog.embedded > * {
+    width: 100%;
+    max-width: 42rem;
   }
 
   header {

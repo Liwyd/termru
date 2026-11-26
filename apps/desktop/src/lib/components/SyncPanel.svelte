@@ -1,22 +1,51 @@
 <script lang="ts">
+  import { focusTrap } from '../actions/focus-trap';
   import { sync } from '../stores/sync.svelte';
   import type { ConflictView } from '../types';
 
-  let { open = $bindable(false) }: { open?: boolean } = $props();
+  let {
+    open = $bindable(false),
+    embedded = false,
+    onclose,
+  }: {
+    /** Modal mode: whether the dialog is shown. */
+    open?: boolean;
+    /** Renders as a page section (no backdrop, always shown). */
+    embedded?: boolean;
+    /** Called when the panel is closed (page mode: go back). */
+    onclose?: () => void;
+  } = $props();
 
   let serverUrl = $state('');
   let email = $state('');
   let password = $state('');
   let deviceName = $state('');
 
-  // Fill the form from the stored settings whenever the panel opens.
+  /** The form was filled from the stored settings (once per opening). */
+  let filled = false;
+  /** The user typed in the form: later status reloads must not overwrite it. */
+  let dirty = false;
+
+  // Fill the form from the stored settings when the panel opens. A status
+  // reload (a sync, a conflict resolved) must not wipe what is being typed.
   $effect(() => {
-    if (!open) return;
+    if (!open && !embedded) {
+      filled = false;
+      dirty = false;
+      return;
+    }
     const status = sync.status;
+    if (filled && dirty) return;
     serverUrl = status?.settings.server_url ?? '';
     email = status?.settings.email ?? '';
     deviceName = status?.settings.device_name ?? '';
+    filled = true;
   });
+
+  function close(): void {
+    open = false;
+    onclose?.();
+  }
 
   async function signIn(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -55,144 +84,158 @@
   }
 </script>
 
-{#if open}
+{#snippet panel()}
   <div
-    class="backdrop"
-    role="presentation"
-    onclick={(e) => e.target === e.currentTarget && (open = false)}
+    class="dialog"
+    class:embedded
+    role={embedded ? 'region' : 'dialog'}
+    aria-modal={embedded ? undefined : 'true'}
+    aria-label="Cloud sync"
+    use:focusTrap={{ enabled: !embedded, onescape: close }}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Cloud sync">
-      <header>
-        <h2>Cloud sync</h2>
-        <button type="button" class="ghost" onclick={() => (open = false)} aria-label="Close"
-          >✕</button
-        >
-      </header>
+    <header>
+      <h2>Cloud sync</h2>
+      {#if !embedded}
+        <button type="button" class="ghost" onclick={close} aria-label="Close">✕</button>
+      {/if}
+    </header>
 
-      {#if sync.signedIn}
-        <dl class="status">
-          <dt>Server</dt>
-          <dd class="mono">{sync.status?.settings.server_url}</dd>
-          <dt>Account</dt>
-          <dd>{sync.status?.settings.email}</dd>
-          <dt>Device</dt>
-          <dd>{sync.status?.settings.device_name || sync.status?.settings.device_id}</dd>
-          <dt>Last sync</dt>
-          <dd>{formatTime(sync.status?.last_sync_at ?? null)}</dd>
-          <dt>Pending</dt>
-          <dd>{sync.pending} change(s)</dd>
-          <dt>Conflicts</dt>
-          <dd class:danger={sync.conflictCount > 0}>{sync.conflictCount}</dd>
-        </dl>
+    {#if sync.signedIn}
+      <dl class="status">
+        <dt>Server</dt>
+        <dd class="mono">{sync.status?.settings.server_url}</dd>
+        <dt>Account</dt>
+        <dd>{sync.status?.settings.email}</dd>
+        <dt>Device</dt>
+        <dd>{sync.status?.settings.device_name || sync.status?.settings.device_id}</dd>
+        <dt>Last sync</dt>
+        <dd>{formatTime(sync.status?.last_sync_at ?? null)}</dd>
+        <dt>Pending</dt>
+        <dd>{sync.pending} change(s)</dd>
+        <dt>Conflicts</dt>
+        <dd class:danger={sync.conflictCount > 0}>{sync.conflictCount}</dd>
+      </dl>
+
+      {#if sync.error}
+        <p class="hint error">{sync.error}</p>
+      {/if}
+
+      <div class="actions">
+        <button
+          type="button"
+          onclick={() => {
+            password = '';
+            dirty = false;
+            void sync.signOut();
+          }}
+          disabled={sync.busy}
+        >
+          Sign out
+        </button>
+        <button
+          type="button"
+          class="primary"
+          onclick={() => void sync.syncNow()}
+          disabled={sync.busy}
+        >
+          {sync.busy ? 'Syncing…' : 'Sync now'}
+        </button>
+      </div>
+    {:else}
+      <p class="hint">
+        Sign in to a Termru sync server to keep your hosts in sync across devices. Secrets are never
+        uploaded — they stay in this device's credential store.
+      </p>
+
+      <form onsubmit={signIn} oninput={() => (dirty = true)}>
+        <label>
+          <span>Server URL</span>
+          <input
+            type="url"
+            required
+            placeholder="https://sync.example.com"
+            bind:value={serverUrl}
+          />
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" required autocomplete="username" bind:value={email} />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" required autocomplete="current-password" bind:value={password} />
+        </label>
+        <label>
+          <span>Device name</span>
+          <input type="text" placeholder="my laptop" bind:value={deviceName} />
+        </label>
 
         {#if sync.error}
           <p class="hint error">{sync.error}</p>
         {/if}
 
         <div class="actions">
-          <button
-            type="button"
-            onclick={() => {
-              password = '';
-              void sync.signOut();
-            }}
-            disabled={sync.busy}
-          >
-            Sign out
-          </button>
-          <button
-            type="button"
-            class="primary"
-            onclick={() => void sync.syncNow()}
-            disabled={sync.busy}
-          >
-            {sync.busy ? 'Syncing…' : 'Sync now'}
+          <button type="button" onclick={close}>Cancel</button>
+          <button type="submit" class="primary" disabled={sync.busy}>
+            {sync.busy ? 'Signing in…' : 'Sign in'}
           </button>
         </div>
-      {:else}
+      </form>
+    {/if}
+
+    {#if sync.conflicts.length > 0}
+      <section class="conflicts">
+        <h3>Conflicts</h3>
         <p class="hint">
-          Sign in to a Termru sync server to keep your hosts in sync across devices. Secrets are
-          never uploaded — they stay in this device's credential store.
+          Both this device and the server changed the same record. Choose which copy to keep —
+          nothing is overwritten silently.
         </p>
+        <ul>
+          {#each sync.conflicts as conflict (conflict.record_id)}
+            <li>
+              <div class="conflict-head">
+                <strong>{label(conflict)}</strong>
+                <span class="kind">{conflict.kind} · rev {conflict.server_rev}</span>
+              </div>
+              {#if conflict.remote === null}
+                <p class="hint">The record was deleted on the server.</p>
+              {:else if difference(conflict)}
+                <p class="hint">Different field: <code>{difference(conflict)}</code></p>
+              {/if}
+              <div class="actions">
+                <button
+                  type="button"
+                  onclick={() => void sync.resolve(conflict.record_id, false)}
+                  disabled={sync.busy}
+                >
+                  Take server copy
+                </button>
+                <button
+                  type="button"
+                  class="primary"
+                  onclick={() => void sync.resolve(conflict.record_id, true)}
+                  disabled={sync.busy}
+                >
+                  Keep local copy
+                </button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+  </div>
+{/snippet}
 
-        <form onsubmit={signIn}>
-          <label>
-            <span>Server URL</span>
-            <input
-              type="url"
-              required
-              placeholder="https://sync.example.com"
-              bind:value={serverUrl}
-            />
-          </label>
-          <label>
-            <span>Email</span>
-            <input type="email" required autocomplete="username" bind:value={email} />
-          </label>
-          <label>
-            <span>Password</span>
-            <input type="password" required autocomplete="current-password" bind:value={password} />
-          </label>
-          <label>
-            <span>Device name</span>
-            <input type="text" placeholder="my laptop" bind:value={deviceName} />
-          </label>
-
-          {#if sync.error}
-            <p class="hint error">{sync.error}</p>
-          {/if}
-
-          <div class="actions">
-            <button type="button" onclick={() => (open = false)}>Cancel</button>
-            <button type="submit" class="primary" disabled={sync.busy}>
-              {sync.busy ? 'Signing in…' : 'Sign in'}
-            </button>
-          </div>
-        </form>
-      {/if}
-
-      {#if sync.conflicts.length > 0}
-        <section class="conflicts">
-          <h3>Conflicts</h3>
-          <p class="hint">
-            Both this device and the server changed the same record. Choose which copy to keep —
-            nothing is overwritten silently.
-          </p>
-          <ul>
-            {#each sync.conflicts as conflict (conflict.record_id)}
-              <li>
-                <div class="conflict-head">
-                  <strong>{label(conflict)}</strong>
-                  <span class="kind">{conflict.kind} · rev {conflict.server_rev}</span>
-                </div>
-                {#if conflict.remote === null}
-                  <p class="hint">The record was deleted on the server.</p>
-                {:else if difference(conflict)}
-                  <p class="hint">Different field: <code>{difference(conflict)}</code></p>
-                {/if}
-                <div class="actions">
-                  <button
-                    type="button"
-                    onclick={() => void sync.resolve(conflict.record_id, false)}
-                    disabled={sync.busy}
-                  >
-                    Take server copy
-                  </button>
-                  <button
-                    type="button"
-                    class="primary"
-                    onclick={() => void sync.resolve(conflict.record_id, true)}
-                    disabled={sync.busy}
-                  >
-                    Keep local copy
-                  </button>
-                </div>
-              </li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-    </div>
+{#if embedded}
+  {@render panel()}
+{:else if open}
+  <div
+    class="backdrop"
+    role="presentation"
+    onclick={(e) => e.target === e.currentTarget && close()}
+  >
+    {@render panel()}
   </div>
 {/if}
 
@@ -219,6 +262,24 @@
     border: 1px solid var(--termru-border);
     background: var(--termru-surface);
     color: var(--termru-fg);
+  }
+
+  /* Page mode: in flow, scrolls itself and keeps the inset of every page. */
+  .dialog.embedded {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    overflow: auto;
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .dialog.embedded > * {
+    width: 100%;
+    max-width: 42rem;
   }
 
   header {

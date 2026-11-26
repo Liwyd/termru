@@ -1,13 +1,27 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
+  import { route, type HostEditDraft } from '../stores/route.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { AuthMethod, Host } from '../types';
 
+  /**
+   * The host editor. Mounted, it is open: the route (`route.editHost`, null
+   * for a new host) is the only state that says what it edits.
+   */
   let {
     onmanageidentities,
+    onclose,
+    embedded = false,
   }: {
-    onmanageidentities: () => void;
+    /** Leaves for the identities page; the unsaved form is handed over. */
+    onmanageidentities: (draft: HostEditDraft) => void;
+    /** Called when the editor is saved or cancelled. */
+    onclose?: () => void;
+    /** Renders as a page section instead of a modal dialog. */
+    embedded?: boolean;
   } = $props();
 
   const AUTH_TYPES: { value: AuthMethod['type']; label: string }[] = [
@@ -15,6 +29,9 @@
     { value: 'private_key', label: 'Private key' },
     { value: 'agent', label: 'SSH agent' },
   ];
+
+  const DEFAULT_PORT = 22;
+  const MAX_KEEPALIVE = 3600;
 
   let draft = $state<Host | null>(null);
   let authType = $state<AuthMethod['type']>('password');
@@ -24,27 +41,87 @@
   let newTag = $state('');
   let saving = $state(false);
   let formError = $state<string | null>(null);
+  // The numbers are edited as text: a cleared number input would bind `null`
+  // and the backend refuses a `null` port.
+  let portText = $state(String(DEFAULT_PORT));
+  let keepaliveText = $state('0');
 
-  // Open the editor whenever the store opens it (existing host or new one).
+  /** The port, or null when the text is not a valid port (empty = default). */
+  function parsePort(text: string): number | null {
+    const trimmed = text.trim();
+    if (trimmed === '') return DEFAULT_PORT;
+    if (!/^\d+$/.test(trimmed)) return null;
+    const value = Number(trimmed);
+    return value >= 1 && value <= 65535 ? value : null;
+  }
+
+  /** The keepalive in seconds, or null when invalid (empty = 0). */
+  function parseKeepalive(text: string): number | null {
+    const trimmed = text.trim();
+    if (trimmed === '') return 0;
+    if (!/^\d+$/.test(trimmed)) return null;
+    const value = Number(trimmed);
+    return value <= MAX_KEEPALIVE ? value : null;
+  }
+
+  const portError = $derived(
+    parsePort(portText) === null ? 'Port must be a whole number from 1 to 65535.' : null,
+  );
+  const keepaliveError = $derived(
+    parseKeepalive(keepaliveText) === null
+      ? `Keepalive must be a whole number from 0 to ${MAX_KEEPALIVE} seconds.`
+      : null,
+  );
+
+  // Fill the form from the route: the host being edited, a new host, or the
+  // draft that was parked while the user visited the identities page.
   $effect(() => {
-    if (!hosts.editorOpen) {
-      draft = null;
-      return;
-    }
-    const target = hosts.editing;
-    draft = target ? { ...target, description: target.description ?? '' } : newHost();
-    authType = target?.auth.type ?? 'password';
-    identityId = target?.auth.type === 'private_key' ? target.auth.identity_id : '';
-    groupId = target?.group_id ?? '';
-    selectedTags = [...(target?.tags ?? [])];
-    newTag = '';
+    const target = route.editHost;
+    untrack(() => load(target));
   });
 
-  function close(): void {
-    hosts.editorOpen = false;
-    hosts.editing = null;
-    draft = null;
+  function load(target: Host | null): void {
+    const parked = route.draft;
+    if (parked) {
+      route.draft = null;
+      draft = { ...parked.host };
+      authType = parked.authType;
+      identityId = parked.identityId;
+      groupId = parked.groupId;
+      selectedTags = [...parked.tags];
+    } else {
+      draft = target ? { ...target, description: target.description ?? '' } : newHost();
+      authType = target?.auth.type ?? 'password';
+      identityId = target?.auth.type === 'private_key' ? target.auth.identity_id : '';
+      groupId = target?.group_id ?? '';
+      selectedTags = [...(target?.tags ?? [])];
+    }
+    portText = String(draft.port);
+    keepaliveText = String(draft.keepalive_seconds ?? 0);
+    newTag = '';
     formError = null;
+  }
+
+  /** Saved or cancelled: whoever mounted the editor takes it away. */
+  function close(): void {
+    formError = null;
+    onclose?.();
+  }
+
+  /** The form as it is now, to park it while another page is open. */
+  function snapshot(): HostEditDraft {
+    const current = draft as Host;
+    return {
+      host: {
+        ...current,
+        port: parsePort(portText) ?? DEFAULT_PORT,
+        keepalive_seconds: parseKeepalive(keepaliveText) ?? 0,
+      },
+      authType,
+      identityId,
+      groupId,
+      tags: [...selectedTags],
+    };
   }
 
   function newHost(): Host {
@@ -115,8 +192,14 @@
       formError = 'Username is required.';
       return;
     }
-    if (draft.port < 1 || draft.port > 65535) {
-      formError = 'Port must be between 1 and 65535.';
+    const port = parsePort(portText);
+    if (port === null) {
+      formError = portError;
+      return;
+    }
+    const keepalive = parseKeepalive(keepaliveText);
+    if (keepalive === null) {
+      formError = keepaliveError;
       return;
     }
     if (authType === 'private_key' && identityId.length === 0) {
@@ -133,6 +216,8 @@
 
     const payload: Host = {
       ...draft,
+      port,
+      keepalive_seconds: keepalive,
       auth,
       name: draft.name.trim(),
       address: draft.address.trim(),
@@ -148,22 +233,23 @@
       toasts.success(`Saved ${saved.name}`);
       close();
     } else {
-      formError = hosts.error ?? 'Could not save the host.';
+      formError = hosts.saveError ?? 'Could not save the host.';
     }
   }
 </script>
 
-{#if draft}
+{#snippet panel()}
   <div
-    class="backdrop"
-    role="presentation"
-    onclick={(event) => {
-      if (event.target === event.currentTarget) close();
-    }}
+    class="dialog"
+    class:embedded
+    role={embedded ? 'region' : 'dialog'}
+    aria-modal={embedded ? undefined : 'true'}
+    aria-label="Host details"
+    use:focusTrap={{ enabled: !embedded, onescape: close }}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Host details">
-      <form onsubmit={save}>
-        <h2>{hosts.editing ? 'Edit host' : 'New host'}</h2>
+    {#if draft}
+      <form onsubmit={save} novalidate>
+        <h2>{route.editHost ? 'Edit host' : 'New host'}</h2>
 
         <label>
           Name
@@ -178,7 +264,19 @@
         <div class="row">
           <label>
             Port
-            <input type="number" bind:value={draft.port} min="1" max="65535" required />
+            <input
+              inputmode="numeric"
+              bind:value={portText}
+              placeholder={String(DEFAULT_PORT)}
+              aria-invalid={portError !== null}
+              aria-describedby={portError ? 'port-error' : undefined}
+              onblur={() => {
+                if (portText.trim() === '') portText = String(DEFAULT_PORT);
+              }}
+            />
+            {#if portError}
+              <span class="field-error" id="port-error" role="alert">{portError}</span>
+            {/if}
           </label>
           <label>
             Username
@@ -208,7 +306,8 @@
           {#if hosts.identities.length === 0}
             <p class="hint">No identities yet — create one and bind a key file to it.</p>
           {/if}
-          <button type="button" class="link" onclick={onmanageidentities}>Manage identities…</button
+          <button type="button" class="link" onclick={() => onmanageidentities(snapshot())}
+            >Manage identities…</button
           >
         {/if}
 
@@ -219,7 +318,19 @@
           </label>
           <label>
             Keepalive (s)
-            <input type="number" bind:value={draft.keepalive_seconds} min="0" max="3600" />
+            <input
+              inputmode="numeric"
+              bind:value={keepaliveText}
+              placeholder="0"
+              aria-invalid={keepaliveError !== null}
+              aria-describedby={keepaliveError ? 'keepalive-error' : undefined}
+              onblur={() => {
+                if (keepaliveText.trim() === '') keepaliveText = '0';
+              }}
+            />
+            {#if keepaliveError}
+              <span class="field-error" id="keepalive-error" role="alert">{keepaliveError}</span>
+            {/if}
           </label>
         </div>
 
@@ -271,8 +382,24 @@
           </button>
         </div>
       </form>
-    </div>
+    {/if}
   </div>
+{/snippet}
+
+{#if draft}
+  {#if embedded}
+    {@render panel()}
+  {:else}
+    <div
+      class="backdrop"
+      role="presentation"
+      onclick={(event) => {
+        if (event.target === event.currentTarget) close();
+      }}
+    >
+      {@render panel()}
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -297,10 +424,33 @@
     color: var(--termru-fg);
   }
 
+  /* Page mode: in flow, scrolls itself and keeps the inset of every page. */
+  .dialog.embedded {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    overflow: auto;
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .dialog.embedded > * {
+    width: 100%;
+    max-width: 42rem;
+  }
+
   form {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+  }
+
+  .field-error {
+    color: var(--termru-danger);
+    font-size: 0.75rem;
   }
 
   h2 {

@@ -1,5 +1,6 @@
 import { api } from '../ipc';
-import { errorMessage } from './hosts.svelte';
+import { errorMessage, hosts } from './hosts.svelte';
+import { prefs } from './prefs.svelte';
 import { toasts } from './toasts.svelte';
 import type { ConflictView, SyncOutcome, SyncStatus } from '../types';
 
@@ -52,6 +53,19 @@ export class SyncStore {
     }
   }
 
+  /**
+   * A sync applied records from the server: the hosts, folders, identities
+   * and the preferences on screen are stale until they are read again.
+   */
+  async reloadApplied(): Promise<void> {
+    try {
+      await Promise.all([hosts.load(), prefs.load()]);
+    } catch {
+      // Both loads report their own failures; a failing reload never breaks
+      // the sync that triggered it.
+    }
+  }
+
   /** Signs in and stores the tokens in the credential store. */
   async signIn(
     serverUrl: string,
@@ -98,6 +112,8 @@ export class SyncStore {
     try {
       const outcome = await api.syncNow();
       await this.load();
+      // What the server sent is on disk now: show it.
+      await this.reloadApplied();
       toasts.success(
         `Synced: ${outcome.pushed} sent, ${outcome.applied} received, ${outcome.conflicts} conflict(s).`,
       );
@@ -117,6 +133,8 @@ export class SyncStore {
     try {
       await api.syncResolveConflict(recordId, keepLocal);
       await this.load();
+      // Taking the server copy changes a record that is on screen.
+      await this.reloadApplied();
       toasts.success(keepLocal ? 'Kept the local copy.' : 'Took the server copy.');
     } catch (err) {
       this.error = errorMessage(err);

@@ -1,22 +1,37 @@
 <script lang="ts">
+  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { openFile } from '../ipc-backend';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
-  import type { Identity } from '../types';
+  import type { Host, Identity } from '../types';
+  import ContextConfirm from './ContextConfirm.svelte';
 
-  let { open: visible = $bindable(false) }: { open?: boolean } = $props();
+  let {
+    open: visible = $bindable(false),
+    embedded = false,
+    onclose,
+  }: {
+    /** Modal mode: whether the dialog is shown. */
+    open?: boolean;
+    /** Renders as a page section (no backdrop, always shown). */
+    embedded?: boolean;
+    /** Called when the editor is closed (page mode: go back). */
+    onclose?: () => void;
+  } = $props();
 
   let name = $state('');
   let comment = $state('');
   let bindings = $state<Record<string, string>>({});
   let error = $state<string | null>(null);
   let busy = $state(false);
+  let confirmOpen = $state(false);
+  let pendingDelete = $state<Identity | null>(null);
 
   // The bindings are device-local: they say which key file each identity
   // uses on this machine.
   $effect(() => {
-    if (!visible) return;
+    if (!visible && !embedded) return;
     void loadBindings();
   });
 
@@ -36,6 +51,7 @@
     name = '';
     comment = '';
     error = null;
+    onclose?.();
   }
 
   async function create(): Promise<void> {
@@ -92,7 +108,32 @@
     }
   }
 
-  async function remove(identity: Identity): Promise<void> {
+  /** The hosts that authenticate with an identity. */
+  function hostsUsing(identity: Identity): Host[] {
+    return hosts.hosts.filter(
+      (host) => host.auth.type === 'private_key' && host.auth.identity_id === identity.id,
+    );
+  }
+
+  /** The sentence that says what deleting the identity affects. */
+  function deleteBody(identity: Identity): string {
+    const users = hostsUsing(identity);
+    if (users.length === 0) return 'No host uses this identity. The key file is not touched.';
+    const names = users.slice(0, 5).map((host) => host.name);
+    const more = users.length > names.length ? ` and ${users.length - names.length} more` : '';
+    const count = users.length === 1 ? '1 host uses' : `${users.length} hosts use`;
+    return `${count} this identity: ${names.join(', ')}${more}. They can no longer sign in with a key until you pick another identity. The key file is not touched.`;
+  }
+
+  function remove(identity: Identity): void {
+    pendingDelete = identity;
+    confirmOpen = true;
+  }
+
+  async function confirmedDelete(): Promise<void> {
+    const identity = pendingDelete;
+    pendingDelete = null;
+    if (!identity) return;
     try {
       await api.identityDelete(identity.id);
       await hosts.load();
@@ -105,77 +146,95 @@
   }
 </script>
 
-{#if visible}
+{#snippet panel()}
+  <div
+    class="dialog"
+    class:embedded
+    role={embedded ? 'region' : 'dialog'}
+    aria-modal={embedded ? undefined : 'true'}
+    aria-label="Identities"
+    use:focusTrap={{ enabled: !embedded, onescape: close }}
+  >
+    <h2>Identities</h2>
+
+    <p class="hint">
+      An identity is a name for a key. The key file itself stays on this machine: only its path is
+      stored, and it is never part of the sync.
+    </p>
+
+    <ul class="identities">
+      {#each hosts.identities as identity (identity.id)}
+        <li>
+          <div class="name">
+            <strong>{identity.name}</strong>
+            {#if identity.comment}
+              <span class="comment">{identity.comment}</span>
+            {/if}
+          </div>
+          <code class="path">{bindings[identity.id] ?? 'no key bound'}</code>
+          <div class="actions">
+            <button type="button" onclick={() => void chooseKey(identity)}>Choose key…</button>
+            {#if bindings[identity.id]}
+              <button type="button" class="ghost" onclick={() => void unbind(identity)}
+                >Unbind</button
+              >
+            {/if}
+            <button type="button" class="ghost" onclick={() => remove(identity)}>Delete</button>
+          </div>
+        </li>
+      {:else}
+        <li class="empty">No identity yet.</li>
+      {/each}
+    </ul>
+
+    <form
+      onsubmit={(event) => {
+        event.preventDefault();
+        void create();
+      }}
+    >
+      <h3>New identity</h3>
+      <label>
+        Name
+        <input bind:value={name} required maxlength="120" placeholder="work laptop" />
+      </label>
+      <label>
+        Comment
+        <input bind:value={comment} maxlength="240" placeholder="optional" />
+      </label>
+      <div class="actions">
+        <button type="submit" class="primary" disabled={busy}>Create</button>
+      </div>
+    </form>
+
+    {#if error}
+      <p class="error" role="alert">{error}</p>
+    {/if}
+
+    <div class="footer">
+      <button type="button" onclick={close}>Close</button>
+    </div>
+  </div>
+{/snippet}
+
+{#if embedded}
+  {@render panel()}
+{:else if visible}
   <div
     class="backdrop"
     role="presentation"
     onclick={(event) => event.target === event.currentTarget && close()}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Identities">
-      <h2>Identities</h2>
-
-      <p class="hint">
-        An identity is a name for a key. The key file itself stays on this machine: only its path is
-        stored, and it is never part of the sync.
-      </p>
-
-      <ul class="identities">
-        {#each hosts.identities as identity (identity.id)}
-          <li>
-            <div class="name">
-              <strong>{identity.name}</strong>
-              {#if identity.comment}
-                <span class="comment">{identity.comment}</span>
-              {/if}
-            </div>
-            <code class="path">{bindings[identity.id] ?? 'no key bound'}</code>
-            <div class="actions">
-              <button type="button" onclick={() => void chooseKey(identity)}>Choose key…</button>
-              {#if bindings[identity.id]}
-                <button type="button" class="ghost" onclick={() => void unbind(identity)}
-                  >Unbind</button
-                >
-              {/if}
-              <button type="button" class="ghost" onclick={() => void remove(identity)}
-                >Delete</button
-              >
-            </div>
-          </li>
-        {:else}
-          <li class="empty">No identity yet.</li>
-        {/each}
-      </ul>
-
-      <form
-        onsubmit={(event) => {
-          event.preventDefault();
-          void create();
-        }}
-      >
-        <h3>New identity</h3>
-        <label>
-          Name
-          <input bind:value={name} required maxlength="120" placeholder="work laptop" />
-        </label>
-        <label>
-          Comment
-          <input bind:value={comment} maxlength="240" placeholder="optional" />
-        </label>
-        <div class="actions">
-          <button type="submit" class="primary" disabled={busy}>Create</button>
-        </div>
-      </form>
-
-      {#if error}
-        <p class="error" role="alert">{error}</p>
-      {/if}
-
-      <div class="footer">
-        <button type="button" onclick={close}>Close</button>
-      </div>
-    </div>
+    {@render panel()}
   </div>
 {/if}
+
+<ContextConfirm
+  bind:open={confirmOpen}
+  title={pendingDelete ? `Delete the identity “${pendingDelete.name}”?` : 'Delete identity?'}
+  body={pendingDelete ? deleteBody(pendingDelete) : ''}
+  onconfirm={() => void confirmedDelete()}
+/>
 
 <style>
   .backdrop {
@@ -200,6 +259,24 @@
     border: 1px solid var(--termru-border);
     background: var(--termru-surface);
     color: var(--termru-fg);
+  }
+
+  /* Page mode: in flow, scrolls itself and keeps the inset of every page. */
+  .dialog.embedded {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    overflow: auto;
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .dialog.embedded > * {
+    width: 100%;
+    max-width: 42rem;
   }
 
   h2 {

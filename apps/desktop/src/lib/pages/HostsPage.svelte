@@ -1,10 +1,11 @@
 <script lang="ts">
   import { countLine, joinNames } from '../count-line';
   import { formatLastSession } from '../last-session';
-  import { uiPlatform } from '../platform';
+  import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import ContextConfirm from '../components/ContextConfirm.svelte';
   import HostTable from '../components/HostTable.svelte';
   import { hosts } from '../stores/hosts.svelte';
+  import { prefs } from '../stores/prefs.svelte';
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
@@ -22,6 +23,18 @@
   let confirmOpen = $state(false);
   let pendingDelete = $state<Host | null>(null);
   let online = $state(true);
+  let searchInput = $state<HTMLInputElement | null>(null);
+
+  // "Search hosts" from another page asks for the focus before this page
+  // exists: the request waits in the store and is served once the field is
+  // there (or at once, when the page is already open).
+  $effect(() => {
+    if (hosts.searchFocus && searchInput) {
+      searchInput.focus();
+      searchInput.select();
+      hosts.searchFocus = false;
+    }
+  });
 
   // The offline note reacts to the events themselves: `navigator.onLine`
   // is not reliable (and not writable) in every environment.
@@ -39,9 +52,15 @@
   });
 
   // The "Last session" column shows live data: refresh it when sessions
-  // come and go.
+  // come and go, and when one becomes ready (that is when the backend
+  // records the connection).
+  const readyCount = $derived(
+    sessions.tabs.flatMap((tab) => tab.panes).filter((pane) => pane.status.state === 'ready')
+      .length,
+  );
   $effect(() => {
-    sessions.tabs.length;
+    void sessions.tabs.length;
+    void readyCount;
     void hosts.refreshRecents();
   });
 
@@ -76,11 +95,11 @@
     const ms = Date.parse(at);
     return Number.isNaN(ms) ? 'never' : formatLastSession(ms);
   });
-  const searchHint = $derived(uiPlatform() === 'macos' ? '⌘ F' : 'Ctrl F');
+  const searchHint = $derived(
+    acceleratorLabel(acceleratorFor('host.search', prefs.prefs.keybindings)),
+  );
 
   function edit(host: Host | null): void {
-    hosts.editing = host;
-    hosts.editorOpen = true;
     route.edit(host);
   }
 
@@ -93,8 +112,8 @@
     const host = pendingDelete;
     pendingDelete = null;
     if (!host) return;
-    await hosts.remove(host.id);
-    toasts.success(`Deleted ${host.name}`);
+    // A failed delete is reported by the store; only success is announced.
+    if (await hosts.remove(host.id)) toasts.success(`Deleted ${host.name}`);
   }
 
   function returnToFirstSession(): void {
@@ -109,7 +128,9 @@
     <div class="title-row">
       <div>
         <h1>Hosts</h1>
-        <p class="count">{headerCount}</p>
+        {#if !hosts.error}
+          <p class="count">{headerCount}</p>
+        {/if}
         {#if !online}
           <p class="offline">
             Offline · Changes are safe locally. Last sync {lastSync}.
@@ -134,64 +155,67 @@
     </section>
   {/if}
 
-  <div class="filters">
-    <div class="search">
-      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <circle cx="7" cy="7" r="4.5" />
-        <path d="M10.5 10.5 L14 14" />
-      </svg>
-      <input
-        type="search"
-        placeholder="Search name, address or username"
-        aria-label="Search hosts"
-        bind:value={hosts.query}
-      />
-      <kbd>{searchHint}</kbd>
+  {#if !hosts.error}
+    <div class="filters">
+      <div class="search">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <circle cx="7" cy="7" r="4.5" />
+          <path d="M10.5 10.5 L14 14" />
+        </svg>
+        <input
+          type="search"
+          placeholder="Search name, address or username"
+          aria-label="Search hosts"
+          bind:value={hosts.query}
+          bind:this={searchInput}
+        />
+        <kbd>{searchHint}</kbd>
+      </div>
+      <select class="folder" aria-label="Folder" bind:value={hosts.folderFilter}>
+        <option value="">All folders</option>
+        {#each hosts.folderOptions as option (option.id)}
+          <option value={option.id}>{option.label}</option>
+        {/each}
+      </select>
+      <p class="sortline">{sortLine}</p>
     </div>
-    <select class="folder" aria-label="Folder" bind:value={hosts.folderFilter}>
-      <option value="">All folders</option>
-      {#each hosts.folderOptions as option (option.id)}
-        <option value={option.id}>{option.label}</option>
-      {/each}
-    </select>
-    <p class="sortline">{sortLine}</p>
-  </div>
 
-  <div class="tabs" role="group" aria-label="Filter hosts">
-    <button
-      type="button"
-      class:active={hosts.filterTab === 'all'}
-      aria-pressed={hosts.filterTab === 'all'}
-      onclick={() => (hosts.filterTab = 'all')}
-    >
-      All hosts <span class="n">{hosts.counts.all}</span>
-    </button>
-    <button
-      type="button"
-      class:active={hosts.filterTab === 'favorites'}
-      aria-pressed={hosts.filterTab === 'favorites'}
-      onclick={() => (hosts.filterTab = 'favorites')}
-    >
-      ☆ Favorites <span class="n">{hosts.counts.favorites}</span>
-    </button>
-    <button
-      type="button"
-      class:active={hosts.filterTab === 'recent'}
-      aria-pressed={hosts.filterTab === 'recent'}
-      onclick={() => (hosts.filterTab = 'recent')}
-    >
-      Recent
-    </button>
-    <span class="divider" aria-hidden="true">|</span>
-    <button
-      type="button"
-      class:active={hosts.filterTab === 'unfiled'}
-      aria-pressed={hosts.filterTab === 'unfiled'}
-      onclick={() => (hosts.filterTab = 'unfiled')}
-    >
-      Unfiled <span class="n">{hosts.counts.unfiled}</span>
-    </button>
-  </div>
+    <div class="tabs" role="group" aria-label="Filter hosts">
+      <button
+        type="button"
+        class:active={hosts.filterTab === 'all'}
+        aria-pressed={hosts.filterTab === 'all'}
+        onclick={() => (hosts.filterTab = 'all')}
+      >
+        All hosts <span class="n">{hosts.counts.all}</span>
+      </button>
+      <button
+        type="button"
+        class:active={hosts.filterTab === 'favorites'}
+        aria-pressed={hosts.filterTab === 'favorites'}
+        onclick={() => (hosts.filterTab = 'favorites')}
+      >
+        ☆ Favorites <span class="n">{hosts.counts.favorites}</span>
+      </button>
+      <button
+        type="button"
+        class:active={hosts.filterTab === 'recent'}
+        aria-pressed={hosts.filterTab === 'recent'}
+        onclick={() => (hosts.filterTab = 'recent')}
+      >
+        Recent
+      </button>
+      <span class="divider" aria-hidden="true">|</span>
+      <button
+        type="button"
+        class:active={hosts.filterTab === 'unfiled'}
+        aria-pressed={hosts.filterTab === 'unfiled'}
+        onclick={() => (hosts.filterTab = 'unfiled')}
+      >
+        Unfiled <span class="n">{hosts.counts.unfiled}</span>
+      </button>
+    </div>
+  {/if}
 
   <div class="content">
     {#if hosts.loading}

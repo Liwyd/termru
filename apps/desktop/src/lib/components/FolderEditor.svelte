@@ -1,11 +1,24 @@
 <script lang="ts">
+  import { autofocus } from '../actions/autofocus';
+  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
   import type { Group } from '../types';
   import ContextConfirm from './ContextConfirm.svelte';
 
-  let { open: visible = $bindable(false) }: { open?: boolean } = $props();
+  let {
+    open: visible = $bindable(false),
+    embedded = false,
+    onclose,
+  }: {
+    /** Modal mode: whether the dialog is shown. */
+    open?: boolean;
+    /** Renders as a page section (no backdrop, always shown). */
+    embedded?: boolean;
+    /** Called when the editor is closed (page mode: go back). */
+    onclose?: () => void;
+  } = $props();
 
   let name = $state('');
   let parentId = $state('');
@@ -13,12 +26,17 @@
   let busy = $state(false);
   let confirmOpen = $state(false);
   let pendingDelete = $state<Group | null>(null);
+  /** The folder being renamed inline, and the text typed so far. */
+  let renamingId = $state<string | null>(null);
+  let renameText = $state('');
 
   function close(): void {
     visible = false;
     name = '';
     parentId = '';
     error = null;
+    renamingId = null;
+    onclose?.();
   }
 
   async function create(): Promise<void> {
@@ -51,10 +69,20 @@
     }
   }
 
-  async function rename(group: Group): Promise<void> {
-    const next = window.prompt('New name of the folder', group.name);
-    if (next === null) return;
-    const trimmed = next.trim();
+  function startRename(group: Group): void {
+    renamingId = group.id;
+    renameText = group.name;
+    error = null;
+  }
+
+  function cancelRename(): void {
+    renamingId = null;
+    renameText = '';
+  }
+
+  async function commitRename(group: Group): Promise<void> {
+    const trimmed = renameText.trim();
+    cancelRename();
     if (trimmed.length === 0 || trimmed === group.name) return;
     try {
       await api.groupSave({ ...group, name: trimmed });
@@ -82,72 +110,112 @@
   }
 </script>
 
-{#if visible}
+{#snippet panel()}
+  <div
+    class="dialog"
+    class:embedded
+    role={embedded ? 'region' : 'dialog'}
+    aria-modal={embedded ? undefined : 'true'}
+    aria-label="Folders"
+    use:focusTrap={{
+      enabled: !embedded,
+      // Escape first leaves an inline rename, then closes the dialog.
+      onescape: () => (renamingId !== null ? cancelRename() : close()),
+    }}
+  >
+    <h2>Folders</h2>
+
+    <p class="hint">
+      A folder groups the hosts in the sidebar. Folders can be nested; a host lives in exactly one
+      folder.
+    </p>
+
+    <ul>
+      {#each hosts.folderOptions as option (option.id)}
+        {@const group = hosts.groups.find((entry) => entry.id === option.id)}
+        {#if group}
+          <li>
+            {#if renamingId === group.id}
+              <form
+                class="rename"
+                onsubmit={(event) => {
+                  event.preventDefault();
+                  void commitRename(group);
+                }}
+              >
+                <input
+                  bind:value={renameText}
+                  aria-label={`New name of ${group.name}`}
+                  maxlength="120"
+                  use:autofocus
+                  onkeydown={(event) => {
+                    // In page mode there is no dialog trap to handle Escape.
+                    if (event.key === 'Escape') cancelRename();
+                  }}
+                />
+                <button type="submit" class="primary">Save</button>
+                <button type="button" onclick={cancelRename}>Cancel</button>
+              </form>
+            {:else}
+              <span class="label">{option.label}</span>
+              <div class="actions">
+                <button type="button" onclick={() => startRename(group)}>Rename</button>
+                <button type="button" class="ghost" onclick={() => void remove(group)}
+                  >Delete</button
+                >
+              </div>
+            {/if}
+          </li>
+        {/if}
+      {:else}
+        <li class="empty">No folder yet.</li>
+      {/each}
+    </ul>
+
+    <form
+      onsubmit={(event) => {
+        event.preventDefault();
+        void create();
+      }}
+    >
+      <h3>New folder</h3>
+      <label>
+        Name
+        <input bind:value={name} required maxlength="120" placeholder="production" />
+      </label>
+      <label>
+        Parent
+        <select bind:value={parentId}>
+          <option value="">No parent</option>
+          {#each hosts.folderOptions as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="submit" class="primary" disabled={busy}>Create</button>
+      </div>
+    </form>
+
+    {#if error}
+      <p class="error" role="alert">{error}</p>
+    {/if}
+
+    <div class="footer">
+      <button type="button" onclick={close}>Close</button>
+    </div>
+  </div>
+{/snippet}
+
+{#if embedded}
+  {@render panel()}
+{:else if visible}
   <div
     class="backdrop"
     role="presentation"
     onclick={(event) => event.target === event.currentTarget && close()}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Folders">
-      <h2>Folders</h2>
-
-      <p class="hint">
-        A folder groups the hosts in the sidebar. Folders can be nested; a host lives in exactly one
-        folder.
-      </p>
-
-      <ul>
-        {#each hosts.folderOptions as option (option.id)}
-          {@const group = hosts.groups.find((entry) => entry.id === option.id)}
-          {#if group}
-            <li>
-              <span class="label">{option.label}</span>
-              <div class="actions">
-                <button type="button" onclick={() => void rename(group)}>Rename</button>
-                <button type="button" class="ghost" onclick={() => void remove(group)}
-                  >Delete</button
-                >
-              </div>
-            </li>
-          {/if}
-        {:else}
-          <li class="empty">No folder yet.</li>
-        {/each}
-      </ul>
-
-      <form
-        onsubmit={(event) => {
-          event.preventDefault();
-          void create();
-        }}
-      >
-        <h3>New folder</h3>
-        <label>
-          Name
-          <input bind:value={name} required maxlength="120" placeholder="production" />
-        </label>
-        <label>
-          Parent
-          <select bind:value={parentId}>
-            <option value="">No parent</option>
-            {#each hosts.folderOptions as option (option.id)}
-              <option value={option.id}>{option.label}</option>
-            {/each}
-          </select>
-        </label>
-        <div class="actions">
-          <button type="submit" class="primary" disabled={busy}>Create</button>
-        </div>
-      </form>
-
-      {#if error}
-        <p class="error" role="alert">{error}</p>
-      {/if}
-
-      <div class="footer">
-        <button type="button" onclick={close}>Close</button>
-      </div>
-    </div>
+    {@render panel()}
   </div>
 {/if}
 
@@ -181,6 +249,24 @@
     border: 1px solid var(--termru-border);
     background: var(--termru-surface);
     color: var(--termru-fg);
+  }
+
+  /* Page mode: in flow, scrolls itself and keeps the inset of every page. */
+  .dialog.embedded {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    overflow: auto;
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .dialog.embedded > * {
+    width: 100%;
+    max-width: 42rem;
   }
 
   h2 {
@@ -224,6 +310,20 @@
   }
 
   .label {
+    flex: 1;
+  }
+
+  form.rename {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1;
+    border: none;
+    padding: 0;
+  }
+
+  form.rename input {
     flex: 1;
   }
 
