@@ -63,3 +63,28 @@ export const DARK_TERMINAL_THEME = {
 export function terminalTheme(dark: boolean): ITheme {
   return dark ? DARK_TERMINAL_THEME : LIGHT_TERMINAL_THEME;
 }
+
+/**
+ * The colours of find-in-terminal matches (`#RRGGBB`, as the search addon
+ * requires). Warm yellow reads as "found" on both backgrounds without
+ * borrowing the accent or the selection colour.
+ */
+export function searchDecorations(dark: boolean) {
+  return dark
+    ? {
+        matchBackground: '#4D4220',
+        matchBorder: '#6B5A2A',
+        matchOverviewRuler: '#D9A552',
+        activeMatchBackground: '#8F6F1C',
+        activeMatchBorder: '#D9A552',
+        activeMatchColorOverviewRuler: '#F2C94C',
+      }
+    : {
+        matchBackground: '#EBDDAA',
+        matchBorder: '#D8C27A',
+        matchOverviewRuler: '#C9A64A',
+        activeMatchBackground: '#E3B341',
+        activeMatchBorder: '#B8892B',
+        activeMatchColorOverviewRuler: '#B8892B',
+      };
+}

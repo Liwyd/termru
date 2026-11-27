@@ -1,5 +1,6 @@
 pub mod app_info;
 pub mod hosts;
+pub mod identity_keys;
 pub mod layout;
 pub mod prefs;
 pub mod secrets;

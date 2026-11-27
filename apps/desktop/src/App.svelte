@@ -119,7 +119,8 @@
         openPalette('hosts');
         break;
       case 'tab.close':
-        if (active) void sessions.close(active);
+        // A tab with a live session asks before it goes.
+        if (active) sessions.requestClose(active);
         break;
       case 'tab.next':
         sessions.cycleActive(1);
@@ -193,7 +194,7 @@
         break;
       case 'pane.close': {
         const pane = sessions.activePane;
-        if (pane) void sessions.closePane(pane);
+        if (pane) sessions.requestClosePane(pane);
         break;
       }
       case 'pane.next':

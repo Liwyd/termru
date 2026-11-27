@@ -2,6 +2,7 @@ import { invoke } from './ipc-backend';
 import type { Channel } from './ipc-backend';
 import type {
   ConflictView,
+  GeneratedIdentity,
   Group,
   Host,
   HostKeyPromptRequest,
@@ -9,6 +10,7 @@ import type {
   IdentityBinding,
   Tag,
   Preferences,
+  PublicKeyInfo,
   RecentHost,
   SessionGeometry,
   SessionInfo,
@@ -45,6 +47,25 @@ export const api = {
   identityBind: (id: string, keyPath: string) => invoke<void>('identity_bind', { id, keyPath }),
   identityUnbind: (id: string) => invoke<void>('identity_unbind', { id }),
   identityBindings: () => invoke<IdentityBinding[]>('identity_bindings'),
+  /**
+   * Generates an ed25519 key in the app's key folder and an identity bound
+   * to it. A non-empty passphrase encrypts the key; `rememberPassphrase`
+   * keeps it in the credential store.
+   */
+  identityGenerate: (
+    name: string,
+    comment: string | null,
+    passphrase: string | null,
+    rememberPassphrase: boolean,
+  ) =>
+    invoke<GeneratedIdentity>('identity_generate', {
+      name,
+      comment,
+      passphrase,
+      rememberPassphrase,
+    }),
+  /** The public key of the key file an identity is bound to; null when none is. */
+  identityPublicKey: (id: string) => invoke<PublicKeyInfo | null>('identity_public_key', { id }),
 
   prefsGet: () => invoke<Preferences>('prefs_get'),
   prefsSet: (prefs: Preferences) => invoke<void>('prefs_set', { prefs }),

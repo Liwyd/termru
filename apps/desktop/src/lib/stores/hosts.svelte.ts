@@ -26,6 +26,12 @@ export class HostsStore {
   query = $state('');
   /** The active filter tab of the hosts table. */
   filterTab = $state<HostFilterTab>('all');
+  /**
+   * What the folders page has selected: every host, the hosts without a
+   * folder, or a folder id. It lives here so it survives a visit to another
+   * page.
+   */
+  folderSelection = $state<string>('all');
   /** The folder the rows are restricted to ('' = every folder). */
   folderFilter = $state('');
   /** Last connection time per host id (ms since the epoch). */
@@ -233,6 +239,46 @@ export class HostsStore {
     } finally {
       this.loading = false;
     }
+  }
+
+  /** Re-reads the folders only (a folder was created, renamed or moved). */
+  async reloadGroups(): Promise<void> {
+    this.groups = ((await api.groupList()) ?? []).filter((group) => !group.deleted);
+  }
+
+  /** Re-reads the identities only (one was created, renamed or deleted). */
+  async reloadIdentities(): Promise<void> {
+    this.identities = ((await api.identityList()) ?? []).filter((identity) => !identity.deleted);
+  }
+
+  /**
+   * Saves a folder (a new one, a rename or a move). The backend refuses a
+   * parent that would make a cycle or nest too deep; the refusal is thrown
+   * for the folders page to show next to its form.
+   */
+  async saveGroup(group: Group): Promise<Group> {
+    const saved = await api.groupSave(group);
+    this.groups = this.groups.some((entry) => entry.id === saved.id)
+      ? this.groups.map((entry) => (entry.id === saved.id ? saved : entry))
+      : [...this.groups, saved];
+    return saved;
+  }
+
+  /**
+   * Deletes a folder. The backend moves its hosts and subfolders up to the
+   * folder's parent, so both lists are read again.
+   */
+  async removeGroup(id: string): Promise<void> {
+    await api.groupDelete(id);
+    await this.load();
+  }
+
+  /**
+   * Puts a host in a folder (null: no folder). Returns null, with the
+   * reason in `saveError`, when the store refused.
+   */
+  async moveHost(host: Host, groupId: string | null): Promise<Host | null> {
+    return this.save({ ...host, group_id: groupId });
   }
 
   /** Re-reads the last connection times (the table shows them live). */

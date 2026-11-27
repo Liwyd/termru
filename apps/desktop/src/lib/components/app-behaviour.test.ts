@@ -15,6 +15,7 @@ import { route } from '../stores/route.svelte';
 import { sessions } from '../stores/sessions.svelte';
 import { shortcuts } from '../stores/shortcuts.svelte';
 import { toasts } from '../stores/toasts.svelte';
+import { unsaved } from '../stores/unsaved.svelte';
 import { pruneTerminals } from '../terminal/registry';
 import { click, findButton, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
@@ -35,6 +36,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 vi.mock('@xterm/xterm', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-fit', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-webgl', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-search', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-web-links', () => import('../test-support/xterm-mock'));
 
 const WEB: Host = {
   id: 'host-1',
@@ -148,7 +151,7 @@ describe('opening the host editor', () => {
     await start();
     click(findButton(target, '+ New host'));
     await vi.waitFor(() => expect(route.route).toBe('host-edit'));
-    expect(target.textContent).toContain('New host');
+    expect(target.textContent).toContain('New connection');
     // It does not bounce back to the hosts page.
     await tick();
     expect(route.route).toBe('host-edit');
@@ -164,7 +167,7 @@ describe('opening the host editor', () => {
     chord('N', { shiftKey: true });
     expect(route.route).toBe('host-edit');
     expect(route.editHost).toBeNull();
-    expect(target.textContent).toContain('New host');
+    expect(target.textContent).toContain('New connection');
   });
 
   it('opens a new host when #host-edit is reloaded without a draft', async () => {
@@ -173,15 +176,16 @@ describe('opening the host editor', () => {
     flushSync();
     await tick();
     expect(route.route).toBe('host-edit');
-    expect(target.textContent).toContain('New host');
+    expect(target.textContent).toContain('New connection');
   });
 
   it('"Edit" opens the host, and Save returns to the page the user came from', async () => {
     await start();
     click(findButton(target, 'Edit'));
-    await vi.waitFor(() => expect(target.textContent).toContain('Edit host'));
+    await vi.waitFor(() => expect(target.textContent).toContain('Edit connection'));
     answers.set('host_save', (args: unknown) => (args as { host: Host }).host);
-    click(findButton(target, 'Save'));
+    type(document.getElementById('host-name') as HTMLInputElement, 'renamed');
+    click(findButton(target, 'Save host'));
     await vi.waitFor(() => expect(route.route).toBe('hosts'));
     expect(callsOf('host_save')).toHaveLength(1);
   });
@@ -372,12 +376,12 @@ describe('pages in flow', () => {
     expect(route.route).toBe('hosts');
   });
 
-  it('Close returns to the page the user came from, not always to hosts', async () => {
+  it('the host editor goes back to the page the user came from, not always to hosts', async () => {
     await start();
     route.go('sessions');
-    route.go('folders');
+    route.edit(null);
     flushSync();
-    click(findButton(target, 'Close'));
+    click(findButton(target, 'Cancel'));
     expect(route.route).toBe('sessions');
   });
 
@@ -399,23 +403,20 @@ describe('pages in flow', () => {
     route.edit(null);
     flushSync();
     // A private-key host offers the link to the identities page.
-    const auth = Array.from(target.querySelectorAll('label'))
-      .find((label) => label.textContent?.trim().startsWith('Authentication'))
-      ?.querySelector('select') as HTMLSelectElement;
-    type(auth, 'private_key');
-    const name = Array.from(target.querySelectorAll('label'))
-      .find((label) => label.textContent?.trim().startsWith('Name'))
-      ?.querySelector('input') as HTMLInputElement;
-    type(name, 'draft host');
+    const key = target.querySelector('input[name="auth"][value="private_key"]') as HTMLInputElement;
+    key.checked = true;
+    key.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+    type(document.getElementById('host-name') as HTMLInputElement, 'draft host');
     click(findButton(target, 'Manage identities…'));
     expect(route.route).toBe('identities');
+    // No question: the form is parked, not lost.
+    expect(unsaved.question).toBeNull();
 
-    click(findButton(target, 'Close'));
+    // The identities page offers the way back to the host being edited.
+    click(findButton(target, 'Back to host'));
     expect(route.route).toBe('host-edit');
-    const restored = Array.from(target.querySelectorAll('label'))
-      .find((label) => label.textContent?.trim().startsWith('Name'))
-      ?.querySelector('input') as HTMLInputElement;
-    expect(restored.value).toBe('draft host');
+    expect((document.getElementById('host-name') as HTMLInputElement).value).toBe('draft host');
   });
 });
 

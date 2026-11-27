@@ -35,6 +35,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal (control characters and escape sequences removed).
 * The host-key question warns when the host is already known under other key
   types, and the handshake asks for the known key types first.
+* Sessions page rebuilt to the design frames (R4): a tab strip with
+  `+ New session`, a toolbar with the status, `user@host:port`, the folder,
+  Split H / Split V, Duplicate, Detach and a More menu, and a bar with
+  Reconnect and Close session. Each pane has a mono header
+  (`host / shell / active`, or `ACTIVE PANE` and the grid when alone), a 2px
+  accent rule when focused, a footer (`INPUT READY · UTF-8 · LF` and the grid),
+  an Expand button and a divider you can drag, double-click to even out, or move
+  with the arrow keys. A hint above a split tab explains the split and can be
+  dismissed. The status bar says how long the session has been connected.
+* Terminal context menu (copy, paste, select all, clear scrollback, find,
+  split, and open/copy for a link under the pointer), reachable from the
+  keyboard (Menu key, Shift+F10).
+* Find in the terminal (`@xterm/addon-search`): Ctrl+Shift+F (Cmd+F on macOS)
+  inside a terminal, with match highlighting, a match count, Enter and
+  Shift+Enter, a match-case toggle and Escape to close.
+* Links in terminal output (`@xterm/addon-web-links`): Ctrl or Cmd+click.
+  Only `http` and `https` links are followed and they never navigate the app
+  window; the address goes to the system opener when the app has one and is
+  copied to the clipboard otherwise (the opener plugin is not part of this build
+  yet).
+* A paste of two or more lines asks first (line count and a preview), with
+  "Don't ask again" for the rest of the session. Control characters are removed
+  from pasted text.
+* Closing a tab or a pane with a live session asks first (the close button,
+  Close session, `Ctrl+Shift+W` and the pane shortcut).
+* Host editor rebuilt to the design frame (R5): a routed page with numbered
+  sections (`01 / CONNECTION`, `02 / AUTHENTICATION`, `03 / ORGANIZATION` and
+  `04 / ADVANCED` for the terminal type and the keepalive), a right rail with
+  the unsaved-changes indicator, the local credential (a stored password or
+  key passphrase, with a Forget button that calls `secret_delete`) and the
+  connection preview (`ssh user@host -p port`), and Cancel / Save host /
+  Save & connect in a footer that stays in reach. Fields validate on blur with
+  the backend's own rules (`validate.rs`) and the messages are linked with
+  `aria-invalid` / `aria-describedby`; a refusal from the backend is put next
+  to its field. A password can be typed and kept in the credential store from
+  the editor; a keepalive of 0 reads "Automatic (30 s)". Leaving the page,
+  opening another host or closing the window with unsaved changes asks in an
+  in-app dialog first.
+* Folders page rebuilt to the design frame (R6): a folder tree with host
+  counts, the hosts of the selected folder with Move and "Choose hosts", and an
+  edit rail. A folder cannot be moved under itself or one of its descendants
+  (the parent picker shows those folders disabled with the reason; the store
+  refuses them too, tests added) and deleting asks, saying what happens to the
+  hosts and subfolders inside (they move up to the parent).
+* Identities page: the list, the key file, the fingerprint and the public key
+  with copy buttons, rename, the hosts that use the identity (each opens its
+  editor) and a delete that lists them. New `identity_generate` command writes
+  an ed25519 key (OpenSSH format, optional passphrase) into the app's `keys/`
+  folder with mode 0600, never overwrites a file, and can keep the passphrase
+  in the credential store under the identity; `identity_public_key` reads the
+  public key of the bound file without its passphrase. `ssh-key` is now a
+  direct dependency of the desktop crate (already in the tree through
+  `russh`; no new crate).
 
 ### Security
 
@@ -86,6 +139,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * The default terminal line height is 1.3.
 * Session output is merged into larger updates (up to 64 KiB / 8 ms);
   small chunks such as keystroke echo are still sent immediately.
+* The size of a terminal has one owner per pane: a single `ResizeObserver` fits
+  the grid on `requestAnimationFrame` and the backend is told once the size has
+  settled (150 ms), so dragging a divider no longer resizes the remote shell on
+  every pointer move.
+* A pane that becomes the active pane takes the keyboard (unless a field, a
+  dialog or a menu has it).
+* The editor, the folders page and the identities page are routed pages with
+  the shell's anatomy (breadcrumb, title, one line, primary action); the old
+  modal editors for hosts, folders and identities are gone. The folders and
+  identities pages remember their selection while another page is open.
+* The dev mock backend (`?mock`) refuses hosts and folders in the words of the
+  real backend, deletes a folder the way the store does (contents move up),
+  implements the two new identity commands, and takes `&folder=Name` and
+  `&identity=Name` to start those pages on an entry.
 
 ## [0.2.0] — 2026-10-25
 

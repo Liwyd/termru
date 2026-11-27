@@ -1,12 +1,21 @@
 import type { Host } from '../types';
+import { unsaved } from './unsaved.svelte';
 
-/** The unsaved state of the host editor, kept while another page is open. */
+/**
+ * The unsaved state of the host editor, kept while another page is open.
+ * The password typed into the form is never parked.
+ */
 export interface HostEditDraft {
   host: Host;
   authType: Host['auth']['type'];
   identityId: string;
   groupId: string;
   tags: string[];
+  /** The port and keepalive as typed (the host holds them as numbers). */
+  portText?: string;
+  keepaliveText?: string;
+  /** Whether the "keep the password on this device" box was ticked. */
+  savePassword?: boolean;
 }
 
 /** How many previous pages `back()` remembers. */
@@ -58,6 +67,8 @@ export class RouteStore {
    * `edit()`, nothing else has to be switched on.
    */
   editHost = $state<Host | null>(null);
+  /** Counts `edit()` calls: the editor starts a fresh form each time it changes. */
+  editToken = $state(0);
   /** Unsaved editor state parked while the user visits another page. */
   draft = $state.raw<HostEditDraft | null>(null);
   /** The pages visited before this one (most recent last). */
@@ -69,7 +80,14 @@ export class RouteStore {
       if (fromHash) this.route = fromHash;
       window.addEventListener('hashchange', () => {
         const next = parseHash(window.location.hash);
-        if (next) this.#enter(next);
+        if (!next || next === this.route) return;
+        // The address bar changed under a page with unsaved work: put the
+        // address back and ask, instead of leaving silently.
+        if (unsaved.ask(() => this.go(next, { force: true }))) {
+          window.location.hash = `#${this.route}`;
+          return;
+        }
+        this.#enter(next);
       });
     }
   }
@@ -82,8 +100,20 @@ export class RouteStore {
     this.route = next;
   }
 
-  /** Navigates to a page and syncs the hash. */
-  go(route: RouteId): void {
+  /**
+   * Navigates to a page and syncs the hash. A page with unsaved work is not
+   * left silently: the unsaved-changes question opens instead, and the
+   * navigation happens when the user agrees to discard (`force` skips the
+   * question, for the caller that has already asked or saved).
+   */
+  go(route: RouteId, options: { force?: boolean } = {}): void {
+    if (
+      !options.force &&
+      route !== this.route &&
+      unsaved.ask(() => this.go(route, { force: true }))
+    ) {
+      return;
+    }
     this.#enter(route);
     const target = `#${route}`;
     if (typeof window !== 'undefined' && window.location.hash !== target) {
@@ -96,7 +126,8 @@ export class RouteStore {
    * A page that is open as a full page uses this for its Close and Cancel
    * buttons instead of always going to the hosts page.
    */
-  back(fallback: RouteId = 'hosts'): void {
+  back(fallback: RouteId = 'hosts', options: { force?: boolean } = {}): void {
+    if (!options.force && unsaved.ask(() => this.back(fallback, { force: true }))) return;
     let previous = this.#history.pop();
     // A page that was left through itself (a reload on the same hash) is not
     // a place to return to.
@@ -110,10 +141,14 @@ export class RouteStore {
   }
 
   /** Opens the host editor for a host, or for a new host when null. */
-  edit(host: Host | null): void {
+  edit(host: Host | null, options: { force?: boolean } = {}): void {
+    // Opening the editor on another host would replace the form in front of
+    // the user: that is a way to lose changes too.
+    if (!options.force && unsaved.ask(() => this.edit(host, { force: true }))) return;
     this.editHost = host;
+    this.editToken += 1;
     this.draft = null;
-    this.go('host-edit');
+    this.go('host-edit', { force: true });
   }
 
   /**
@@ -122,7 +157,8 @@ export class RouteStore {
    */
   leaveEditor(draft: HostEditDraft, to: RouteId): void {
     this.draft = draft;
-    this.go(to);
+    // The form is parked, not lost: no question.
+    this.go(to, { force: true });
   }
 
   /** Restores the persisted route (workspace document). Old documents

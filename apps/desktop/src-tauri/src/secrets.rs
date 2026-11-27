@@ -113,6 +113,17 @@ impl SecretStore {
         Ok(())
     }
 
+    /// Stores the passphrase of an identity's key (a key that Termru just
+    /// generated: no host has used it yet, so there is no older per-host
+    /// entry to clean up).
+    pub fn set_identity_passphrase(identity_id: &str, secret: &str) -> Result<(), CommandError> {
+        Self::set(
+            &passphrase_owner(identity_id),
+            SecretKind::Passphrase,
+            secret,
+        )
+    }
+
     /// Removes the passphrase of the identity and the host's older entry.
     pub fn delete_passphrase(identity_id: &str, legacy_host_id: &str) -> Result<(), CommandError> {
         Self::delete(&passphrase_owner(identity_id), SecretKind::Passphrase)?;

@@ -17,6 +17,7 @@
  */
 
 import type { FitAddon } from '@xterm/addon-fit';
+import type { SearchAddon } from '@xterm/addon-search';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { Terminal } from '@xterm/xterm';
 import type { SessionUpdate } from '../types';
@@ -30,6 +31,8 @@ export interface TerminalHandle {
   paneId: string;
   term: Terminal;
   fit: FitAddon;
+  /** Find in the scrollback. */
+  search: SearchAddon;
   /** The element xterm renders into; it survives re-parenting. */
   element: HTMLElement;
   /** The container that shows `element` right now (null while detached). */
@@ -44,6 +47,8 @@ export interface TerminalHandle {
    * generation, so it never starts (or closes) a session by itself.
    */
   generation: number;
+  /** The web link under the pointer (the context menu offers to open it). */
+  hoverLink: string | null;
   /** The `copy_on_select` preference, kept current by the host. */
   copyOnSelect: boolean;
   /** True once the web fonts were awaited for the first fit. */

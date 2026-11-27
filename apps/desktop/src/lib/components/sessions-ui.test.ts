@@ -7,6 +7,7 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PaneView from './PaneView.svelte';
+import SessionToolbar from './SessionToolbar.svelte';
 import StatusBar from './StatusBar.svelte';
 import TabBar from './TabBar.svelte';
 import HostsPage from '../pages/HostsPage.svelte';
@@ -28,6 +29,8 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
 vi.mock('@xterm/xterm', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-fit', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-webgl', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-search', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-web-links', () => import('../test-support/xterm-mock'));
 
 function host(name: string, auth: Host['auth'] = { type: 'agent' }): Host {
   const now = new Date().toISOString();
@@ -97,28 +100,35 @@ function setStatus(pane: Pane, status: SessionStatus, sessionId: string | null =
   flushSync();
 }
 
-describe('TabBar duplicate and move', () => {
+describe('toolbar duplicate and detach', () => {
   function mountBar(tab: Tab) {
-    component = mount(TabBar, { target, props: { tab, active: true } });
+    component = mount(SessionToolbar, { target, props: { tab } });
     flushSync();
   }
-  const duplicate = () => target.querySelector<HTMLButtonElement>('[title="Duplicate session"]');
-  const move = () => target.querySelector<HTMLButtonElement>('[title="Move to a new window"]');
+  const duplicate = () => target.querySelector<HTMLButtonElement>('[aria-label="Duplicate"]');
+  const detach = () => target.querySelector<HTMLButtonElement>('[aria-label="Detach"]');
+  const disabled = (button: HTMLButtonElement | null) =>
+    button?.getAttribute('aria-disabled') === 'true';
 
-  it('are disabled until the active pane is connected', () => {
+  it('are disabled until the active pane is connected, and say why', () => {
     const { tab, pane } = openTab();
     mountBar(tab);
-    expect(duplicate()?.disabled).toBe(true);
-    expect(move()?.disabled).toBe(true);
+    expect(disabled(duplicate())).toBe(true);
+    expect(disabled(detach())).toBe(true);
+    // A disabled control carries its reason, and stays focusable to read it.
+    expect(duplicate()?.title).toBe('Duplicate needs a connected session');
+    expect(detach()?.title).toBe('Detach needs a connected session');
+    expect(duplicate()?.disabled).toBe(false);
 
     // A session id alone is not enough: it may be connecting.
     pane.sessionId = 's1';
     flushSync();
-    expect(duplicate()?.disabled).toBe(true);
+    expect(disabled(duplicate())).toBe(true);
 
     setStatus(pane, { state: 'ready' }, 's1');
-    expect(duplicate()?.disabled).toBe(false);
-    expect(move()?.disabled).toBe(false);
+    expect(disabled(duplicate())).toBe(false);
+    expect(disabled(detach())).toBe(false);
+    expect(duplicate()?.title).not.toContain('needs');
   });
 
   it('are disabled again while the session reconnects or after it failed', () => {
@@ -130,9 +140,26 @@ describe('TabBar duplicate and move', () => {
       { state: 'reconnecting', attempt: 1, delay_ms: 500, last_error: 'reset' },
       's1',
     );
-    expect(duplicate()?.disabled).toBe(true);
+    expect(disabled(duplicate())).toBe(true);
     setStatus(pane, { state: 'failed', category: 'network', message: 'down' }, 's1');
-    expect(move()?.disabled).toBe(true);
+    expect(disabled(detach())).toBe(true);
+  });
+
+  it('does nothing when a disabled button is clicked', () => {
+    const { tab } = openTab();
+    mountBar(tab);
+    click(duplicate() as HTMLButtonElement);
+    click(detach() as HTMLButtonElement);
+    expect(sessions.tabs).toHaveLength(1);
+    expect(callsOf('window_open_session')).toHaveLength(0);
+  });
+
+  it('duplicates into a new tab when the session is connected', () => {
+    const { tab, pane } = openTab();
+    mountBar(tab);
+    setStatus(pane, { state: 'ready' }, 's1');
+    click(duplicate() as HTMLButtonElement);
+    expect(sessions.tabs).toHaveLength(2);
   });
 });
 

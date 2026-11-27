@@ -1,54 +1,71 @@
 <script lang="ts">
-  import type { SessionStatus } from '../types';
+  import type { Pane } from '../stores/sessions.svelte';
+  import { statusLabel, statusTone } from '../terminal/session-view';
 
-  let { status }: { status: SessionStatus } = $props();
+  /**
+   * The status of a session: a word, a glyph and a colour (never the colour
+   * alone). ■ connected, □ working, ◆ failed, ▬ not connected.
+   */
+  let { pane }: { pane: Pick<Pane, 'status' | 'restored' | 'host'> } = $props();
 
-  const labels: Record<string, string> = {
-    connecting: 'Connecting',
-    authenticating: 'Authenticating',
-    ready: 'Connected',
-    reconnecting: 'Reconnecting',
-    closed: 'Disconnected',
-    failed: 'Error',
-  };
+  const tone = $derived(statusTone(pane.status));
+  const label = $derived(statusLabel(pane));
 </script>
 
-<span class="badge {status.state}" title={status.state}>
-  <span class="dot" aria-hidden="true"></span>
-  {labels[status.state] ?? status.state}
+<span class="badge {tone} {pane.status.state}" title={label}>
+  <span class="glyph" aria-hidden="true"></span>
+  {label}
 </span>
 
 <style>
   .badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.1rem 0.5rem;
-    border-radius: 999px;
-    border: 1px solid var(--termru-border);
-    font-size: 0.72rem;
-    color: var(--termru-muted);
+    gap: var(--termru-space-2);
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--termru-radius-input);
+    background: var(--termru-accent-soft);
+    color: var(--termru-accent);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    font-weight: var(--termru-text-control-weight);
     white-space: nowrap;
   }
 
-  .dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
+  .glyph {
+    flex: none;
+    width: 7px;
+    height: 7px;
     background: currentColor;
   }
 
-  .ready {
-    color: var(--termru-success);
+  .busy .glyph {
+    background: transparent;
+    border: 1.5px solid currentColor;
   }
 
-  .connecting,
-  .authenticating,
+  .failed .glyph {
+    transform: rotate(45deg) scale(0.9);
+  }
+
+  .closed .glyph {
+    width: 8px;
+    height: 2px;
+  }
+
   .reconnecting {
-    color: var(--termru-accent);
+    background: var(--termru-warning-soft);
+    color: var(--termru-warning);
   }
 
   .failed {
+    background: var(--termru-danger-soft);
     color: var(--termru-danger);
+  }
+
+  .closed {
+    background: var(--termru-canvas);
+    color: var(--termru-muted);
   }
 </style>

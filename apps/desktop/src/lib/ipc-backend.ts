@@ -31,6 +31,11 @@ export interface WindowHandle {
   minimize(): Promise<void>;
   toggleMaximize(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Runs `handler` when the window is asked to close; `preventDefault()` on
+   * the event keeps it open. Resolves to the function that removes it.
+   */
+  onCloseRequested(handler: (event: { preventDefault(): void }) => void): Promise<() => void>;
 }
 
 /** The options of the single-file picker. */

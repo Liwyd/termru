@@ -59,7 +59,7 @@ fn target(store: &Store, host_id: HostId, kind: &str) -> Result<Target, CommandE
     })
 }
 
-async fn blocking<T: Send + 'static>(
+pub(super) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError> {
     tauri::async_runtime::spawn_blocking(work)

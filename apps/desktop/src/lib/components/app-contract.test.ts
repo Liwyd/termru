@@ -86,6 +86,9 @@ vi.mock('@tauri-apps/api/core', () => {
               deleted: false,
             },
           ];
+        case 'identity_save':
+          // The backend answers with the saved identity.
+          return { ...(args?.identity as Record<string, unknown>) };
         case 'identity_bindings':
           return [{ identityId: 'identity-1', keyPath: '/home/user/.ssh/id_ed25519' }];
         case 'plugin:dialog|open':
@@ -152,8 +155,14 @@ vi.mock('@xterm/xterm', () => {
     options: Record<string, unknown> = {};
     onData(_handler: (data: string) => void) {}
     onSelectionChange(_handler: () => void) {}
+    onTitleChange(_handler: (title: string) => void) {}
+    onResize(_handler: (size: { cols: number; rows: number }) => void) {}
     attachCustomKeyEventHandler(_handler: (event: KeyboardEvent) => boolean) {}
     loadAddon(_addon: unknown) {}
+    hasSelection() {
+      return false;
+    }
+    focus() {}
     open(_element: HTMLElement) {}
     reset() {}
     write(data: Uint8Array) {
@@ -174,6 +183,27 @@ vi.mock('@xterm/addon-fit', () => {
     fit() {}
   }
   return { FitAddon };
+});
+
+vi.mock('@xterm/addon-search', () => {
+  class SearchAddon {
+    onDidChangeResults() {
+      return { dispose() {} };
+    }
+    findNext() {
+      return false;
+    }
+    findPrevious() {
+      return false;
+    }
+    clearDecorations() {}
+  }
+  return { SearchAddon };
+});
+
+vi.mock('@xterm/addon-web-links', () => {
+  class WebLinksAddon {}
+  return { WebLinksAddon };
 });
 
 function click(element: Element): void {
@@ -500,22 +530,22 @@ describe('desktop UI ↔ Tauri contract', () => {
 
     click(findButton(target, 'Edit'));
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Edit host');
+      expect(target.textContent).toContain('Edit connection');
     });
 
     // The folder and the tag of the host are offered.
-    const selects = target.querySelectorAll('.dialog select');
-    const folder = selects[1] as HTMLSelectElement;
+    const folder = document.getElementById('host-folder') as HTMLSelectElement;
     expect(folder).not.toBeNull();
     folder.value = 'group-1';
     folder.dispatchEvent(new Event('change', { bubbles: true }));
 
-    const check = target.querySelector('.dialog input[type="checkbox"]') as HTMLInputElement;
-    expect(check).not.toBeNull();
-    check.checked = true;
-    check.dispatchEvent(new Event('change', { bubbles: true }));
+    const tag = Array.from(target.querySelectorAll('button.chip')).find(
+      (chip) => chip.textContent?.trim() === 'frontend',
+    ) as HTMLElement | undefined;
+    expect(tag).toBeDefined();
+    click(tag as HTMLElement);
 
-    click(findButton(target, 'Save'));
+    click(findButton(target, 'Save host'));
 
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'host_save')).toBe(true);
@@ -541,7 +571,7 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('/home/user/.ssh/id_ed25519');
     });
 
-    click(findButton(target, 'Choose key…'));
+    click(findButton(target, 'Choose another key…'));
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'plugin:dialog|open')).toBe(true);
     });
@@ -566,9 +596,25 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('New identity');
     });
 
-    const inputs = target.querySelectorAll('.dialog form input');
-    type(inputs[0] as HTMLInputElement, 'backup key');
-    click(findButton(target, 'Create'));
+    // A key file you already have: the identity is created, then bound.
+    click(findButton(target, 'New identity'));
+    await vi.waitFor(() => {
+      expect(target.querySelector('input[name="source"][value="existing"]')).not.toBeNull();
+    });
+    const existing = target.querySelector(
+      'input[name="source"][value="existing"]',
+    ) as HTMLInputElement;
+    existing.checked = true;
+    existing.dispatchEvent(new Event('change', { bubbles: true }));
+    type(document.getElementById('identity-name') as HTMLInputElement, 'backup key');
+    await vi.waitFor(() => {
+      expect(
+        Array.from(target.querySelectorAll('button')).some(
+          (b) => b.textContent?.trim() === 'Choose key file…',
+        ),
+      ).toBe(true);
+    });
+    click(findButton(target, 'Choose key file…'));
 
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'identity_save')).toBe(true);
@@ -657,6 +703,15 @@ describe('desktop UI ↔ Tauri contract', () => {
     );
     expect(closeButton).toBeTruthy();
     click(closeButton as HTMLElement);
+
+    // A tab with a live session asks first; nothing is closed yet.
+    const dialog = await vi.waitFor(() => {
+      const found = document.querySelector('[role="alertdialog"]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(invokeCalls.some((call) => call.cmd === 'session_close')).toBe(false);
+    click(findButton(dialog, 'Close session'));
 
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'session_close')).toBe(true);

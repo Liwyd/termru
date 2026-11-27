@@ -39,6 +39,8 @@ pub struct AppState {
     pub host_keys: Arc<HostKeyPrompts>,
     pub auth_prompts: Arc<AuthPrompts>,
     pub known_hosts_path: PathBuf,
+    /// Where the keys Termru generates for identities are written.
+    pub keys_dir: PathBuf,
     /// The cloud sync engine (off until the user signs in).
     pub sync: Arc<SyncEngine>,
     /// The background sync task.
@@ -78,6 +80,7 @@ impl AppState {
         }
         Self {
             known_hosts_path: data_dir.join("known_hosts"),
+            keys_dir: data_dir.join("keys"),
             sync,
             sync_scheduler,
             store,

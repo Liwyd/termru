@@ -1,5 +1,6 @@
 mod app_error;
 mod commands;
+mod keygen;
 mod secrets;
 mod state;
 pub mod sync;
@@ -96,6 +97,8 @@ fn build() -> tauri::Result<tauri::App> {
             commands::hosts::identity_bindings,
             commands::hosts::identity_bind,
             commands::hosts::identity_unbind,
+            commands::identity_keys::identity_generate,
+            commands::identity_keys::identity_public_key,
             commands::prefs::prefs_get,
             commands::prefs::prefs_set,
             commands::sessions::session_open,

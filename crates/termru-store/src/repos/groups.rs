@@ -244,6 +244,74 @@ mod tests {
         assert!(store.repos().groups().save(&mut root2).is_err());
     }
 
+    /// A folder cannot move under any of its descendants, however deep: the
+    /// folders page offers only legal parents, and this is the check that
+    /// still holds when something else (a sync, an old client) asks.
+    #[test]
+    fn a_folder_cannot_move_under_a_deeper_descendant() {
+        let store = Store::open_in_memory().unwrap();
+        let repos = store.repos();
+        let mut a = Group::new("a".into());
+        repos.groups().save(&mut a).unwrap();
+        let mut b = Group::new("b".into());
+        b.parent_id = Some(a.id);
+        repos.groups().save(&mut b).unwrap();
+        let mut c = Group::new("c".into());
+        c.parent_id = Some(b.id);
+        repos.groups().save(&mut c).unwrap();
+        let mut d = Group::new("d".into());
+        d.parent_id = Some(c.id);
+        repos.groups().save(&mut d).unwrap();
+
+        // a -> d (a grandchild's child) and a -> c (a grandchild) are cycles.
+        for descendant in [c.id, d.id, b.id] {
+            let mut moved = a.clone();
+            moved.parent_id = Some(descendant);
+            let error = repos.groups().save(&mut moved).unwrap_err();
+            assert!(error.to_string().contains("cycle"), "{error}");
+        }
+        // Nothing changed: a is still a root.
+        assert_eq!(repos.groups().get(a.id).unwrap().unwrap().parent_id, None);
+
+        // A middle folder cannot move under its own child either.
+        let mut moved = b.clone();
+        moved.parent_id = Some(d.id);
+        assert!(repos.groups().save(&mut moved).is_err());
+
+        // Moving a branch to a sibling branch is fine.
+        let mut other = Group::new("other".into());
+        repos.groups().save(&mut other).unwrap();
+        let mut moved = b.clone();
+        moved.parent_id = Some(other.id);
+        repos.groups().save(&mut moved).unwrap();
+        assert_eq!(
+            repos.groups().get(b.id).unwrap().unwrap().parent_id,
+            Some(other.id)
+        );
+    }
+
+    #[test]
+    fn nesting_deeper_than_the_limit_is_refused() {
+        let store = Store::open_in_memory().unwrap();
+        let repos = store.repos();
+        let mut parent: Option<termru_core::ids::GroupId> = None;
+        let mut last = None;
+        // A top-level folder has depth 0; the deepest legal one has depth
+        // MAX_GROUP_DEPTH, so that many parents sit above it.
+        for level in 0..=MAX_GROUP_DEPTH {
+            let mut group = Group::new(format!("level-{level}"));
+            group.parent_id = parent;
+            repos.groups().save(&mut group).unwrap();
+            parent = Some(group.id);
+            last = Some(group);
+        }
+        // The chain is as deep as it may be: one level more is refused.
+        let mut too_deep = Group::new("too-deep".into());
+        too_deep.parent_id = Some(last.unwrap().id);
+        let error = repos.groups().save(&mut too_deep).unwrap_err();
+        assert!(error.to_string().contains("maximum depth"), "{error}");
+    }
+
     #[test]
     fn deleting_group_moves_hosts_to_parent() {
         let store = Store::open_in_memory().unwrap();

@@ -16,6 +16,8 @@
  *   &edit[=name]     opens the host editor on start (default staging-api;
  *                    `&edit=new` opens it empty), because `#host-edit`
  *                    alone bounces back to the hosts page
+ *   &folder=Europe   selects that folder on the folders page (by name)
+ *   &identity=work-ed25519  selects that identity on the identities page
  *   &hostkey         an unknown-host-key prompt appears shortly after start
  *                    (`&hostkey=other`: the host is known under other key types)
  *   &authprompt      a keyboard-interactive question appears shortly after
@@ -41,9 +43,11 @@ import type {
   Host,
   HostKeyPromptMessage,
   HostKeyPromptRequest,
+  GeneratedIdentity,
   Identity,
   IdentityBinding,
   Preferences,
+  PublicKeyInfo,
   RecentHost,
   SessionInfo,
   SessionStatus,
@@ -64,6 +68,10 @@ export interface MockFlags {
   demo: boolean;
   /** The host name the editor opens on (`new` = an empty editor), or null. */
   edit: string | null;
+  /** The folder (by name) the folders page starts on, or null. */
+  folder: string | null;
+  /** The identity (by name) the identities page starts on, or null. */
+  identity: string | null;
   hostkey: boolean;
   /** The host-key prompt says the host is known under other key types. */
   hostkeyOtherTypes: boolean;
@@ -80,6 +88,8 @@ function readFlags(): MockFlags {
     error: params.has('error'),
     demo: params.has('demo'),
     edit: params.has('edit') ? params.get('edit') || 'staging-api' : null,
+    folder: params.get('folder') || null,
+    identity: params.get('identity') || null,
     hostkey: params.has('hostkey'),
     hostkeyOtherTypes: params.get('hostkey') === 'other',
     authprompt: params.has('authprompt')
@@ -355,6 +365,8 @@ interface MockState {
   identities: Identity[];
   /** identity id -> key file path (device-local). */
   bindings: Map<string, string>;
+  /** identity id -> the key a generated identity was made with. */
+  keyInfo: Map<string, PublicKeyInfo>;
   /** host id -> last connection time (ms). */
   recents: Map<string, number>;
   /** `${host id}:${kind}` of the secrets "in the credential store". */
@@ -384,6 +396,7 @@ function seed(flags: MockFlags): MockState {
       [ID.work, '/home/demo/.ssh/work_ed25519'],
       [ID.buildKey, '/home/demo/.ssh/build_ed25519'],
     ]),
+    keyInfo: new Map(),
     recents,
     // The password of staging-api is "stored on this device"; archive asks.
     secrets: new Set(flags.empty ? [] : [`${ID.staging}:password`]),
@@ -802,13 +815,16 @@ function typeInto(session: MockSession, bytes: number[]): void {
 let startupScheduled = false;
 
 function scheduleStartup(): void {
-  if (startupScheduled || !(flags.demo || flags.edit !== null)) return;
+  const acts =
+    flags.demo || flags.edit !== null || flags.folder !== null || flags.identity !== null;
+  if (startupScheduled || !acts) return;
   startupScheduled = true;
   // After the app has applied the layout it just received.
   setTimeout(() => {
     void (async () => {
       if (flags.demo) await connectRestoredPanes();
       if (flags.edit !== null) await openEditor(flags.edit);
+      await selectEntities();
     })();
   }, 0);
 }
@@ -861,6 +877,22 @@ async function connectRestoredPanes(): Promise<void> {
   await hosts.refreshRecents();
 }
 
+/** `?folder` and `?identity`: the folders and identities pages start on that entry. */
+async function selectEntities(): Promise<void> {
+  const [{ hosts }, { identities }] = await Promise.all([
+    import('../stores/hosts.svelte'),
+    import('../stores/identities.svelte'),
+  ]);
+  if (flags.folder !== null) {
+    const found = hosts.groups.find((group) => group.name === flags.folder);
+    if (found) hosts.folderSelection = found.id;
+  }
+  if (flags.identity !== null) {
+    const found = hosts.identities.find((identity) => identity.name === flags.identity);
+    if (found) identities.selectedId = found.id;
+  }
+}
+
 /** `?edit`: opens the host editor, as the "Edit" row action does. */
 async function openEditor(name: string): Promise<void> {
   const [{ hosts }, { route }] = await Promise.all([
@@ -908,6 +940,82 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * The refusals of `termru-core`'s `Host::validate`, in its words, so the
+ * editor's inline errors and the mapping of a backend message onto a field
+ * can be tried in the harness.
+ */
+function validateHostLikeBackend(host: Host): void {
+  if (host.name.trim().length === 0) commandError('name must not be empty');
+  if ([...host.name].length > 128) commandError('name must be at most 128 characters');
+  if (!/^[A-Za-z0-9._:-]+$/.test(host.address)) {
+    commandError(
+      "address contains invalid characters (allowed: letters, digits, '.', '-', '_', ':')",
+    );
+  }
+  if (host.address.startsWith('-') || host.address.endsWith('-')) {
+    commandError("address must not start or end with '-'");
+  }
+  if (host.port === 0) commandError('port must be between 1 and 65535');
+  if (!/^[A-Za-z0-9._@-]+$/.test(host.username)) {
+    commandError(
+      "username contains invalid characters (allowed: letters, digits, '.', '-', '_', '@')",
+    );
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(host.term)) {
+    commandError("term contains invalid characters (allowed: letters, digits, '-', '_', '.')");
+  }
+  if (host.keepalive_seconds > 3600) {
+    commandError('keepalive interval must be 0 (automatic) or at most 3600 seconds');
+  }
+}
+
+/** The folder rules of the store's `validate_parent`, in its words. */
+function validateGroupLikeBackend(groups: Group[], group: Group): void {
+  if (group.name.trim().length === 0) commandError('group name must not be empty');
+  if (group.parent_id === group.id) commandError('a group cannot be its own parent');
+  if (!group.parent_id) return;
+  const byId = new Map(groups.map((entry) => [entry.id, entry]));
+  let next: string | null = group.parent_id;
+  let depth = 1;
+  while (next && depth <= 8) {
+    const current = byId.get(next);
+    if (!current) return;
+    if (current.parent_id === group.id) commandError('group hierarchy contains a cycle');
+    next = current.parent_id;
+    if (!next) return;
+    depth += 1;
+  }
+  commandError('group nesting exceeds the maximum depth of 8');
+}
+
+const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/** A stable pseudo-random base64 string from a seed (fake key material). */
+function fakeBase64(seed: string, length: number): string {
+  let h = 2166136261;
+  for (const char of seed) h = Math.imul(h ^ char.charCodeAt(0), 16777619);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    h = Math.imul(h ^ (h >>> 15), 2246822519) + i;
+    out += BASE64[(h >>> 0) % BASE64.length];
+  }
+  return out;
+}
+
+/** What the bound key file of an identity says (fake, but stable). */
+function keyInfoFor(identity: Identity, keyPath: string): PublicKeyInfo {
+  const known = state.keyInfo.get(identity.id);
+  if (known) return known;
+  return {
+    public_key: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${fakeBase64(keyPath, 43)} ${identity.name}`,
+    fingerprint: identity.fingerprint ?? `SHA256:${fakeBase64(`fp:${keyPath}`, 43)}`,
+    algorithm: 'ssh-ed25519',
+    encrypted: false,
+    key_path: keyPath,
+  };
+}
+
 const handlers: Record<string, Handler> = {
   app_info: () => ({ name: 'termru-desktop', version: '0.2.0-mock' }),
 
@@ -927,6 +1035,7 @@ const handlers: Record<string, Handler> = {
       .sort((a, b) => b.last_used_at - a.last_used_at),
   host_save: (args) => {
     const host = { ...arg<Host>(args, 'host'), updated_at: now() };
+    validateHostLikeBackend(host);
     state.hosts = upsert(state.hosts, host);
     return host;
   },
@@ -947,14 +1056,19 @@ const handlers: Record<string, Handler> = {
   group_list: () => state.groups.filter((group) => !group.deleted),
   group_save: (args) => {
     const group = { ...arg<Group>(args, 'group'), updated_at: now() };
+    validateGroupLikeBackend(state.groups, group);
     state.groups = upsert(state.groups, group);
     return group;
   },
   group_delete: (args) => {
+    // Like the store: the hosts and the subfolders move up to the parent.
     const id = arg<string>(args, 'id');
-    state.groups = state.groups.filter((group) => group.id !== id);
+    const parent = state.groups.find((group) => group.id === id)?.parent_id ?? null;
+    state.groups = state.groups
+      .filter((group) => group.id !== id)
+      .map((group) => (group.parent_id === id ? { ...group, parent_id: parent } : group));
     state.hosts = state.hosts.map((host) =>
-      host.group_id === id ? { ...host, group_id: null } : host,
+      host.group_id === id ? { ...host, group_id: parent } : host,
     );
     return null;
   },
@@ -996,6 +1110,57 @@ const handlers: Record<string, Handler> = {
   identity_unbind: (args) => {
     state.bindings.delete(arg<string>(args, 'id'));
     return null;
+  },
+  identity_generate: (args): GeneratedIdentity => {
+    const name = arg<string>(args, 'name').trim();
+    if (name.length === 0) return commandError('identity name must not be empty');
+    const passphrase = (args.passphrase as string | null | undefined) || null;
+    if (passphrase !== null && [...passphrase].length < 5) {
+      return commandError(
+        'a passphrase needs at least 5 characters; leave it empty for a key without one',
+      );
+    }
+    const id = crypto.randomUUID();
+    const comment = (args.comment as string | null | undefined)?.trim() || null;
+    const keyPath = `/home/demo/.local/share/com.liwyd.termru/keys/id_ed25519-${id}`;
+    const fingerprint = `SHA256:${fakeBase64(id, 43)}`;
+    const publicKey = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${fakeBase64(`pub:${id}`, 43)} ${name}`;
+    const stamp = now();
+    const identity: Identity = {
+      id,
+      name,
+      comment,
+      fingerprint,
+      created_at: stamp,
+      updated_at: stamp,
+      deleted: false,
+    };
+    state.identities = [...state.identities, identity];
+    state.bindings.set(id, keyPath);
+    state.keyInfo.set(id, {
+      public_key: publicKey,
+      fingerprint,
+      algorithm: 'ssh-ed25519',
+      encrypted: passphrase !== null,
+      key_path: keyPath,
+    });
+    const remember = passphrase !== null && args.rememberPassphrase === true;
+    return {
+      identity,
+      key_path: keyPath,
+      public_key: publicKey,
+      fingerprint,
+      passphrase_remembered: remember,
+      passphrase_note: null,
+    };
+  },
+  identity_public_key: (args): PublicKeyInfo | null => {
+    const id = arg<string>(args, 'id');
+    const keyPath = state.bindings.get(id);
+    if (!keyPath) return null;
+    const identity = state.identities.find((entry) => entry.id === id);
+    if (!identity) return commandError(`no identity with id ${id}`);
+    return keyInfoFor(identity, keyPath);
   },
   identity_bindings: (): IdentityBinding[] =>
     [...state.bindings]
@@ -1196,6 +1361,8 @@ export async function currentWindow(): Promise<WindowHandle> {
     minimize: async () => {},
     toggleMaximize: async () => {},
     close: async () => {},
+    // A browser tab has no close request to hold back.
+    onCloseRequested: async () => () => {},
   };
 }
 
@@ -1213,6 +1380,8 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     error: false,
     demo: false,
     edit: null,
+    folder: null,
+    identity: null,
     hostkey: false,
     hostkeyOtherTypes: false,
     authprompt: null,

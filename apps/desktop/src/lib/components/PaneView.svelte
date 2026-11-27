@@ -1,16 +1,43 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { connectFlow } from '../stores/connect.svelte';
   import { hosts } from '../stores/hosts.svelte';
   import { route } from '../stores/route.svelte';
-  import StatusBadge from './StatusBadge.svelte';
+  import { terminalUi } from '../stores/terminal-ui.svelte';
+  import { focusIsFree } from '../terminal/focus';
+  import { inputLine, shellLabel, sizeLabel, statusTone } from '../terminal/session-view';
+  import SessionIcon from './SessionIcon.svelte';
   import Terminal from './Terminal.svelte';
+  import TerminalSearch from './TerminalSearch.svelte';
   import type { Pane } from '../stores/sessions.svelte';
 
-  let { pane, focused }: { pane: Pane; focused: boolean } = $props();
+  /**
+   * One pane of a tab (frames 2 and 3).
+   *
+   * Header: `host / shell / active` in mono, accent while the pane has the
+   * focus. Alone in its tab the header carries `ACTIVE PANE` and the grid;
+   * in a split it carries Expand and Close, and the grid moves to the
+   * footer (`INPUT READY · UTF-8 · LF` on the left). The focused pane has a
+   * 2px accent rule on top, the others a 2px rule of the border colour.
+   */
+  let {
+    pane,
+    focused,
+    single = false,
+    zoomed = false,
+  }: {
+    pane: Pane;
+    focused: boolean;
+    /** The only pane of its tab: no split controls, no footer. */
+    single?: boolean;
+    /** This pane is expanded over its siblings. */
+    zoomed?: boolean;
+  } = $props();
 
   /** What the user typed to find a host for an empty pane. */
   let query = $state('');
+  let filter = $state<HTMLInputElement | null>(null);
 
   /** Every host that matches the search (not only the first few). */
   const candidates = $derived.by(() => {
@@ -27,65 +54,62 @@
   function pick(host: (typeof candidates)[number]): void {
     void connectFlow.pick(pane, host);
   }
+
+  const path = $derived(
+    pane.host
+      ? `${pane.title} / ${shellLabel(pane)}${focused && !single ? ' / active' : ''}`
+      : 'empty pane',
+  );
+  const size = $derived(sizeLabel(pane.cols ?? 0, pane.rows ?? 0));
+  const footer = $derived(inputLine(pane));
+  const tone = $derived(statusTone(pane.status));
+
+  // A new empty pane waits for a host: the search takes the keyboard.
+  $effect(() => {
+    if (!focused || !filter) return;
+    untrack(() => {
+      if (focusIsFree()) filter?.focus();
+    });
+  });
 </script>
 
-<section class="pane" class:focused aria-label={pane.title}>
-  <header>
-    <button
-      type="button"
-      class="title"
-      title={pane.host ? pane.host.address : 'empty pane'}
-      onclick={() => sessions.focusPane(pane)}
-    >
-      {pane.title}
-    </button>
+<section
+  class="pane"
+  class:focused
+  class:single
+  aria-label={pane.title}
+  data-pane-id={pane.id}
+  onpointerdowncapture={() => sessions.focusPane(pane)}
+  onfocusin={() => {
+    if (!focused) sessions.focusPane(pane);
+  }}
+>
+  <header class="head">
+    <span class="path" title={pane.host ? `${pane.host.address}` : 'empty pane'}>{path}</span>
 
-    {#if pane.host}
-      <StatusBadge status={pane.status} />
-      <span class="spacer"></span>
-      <button
-        type="button"
-        class="icon"
-        title="Split to the right"
-        aria-label="Split to the right"
-        onclick={() => {
-          sessions.focusPane(pane);
-          sessions.splitActive('columns');
-        }}
-      >
-        ▥
-      </button>
-      <button
-        type="button"
-        class="icon"
-        title="Split below"
-        aria-label="Split below"
-        onclick={() => {
-          sessions.focusPane(pane);
-          sessions.splitActive('rows');
-        }}
-      >
-        ▤
-      </button>
-      <button
-        type="button"
-        class="icon"
-        title="Close the pane"
-        aria-label="Close the pane"
-        onclick={() => void sessions.closePane(pane)}
-      >
-        ×
-      </button>
+    {#if single && pane.host}
+      <span class="flag">Active pane</span>
+      {#if size}<span class="size">{size}</span>{/if}
     {:else}
-      <span class="spacer"></span>
+      {#if pane.host}
+        <button
+          type="button"
+          class="tool sx-press"
+          aria-label={zoomed ? 'Restore the panes' : 'Expand the pane'}
+          title={zoomed ? 'Restore the panes' : 'Expand the pane'}
+          onclick={() => sessions.toggleZoom(pane)}
+        >
+          <SessionIcon name={zoomed ? 'collapse' : 'expand'} />
+        </button>
+      {/if}
       <button
         type="button"
-        class="icon"
-        title="Close the pane"
+        class="tool sx-press"
         aria-label="Close the pane"
-        onclick={() => void sessions.closePane(pane)}
+        title="Close the pane"
+        onclick={() => sessions.requestClosePane(pane)}
       >
-        ×
+        <SessionIcon name="close" />
       </button>
     {/if}
   </header>
@@ -93,8 +117,11 @@
   <div class="body">
     {#if pane.host}
       {#key pane.id}
-        <Terminal {pane} />
+        <Terminal {pane} {focused} />
       {/key}
+      {#if terminalUi.isSearchOpen(pane.id)}
+        <TerminalSearch paneId={pane.id} />
+      {/if}
     {:else}
       <div class="empty">
         <p>No session in this pane.</p>
@@ -104,6 +131,7 @@
             class="filter"
             placeholder="Search hosts"
             aria-label="Search hosts for this pane"
+            bind:this={filter}
             bind:value={query}
             onkeydown={(event) => {
               if (event.key === 'Enter' && candidates[0]) {
@@ -116,7 +144,7 @@
             <ul>
               {#each candidates as host (host.id)}
                 <li>
-                  <button type="button" onclick={() => pick(host)}>
+                  <button type="button" class="sx-press" onclick={() => pick(host)}>
                     {host.name}
                     <span class="address">{host.username}@{host.address}</span>
                   </button>
@@ -128,73 +156,105 @@
           {/if}
         {:else}
           <p class="hint">No saved hosts yet.</p>
-          <button type="button" class="primary new" onclick={() => route.edit(null)}>
+          <button type="button" class="primary new sx-press" onclick={() => route.edit(null)}>
             New host
           </button>
         {/if}
       </div>
     {/if}
   </div>
+
+  {#if !single}
+    <footer class="foot {tone}">
+      <span class="state">{footer}</span>
+      {#if size}<span class="size">{size}</span>{/if}
+    </footer>
+  {/if}
 </section>
 
 <style>
   .pane {
+    --pane-pad-x: 24px;
     display: flex;
     flex-direction: column;
     height: 100%;
     min-width: 0;
     min-height: 0;
-    background: var(--termru-bg);
+    background: var(--termru-terminal);
+    border-top: var(--termru-pane-rule-w) solid var(--termru-border);
+  }
+
+  .pane.single {
+    --pane-pad-x: 28px;
   }
 
   .pane.focused {
-    outline: 1px solid var(--termru-accent);
-    outline-offset: -1px;
+    border-top-color: var(--termru-accent);
   }
 
-  header {
+  .head {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.15rem 0.3rem;
-    border-bottom: 1px solid var(--termru-border);
-    background: var(--termru-surface);
-    font-size: 0.75rem;
+    gap: var(--termru-space-3);
+    height: 36px;
+    flex: none;
+    padding: 0 calc(var(--pane-pad-x) - 8px) 0 var(--pane-pad-x);
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    color: var(--termru-muted);
   }
 
-  .title {
-    background: none;
-    border: none;
-    color: var(--termru-muted);
-    cursor: pointer;
-    font: inherit;
-    padding: 0;
-    max-width: 12rem;
+  .pane.single .head {
+    padding-right: var(--pane-pad-x);
+  }
+
+  .path {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .pane.focused .title {
-    color: var(--termru-fg);
+  .pane.focused:not(.single) .path,
+  .flag,
+  .pane.single .size {
+    color: var(--termru-accent);
   }
 
-  .spacer {
-    flex: 1;
+  .flag {
+    flex: none;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
-  .icon {
-    background: none;
+  .size {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tool {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: none;
+    border-radius: var(--termru-radius-button);
+    background: none;
     color: var(--termru-muted);
-    cursor: pointer;
-    font-size: 0.8rem;
-    line-height: 1;
-    padding: 0 0.2rem;
   }
 
-  .icon:hover {
-    color: var(--termru-fg);
+  @media (hover: hover) and (pointer: fine) {
+    .tool:hover {
+      background: color-mix(in srgb, var(--termru-fg) 7%, transparent);
+      color: var(--termru-fg);
+      border-color: transparent;
+    }
   }
 
   .body {
@@ -203,18 +263,53 @@
     position: relative;
   }
 
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--termru-space-4);
+    flex: none;
+    height: 30px;
+    padding: 0 var(--pane-pad-x);
+    background: var(--termru-subtle);
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    letter-spacing: 0.02em;
+    color: var(--termru-muted);
+  }
+
+  .foot.busy .state {
+    color: var(--termru-accent);
+  }
+
+  .foot.failed .state {
+    color: var(--termru-danger);
+  }
+
+  .foot.closed .state {
+    color: var(--termru-warning);
+  }
+
+  .foot .state {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .empty {
     height: 100%;
     min-height: 0;
-    padding: 0.75rem 0;
+    padding: var(--termru-space-4) 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
+    gap: var(--termru-space-3);
     color: var(--termru-muted);
-    font-size: 0.85rem;
+    font-size: var(--termru-text-control-size);
   }
 
   .empty p {
@@ -227,53 +322,40 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
-    width: min(22rem, 90%);
+    gap: var(--termru-space-1);
+    width: min(24rem, 90%);
     min-height: 0;
     overflow-y: auto;
   }
 
   .empty .filter {
-    width: min(22rem, 90%);
-    padding: 0.3rem 0.5rem;
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius);
+    width: min(24rem, 90%);
+    padding: 0 var(--termru-space-3);
+    border: var(--termru-border-w) solid var(--termru-border);
     background: var(--termru-surface);
     color: var(--termru-fg);
-    font: inherit;
   }
 
   .empty .new {
     width: auto;
     text-align: center;
-    background: var(--termru-accent);
-    border-color: var(--termru-accent);
-    color: var(--termru-on-accent);
   }
 
-  .empty button {
+  .empty li button {
     width: 100%;
+    min-height: 36px;
     text-align: left;
-    background: none;
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius);
-    color: var(--termru-fg);
-    cursor: pointer;
-    font: inherit;
-    padding: 0.3rem 0.5rem;
-  }
-
-  .empty button:hover {
-    border-color: var(--termru-accent);
+    background: var(--termru-surface);
   }
 
   .address {
     color: var(--termru-muted);
-    font-size: 0.72rem;
-    margin-left: 0.4rem;
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    margin-left: var(--termru-space-2);
   }
 
   .hint {
-    font-size: 0.78rem;
+    font-size: var(--termru-text-secondary-size);
   }
 </style>

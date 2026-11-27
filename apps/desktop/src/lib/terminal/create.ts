@@ -7,8 +7,11 @@
  */
 
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
+import { isMac } from '../keybindings';
 import { registerTerminal, webglCount, type TerminalHandle } from './registry';
 import { terminalTheme } from './theme';
 
@@ -30,6 +33,19 @@ export interface TerminalHooks {
   onData: (data: string) => void;
   /** True for an app shortcut: xterm must leave the key to the window. */
   isAppKey: (event: KeyboardEvent) => boolean;
+  /**
+   * Text that arrived from the clipboard (the keyboard, the paste event).
+   * Without it the terminal pastes at once.
+   */
+  onPaste?: (text: string) => void;
+  /** The find shortcut was pressed inside the terminal. */
+  onFind?: () => void;
+  /** The remote shell set the window title (OSC 0/2). */
+  onTitle?: (title: string) => void;
+  /** The grid changed size. */
+  onSize?: (cols: number, rows: number) => void;
+  /** A link in the output was activated (a click with Ctrl or Cmd). */
+  onLink?: (event: MouseEvent, uri: string) => void;
 }
 
 /** Chrome allows about 16 WebGL contexts; stay well below it. */
@@ -62,17 +78,22 @@ export function createTerminal(
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // The decorations of the matches need the search addon's own result event.
+  const search = new SearchAddon({ highlightLimit: 1000 });
+  term.loadAddon(search);
   term.open(element);
 
   const handle: TerminalHandle = {
     paneId,
     term,
     fit,
+    search,
     element,
     host,
     webgl: null,
     channel: null,
     generation: -1,
+    hoverLink: null,
     copyOnSelect: appearance.copyOnSelect,
     fontsReady: false,
     disposed: false,
@@ -81,6 +102,26 @@ export function createTerminal(
 
   term.onData((data) => {
     if (!handle.disposed) hooks.onData(data);
+  });
+
+  // Links in the output. The handler never navigates the webview: the
+  // caller opens the address in the system browser, or copies it.
+  term.loadAddon(
+    new WebLinksAddon((event, uri) => hooks.onLink?.(event, uri), {
+      hover: (_event, text) => {
+        handle.hoverLink = text;
+      },
+      leave: () => {
+        handle.hoverLink = null;
+      },
+    }),
+  );
+
+  term.onTitleChange((title) => {
+    if (!handle.disposed) hooks.onTitle?.(title);
+  });
+  term.onResize(({ cols, rows }) => {
+    if (!handle.disposed) hooks.onSize?.(cols, rows);
   });
 
   // The window handler runs the app shortcuts: xterm must not swallow them
@@ -94,24 +135,51 @@ export function createTerminal(
     void navigator.clipboard?.writeText(selection).catch(() => undefined);
   });
 
+  const paste = (text: string): void => {
+    if (hooks.onPaste) hooks.onPaste(text);
+    else term.paste(text);
+  };
+
   const onKeyDown = (event: KeyboardEvent): void => {
+    // Find: Cmd+F on macOS, Ctrl+Shift+F elsewhere (Ctrl+F is the shell's).
+    // Inside a terminal it wins over the app's own use of the chord.
+    const key = event.key.toLowerCase();
+    const findChord = isMac()
+      ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+    if (findChord && key === 'f' && hooks.onFind) {
+      event.preventDefault();
+      event.stopPropagation();
+      hooks.onFind();
+      return;
+    }
     if (!event.ctrlKey || !event.shiftKey) return;
-    if (event.key === 'C' || event.key === 'c') {
+    if (key === 'c') {
       const selection = term.getSelection();
       if (!selection) return;
       event.preventDefault();
       void navigator.clipboard?.writeText(selection).catch(() => undefined);
-    } else if (event.key === 'V' || event.key === 'v') {
+    } else if (key === 'v') {
       event.preventDefault();
       void navigator.clipboard
         ?.readText()
         .then((text) => {
-          if (text.length > 0) term.paste(text);
+          if (text.length > 0) paste(text);
         })
         .catch(() => undefined);
     }
   };
   element.addEventListener('keydown', onKeyDown);
+
+  // The browser's own paste (Cmd+V, the edit menu, a middle click) reaches
+  // xterm's textarea; taking it first sends it through the same gate.
+  const onPaste = (event: ClipboardEvent): void => {
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    event.preventDefault();
+    event.stopPropagation();
+    if (text.length > 0) paste(text);
+  };
+  element.addEventListener('paste', onPaste, true);
 
   handle.dispose = () => {
     if (handle.disposed) return;
@@ -121,6 +189,7 @@ export function createTerminal(
     handle.channel = null;
     setAccelerated(handle, false);
     element.removeEventListener('keydown', onKeyDown);
+    element.removeEventListener('paste', onPaste, true);
     try {
       term.dispose();
     } catch {

@@ -55,6 +55,17 @@ export interface Pane {
    * (which holds the old credentials) is replaced instead of retried.
    */
   freshConnect?: boolean;
+  /*
+   * The next four are set by the store for every pane it creates; they are
+   * optional so a hand-built pane (a test fixture) stays valid.
+   */
+  /** When the session last became ready (ms since the epoch), or null. */
+  connectedAt?: number | null;
+  /** The window title the remote shell set (OSC 0/2), cleaned up; or null. */
+  terminalTitle?: string | null;
+  /** The terminal grid, as the fit settled it (0 until measured). */
+  cols?: number;
+  rows?: number;
 }
 
 export interface Tab {
@@ -67,6 +78,27 @@ export interface Tab {
   activePaneId: string | null;
   /** The split tree: the layout of the panes. */
   root: TreeNode;
+  /** The pane shown alone (expanded), or null. Never persisted. */
+  zoomedPaneId?: string | null;
+}
+
+/** A tab or pane close that is waiting for the user to confirm it. */
+export interface CloseRequest {
+  kind: 'tab' | 'pane';
+  tabId: string;
+  /** The pane, for `kind: 'pane'`. */
+  paneId: string | null;
+  /** How many live sessions the close ends. */
+  live: number;
+}
+
+/** The longest window title kept (a shell can set anything). */
+const MAX_TITLE_LENGTH = 120;
+
+/** A remote window title made safe to show: no control characters, capped. */
+export function cleanTitle(title: string): string | null {
+  const cleaned = title.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+  return cleaned.length > 0 ? cleaned.slice(0, MAX_TITLE_LENGTH) : null;
 }
 
 /** How long we wait for an expected auto-reconnect before showing "dead". */
@@ -95,6 +127,8 @@ export class SessionStore {
   windowLabel = $state<string | null>(null);
   /** True once the saved layout was read (or there was none). */
   layoutLoaded = $state(false);
+  /** A close that waits for the user's answer (a live session is involved). */
+  closeRequest = $state.raw<CloseRequest | null>(null);
   #layoutTimer: ReturnType<typeof setTimeout> | undefined;
   /** The pending reconnect watchdog of every pane (one at a time). */
   #watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
@@ -146,6 +180,10 @@ export class SessionStore {
       restored: false,
       attachTo: null,
       rememberSecret,
+      connectedAt: null,
+      terminalTitle: null,
+      cols: 0,
+      rows: 0,
     };
   }
 
@@ -157,6 +195,7 @@ export class SessionStore {
       panes: [pane],
       activePaneId: pane.id,
       root: leafTree(pane.id),
+      zoomedPaneId: null,
     };
     this.tabs = [...this.tabs, tab];
     this.scheduleLayoutSave();
@@ -187,6 +226,10 @@ export class SessionStore {
       restored: false,
       attachTo: null,
       rememberSecret: false,
+      connectedAt: null,
+      terminalTitle: null,
+      cols: 0,
+      rows: 0,
     };
     // The duplicate gets its own tab: the original keeps its panes (and
     // their sessions).
@@ -196,6 +239,7 @@ export class SessionStore {
       panes: [clone],
       activePaneId: clone.id,
       root: leafTree(clone.id),
+      zoomedPaneId: null,
     };
     this.tabs = [...this.tabs, next];
     this.scheduleLayoutSave();
@@ -248,6 +292,8 @@ export class SessionStore {
     tab.root = root;
     tab.panes = [...tab.panes, created];
     tab.activePaneId = created.id;
+    // A new pane is for looking at next to the others.
+    tab.zoomedPaneId = null;
     this.scheduleLayoutSave();
     return created;
   }
@@ -279,7 +325,35 @@ export class SessionStore {
     const tab = this.tabOfPane(pane.id);
     if (!tab) return;
     tab.activePaneId = pane.id;
+    if (tab.zoomedPaneId) tab.zoomedPaneId = pane.id;
     this.activeId = tab.id;
+  }
+
+  /**
+   * Shows a pane alone in its tab (expand), or brings the other panes back
+   * (restore). A tab with a single pane has nothing to expand.
+   */
+  toggleZoom(pane: Pane): void {
+    const tab = this.#storedTab(pane.id);
+    if (!tab || tab.panes.length < 2) return;
+    tab.zoomedPaneId = tab.zoomedPaneId === pane.id ? null : pane.id;
+    tab.activePaneId = pane.id;
+    this.activeId = tab.id;
+  }
+
+  /** Records the grid a terminal settled on (the pane header shows it). */
+  setPaneSize(paneId: string, cols: number, rows: number): void {
+    const pane = this.paneById(paneId);
+    if (!pane || (pane.cols === cols && pane.rows === rows)) return;
+    pane.cols = cols;
+    pane.rows = rows;
+  }
+
+  /** Records the title the remote shell set; an empty one clears it. */
+  setPaneTitle(paneId: string, title: string): void {
+    const pane = this.paneById(paneId);
+    if (!pane) return;
+    pane.terminalTitle = cleanTitle(title);
   }
 
   /** The tab that holds a pane, as the store holds it. */
@@ -294,6 +368,7 @@ export class SessionStore {
     const index = tab.panes.findIndex((pane) => pane.id === tab.activePaneId);
     const next = (index + direction + tab.panes.length) % tab.panes.length;
     tab.activePaneId = tab.panes[next].id;
+    if (tab.zoomedPaneId) tab.zoomedPaneId = tab.activePaneId;
   }
 
   /** Adjusts the size of a split. */
@@ -339,7 +414,67 @@ export class SessionStore {
     tab.root = root;
     tab.panes = panes;
     tab.activePaneId = activePaneId;
+    if (tab.zoomedPaneId === pane.id || panes.length < 2) tab.zoomedPaneId = null;
     this.scheduleLayoutSave();
+  }
+
+  /** True while a pane has (or is starting) a session of its own. */
+  isLive(pane: Pane): boolean {
+    if (!pane.host) return false;
+    const state = pane.status.state;
+    return (
+      state === 'ready' ||
+      state === 'connecting' ||
+      state === 'authenticating' ||
+      state === 'reconnecting'
+    );
+  }
+
+  /**
+   * Closes a tab, after asking when it holds a live session: the close
+   * button, Close session and the shortcut all come through here. A tab
+   * without a live session (empty, failed, restored) closes at once.
+   */
+  requestClose(tab: Tab): void {
+    const stored = this.tabs.find((entry) => entry.id === tab.id) ?? tab;
+    const live = stored.panes.filter((pane) => this.isLive(pane)).length;
+    if (live === 0) {
+      void this.close(stored);
+      return;
+    }
+    this.closeRequest = { kind: 'tab', tabId: stored.id, paneId: null, live };
+  }
+
+  /** Closes one pane, after asking when its session is live. */
+  requestClosePane(pane: Pane): void {
+    const tab = this.#storedTab(pane.id);
+    const stored = tab?.panes.find((entry) => entry.id === pane.id);
+    if (!tab || !stored) return;
+    if (!this.isLive(stored)) {
+      void this.closePane(stored);
+      return;
+    }
+    this.closeRequest = { kind: 'pane', tabId: tab.id, paneId: stored.id, live: 1 };
+  }
+
+  /** The user confirmed the pending close. */
+  async confirmClose(): Promise<void> {
+    const request = this.closeRequest;
+    this.closeRequest = null;
+    if (!request) return;
+    const tab = this.tabs.find((entry) => entry.id === request.tabId);
+    if (!tab) return;
+    if (request.kind === 'tab') {
+      await this.close(tab);
+      return;
+    }
+    const pane = tab.panes.find((entry) => entry.id === request.paneId);
+    if (pane) await this.closePane(pane);
+  }
+
+  /** The user backed out of the pending close. */
+  cancelClose(): void {
+    this.closeRequest = null;
   }
 
   async close(tab: Tab): Promise<void> {
@@ -516,6 +651,7 @@ export class SessionStore {
         panes,
         activePaneId,
         root,
+        zoomedPaneId: null,
       });
     }
     if (restored.length > 0) {
@@ -543,6 +679,7 @@ export class SessionStore {
       panes: [pane],
       activePaneId: pane.id,
       root: leafTree(pane.id),
+      zoomedPaneId: null,
     };
     this.tabs = [...this.tabs, tab];
     this.activeId = tab.id;
@@ -598,6 +735,9 @@ export class SessionStore {
     stored.panes = remaining;
     if (stored.activePaneId && movedIds.has(stored.activePaneId)) {
       stored.activePaneId = collectPanes(root)[0] ?? null;
+    }
+    if ((stored.zoomedPaneId && movedIds.has(stored.zoomedPaneId)) || remaining.length < 2) {
+      stored.zoomedPaneId = null;
     }
     this.scheduleLayoutSave();
   }
@@ -656,6 +796,7 @@ export class SessionStore {
     switch (status.state) {
       case 'ready':
         target.hadReady = true;
+        target.connectedAt = Date.now();
         target.dead = false;
         target.awaitingReconnect = false;
         target.lastFailure = null;

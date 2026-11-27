@@ -21,6 +21,26 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Try keyboard-interactive against a real PAM/2FA server (the tests use an in-process server; the private `sshd` of the tests runs without PAM).
 - [ ] Not supported yet: GSSAPI, FIDO security keys (`sk-*`), SSH host certificates, the server-initiated password change.
 
+### Sessions page (Phase 4a, frames 2 and 3)
+- [x] Tab strip, toolbar, pane header/footer, split hint, 2px focus rule, draggable divider, expand/restore pane.
+- [x] Terminal context menu, find in terminal, multi-line paste confirmation, close confirmation for a live session.
+- [x] One resize owner per pane (fit on `requestAnimationFrame`, debounced backend resize).
+- [ ] Open terminal links in the system browser: needs the Tauri opener plugin (Rust dependency, `opener:allow-open-url` capability, `@tauri-apps/plugin-opener`). Until then a Ctrl/Cmd+click copies the address.
+- [ ] "Don't ask again" for multi-line paste is per session only; a stored preference needs a new field in `Preferences` (Rust DTO and sync).
+- [ ] The pane header shows the title the remote shell sets (OSC 0/2) or `shell`; the frame's `bash · /srv/atlas` needs the remote shell name and working directory (OSC 7 or a backend probe).
+- [ ] Look at the page on a real desktop session (WebKitGTK, WebView2, WKWebView): menus, focus rings, divider drag and the find bar have only been checked in headless Chrome.
+
+### Editor, folders and identities pages (Phase 4b, frames 4 and 5)
+- [x] Host editor page: numbered sections, rail (unsaved indicator, local credential with Forget, connection preview), Cancel / Save host / Save & connect, inline validation with aria wiring, unsaved-changes guard on a page change and on the window closing.
+- [x] Folders page: tree with counts, detail list with Move, edit rail, cycle guard in the UI and in the store (Rust tests), delete confirmation that says what moves.
+- [x] Identities page and `identity_generate` / `identity_public_key` (ed25519, 0600, no overwrite, optional passphrase; Rust tests, including `ssh-keygen -y` reading the output).
+- [ ] The Hosts page and the other pages still sit on the grey canvas while frames 1, 4 and 5 are white; the three pages of this phase are white. Decide on one background in the shell.
+- [ ] "Choose hosts" is a searchable list of up to 50 hosts, not a multi-select; moving several hosts at once is still one at a time.
+- [ ] Generated keys are ed25519 only; RSA/ECDSA generation, importing a key into the app's folder and deleting a generated key's file with its identity are not offered (deleting the identity leaves the file).
+- [ ] The window-close guard (`onCloseRequested`) is only exercised against a fake window in tests; try it on a real desktop session (WebKitGTK, WebView2, WKWebView).
+- [ ] Phase 5 will add the Jump host, Forwards and Advanced sections to the editor; `04 / ADVANCED` already exists for them.
+- [ ] A password typed in the editor is sent to the backend over IPC as a plain string and is not zeroized on the frontend side (as in the connect dialog).
+
 ### Dependency maintenance
 - [ ] Evaluate migrating `chrono` (RUSTSEC-2026-0543, unmaintained, ignored in `deny.toml`) to `jiff` or `time` before 2027-03-01; keep the stored epoch-ms / RFC 3339 wire formats and the `tokio-postgres` mapping working (see `docs/security/dependency-review.md`).
 

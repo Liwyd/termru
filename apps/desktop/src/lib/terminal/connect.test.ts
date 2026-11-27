@@ -27,6 +27,8 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
 vi.mock('@xterm/xterm', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-fit', () => import('../test-support/xterm-mock'));
 vi.mock('@xterm/addon-webgl', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-search', () => import('../test-support/xterm-mock'));
+vi.mock('@xterm/addon-web-links', () => import('../test-support/xterm-mock'));
 
 function host(name = 'web-1', auth: Host['auth'] = { type: 'password' }): Host {
   const now = new Date().toISOString();

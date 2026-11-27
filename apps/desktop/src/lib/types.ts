@@ -38,6 +38,31 @@ export interface Identity {
   deleted: boolean;
 }
 
+/** The public half of the key an identity is bound to (`identity_public_key`). */
+export interface PublicKeyInfo {
+  /** One OpenSSH line: `ssh-ed25519 AAAA… comment`. */
+  public_key: string;
+  /** `SHA256:…`, as `ssh-keygen -l` prints it. */
+  fingerprint: string;
+  /** `ssh-ed25519`, `ssh-rsa`, … */
+  algorithm: string;
+  /** A passphrase protects the private key. */
+  encrypted: boolean;
+  key_path: string;
+}
+
+/** What `identity_generate` made: the identity, where its key is and the result. */
+export interface GeneratedIdentity {
+  identity: Identity;
+  key_path: string;
+  public_key: string;
+  fingerprint: string;
+  /** The passphrase is now in the credential store. */
+  passphrase_remembered: boolean;
+  /** Why it was not, when the user asked for that. */
+  passphrase_note: string | null;
+}
+
 /** A folder (the group a host can live in). */
 export interface Group {
   id: string;

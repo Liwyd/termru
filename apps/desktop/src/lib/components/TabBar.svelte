@@ -1,16 +1,22 @@
 <script lang="ts">
   import { autofocus } from '../actions/autofocus';
   import { sessions } from '../stores/sessions.svelte';
-  import StatusBadge from './StatusBadge.svelte';
+  import { statusLabel, statusTone } from '../terminal/session-view';
+  import SessionIcon from './SessionIcon.svelte';
   import type { Tab } from '../stores/sessions.svelte';
 
+  /**
+   * One tab of the strip: the dot, the name, the status word and the close
+   * button. Duplicate and Detach live in the toolbar, where they act on the
+   * session you are looking at.
+   */
   let { tab, active }: { tab: Tab; active: boolean } = $props();
 
   /** The pane that carries the tab: its status is the status of the tab. */
   const pane = $derived(sessions.activePaneOf(tab));
 
-  /** Duplicating or moving needs a connected session to work from. */
-  const canClone = $derived(pane?.status.state === 'ready' && pane.sessionId !== null);
+  const tone = $derived(pane ? statusTone(pane.status) : 'closed');
+  const label = $derived(pane ? statusLabel(pane) : '');
 
   let renaming = $state(false);
   let draftTitle = $state('');
@@ -109,106 +115,166 @@
     <button
       type="button"
       class="label"
+      title="Double-click or press F2 to rename"
       onclick={() => sessions.setActive(tab.id)}
       ondblclick={startRename}
     >
-      {tab.title}
+      <span class="dot {tone}" aria-hidden="true"></span>
+      <span class="name">{tab.title}</span>
+      {#if tab.panes.length > 1}
+        <span class="panes">/ {tab.panes.length} panes</span>
+      {/if}
+      {#if pane}
+        <span class="state">{label}</span>
+      {/if}
     </button>
   {/if}
 
-  {#if pane}
-    <StatusBadge status={pane.status} />
-  {/if}
-
   <button
     type="button"
-    class="close"
-    aria-label={`Duplicate ${tab.title}`}
-    title="Duplicate session"
-    disabled={!canClone}
-    onclick={() => sessions.duplicate(tab)}
-  >
-    ⧉
-  </button>
-
-  <button
-    type="button"
-    class="close"
-    aria-label={`Move ${tab.title} to a new window`}
-    title="Move to a new window"
-    disabled={!canClone}
-    onclick={() => void sessions.moveToNewWindow(tab)}
-  >
-    ↗
-  </button>
-
-  <button
-    type="button"
-    class="close"
+    class="close sx-press"
     aria-label={`Close ${tab.title}`}
-    onclick={() => void sessions.close(tab)}
+    title="Close session"
+    onclick={() => sessions.requestClose(tab)}
   >
-    ×
+    <SessionIcon name="close" size={12} />
   </button>
 </div>
 
 <style>
   .tab {
-    display: inline-flex;
+    position: relative;
+    display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.4rem 0.3rem 0.6rem;
-    border: 1px solid transparent;
-    border-bottom: none;
-    border-radius: var(--termru-radius) var(--termru-radius) 0 0;
+    gap: var(--termru-space-1);
+    min-width: 0;
+    max-width: 300px;
+    height: 100%;
+    /* The 2px rule sits in the tab; it only shows on the active one. */
+    padding: 0 var(--termru-space-3) 0 var(--termru-space-4);
+    border-top: var(--termru-pane-rule-w) solid transparent;
     color: var(--termru-muted);
-    font-size: 0.82rem;
-    max-width: 16rem;
+    /* No transition: switching tabs is often a keyboard action. */
+  }
+
+  /* The active tab is the toolbar's own surface: it opens into it. */
+  .tab.active {
+    margin-bottom: -1px;
+    padding-bottom: 1px;
+    border-top-color: var(--termru-accent);
+    background: var(--termru-surface);
+    color: var(--termru-accent);
   }
 
   .tab.drop-target {
-    border-color: var(--termru-accent);
+    box-shadow: inset 2px 0 0 var(--termru-accent);
   }
 
-  .tab.active {
-    background: var(--termru-bg);
-    border-color: var(--termru-border);
-    color: var(--termru-fg);
+  @media (hover: hover) and (pointer: fine) {
+    .tab:not(.active):hover {
+      background: color-mix(in srgb, var(--termru-surface) 60%, transparent);
+      color: var(--termru-fg);
+    }
   }
 
   .label {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
     padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font-size: var(--termru-text-body-size);
+    line-height: var(--termru-text-body-lh);
+    font-weight: 450;
+    text-align: left;
+  }
+
+  .tab.active .label {
+    font-weight: var(--termru-text-control-weight);
+  }
+
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .panes {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .state {
+    flex: none;
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    font-weight: 450;
+    white-space: nowrap;
+  }
+
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--termru-faint);
+  }
+
+  .tab.active .dot.ready {
+    background: var(--termru-accent);
+  }
+
+  .dot.busy {
+    background: transparent;
+    border: 1.5px solid currentColor;
+  }
+
+  .dot.failed {
+    background: var(--termru-danger);
+  }
+
+  .dot.closed {
+    background: transparent;
+    border: 1.5px solid var(--termru-faint);
+  }
+
   .rename {
-    width: 8rem;
-    font: inherit;
-    padding: 0.1rem 0.25rem;
-    border-radius: var(--termru-radius);
-    border: 1px solid var(--termru-accent);
-    background: var(--termru-bg);
+    width: 10rem;
+    min-height: 32px;
+    padding: 0 var(--termru-space-2);
+    border: var(--termru-border-w) solid var(--termru-accent);
+    border-radius: var(--termru-radius-input);
+    background: var(--termru-surface);
     color: var(--termru-fg);
+    font: inherit;
+    font-size: var(--termru-text-control-size);
   }
 
   .close {
-    background: none;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: 0.95rem;
-    line-height: 1;
-    padding: 0 0.2rem;
+    border-radius: var(--termru-radius-button);
+    background: none;
+    color: var(--termru-faint);
   }
 
-  .close:hover {
-    color: var(--termru-danger);
+  @media (hover: hover) and (pointer: fine) {
+    .close:hover {
+      background: color-mix(in srgb, var(--termru-fg) 7%, transparent);
+      color: var(--termru-fg);
+    }
   }
 </style>

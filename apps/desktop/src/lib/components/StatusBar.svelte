@@ -5,6 +5,8 @@
   import { prefs } from '../stores/prefs.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
+  import { unsaved } from '../stores/unsaved.svelte';
+  import { sessionsContext } from '../terminal/session-view';
 
   // The network state is read from the window's own events: `navigator.onLine`
   // alone is not reactive.
@@ -20,6 +22,15 @@
       window.removeEventListener('online', apply);
       window.removeEventListener('offline', apply);
     };
+  });
+
+  // "Connected 12 min ago" needs a clock; it only ticks on the Sessions page.
+  let now = $state(Date.now());
+  $effect(() => {
+    if (route.route !== 'sessions') return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 30_000);
+    return () => clearInterval(timer);
   });
 
   /** The real state of the sync, not a constant. */
@@ -46,13 +57,8 @@
           running === 0 ? 'no sessions' : `${running} session${running === 1 ? '' : 's'} running`;
         return `${hostLine} · ${sessionLine}`;
       }
-      case 'sessions': {
-        const tab = sessions.active;
-        if (!tab) return 'No open sessions';
-        const panes = tab.panes.length;
-        const paneLine = panes > 1 ? ` · ${panes} panes` : '';
-        return `${tab.title}${paneLine}`;
-      }
+      case 'sessions':
+        return sessionsContext(sessions.tabs, sessions.active, now, hosts.identities);
       case 'folders':
         return 'One folder per host';
       case 'identities':
@@ -64,6 +70,8 @@
       case 'preferences':
         return 'Preferences apply to this device';
       case 'host-edit':
+        // The editor says honestly that nothing is applied until it is saved (frame 4).
+        if (unsaved.dirty) return 'Unsaved changes · No connection settings have been applied';
         return route.editHost ? `Editing ${route.editHost.name}` : 'New host';
     }
   });
