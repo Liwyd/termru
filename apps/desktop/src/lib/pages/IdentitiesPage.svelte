@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import { appear } from '../actions/appear';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -9,6 +10,7 @@
   import { identities } from '../stores/identities.svelte';
   import { route } from '../stores/route.svelte';
   import { notify } from '../notify.svelte';
+  import { afterFirstPaint } from '../settled.svelte';
   import { MAX_NAME_LEN } from '../validation';
   import type { Host, Identity } from '../types';
 
@@ -17,6 +19,8 @@
 
   /** The rail edits the selected identity, or makes a new one. */
   let mode = $state<'edit' | 'create'>('edit');
+  /** The form of a rail that opens while the page is open moves in; one there at the start does not. */
+  const page = afterFirstPaint();
   let source = $state<'generate' | 'existing'>('generate');
   let name = $state('');
   let comment = $state('');
@@ -481,7 +485,11 @@
         <p class="wp-label accent">{mode === 'create' ? 'NEW IDENTITY' : 'EDIT IDENTITY'}</p>
 
         {#if mode === 'create' || identity}
-          <form onsubmit={(event) => void submit(event)} novalidate>
+          <form
+            onsubmit={(event) => void submit(event)}
+            novalidate
+            use:appear={{ enabled: page.value }}
+          >
             {#if mode === 'create'}
               <div class="choices" role="radiogroup" aria-label="Where the key comes from">
                 <label class="choice" class:selected={source === 'generate'}>

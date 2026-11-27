@@ -399,7 +399,7 @@ describe('the adapter (Toasts.svelte)', () => {
 
   it('has one labelled region that is always in the page', () => {
     render();
-    expect(target.querySelector('section[aria-label="Notifications"]')).not.toBeNull();
+    expect(target.querySelector('section[aria-label="Notices"]')).not.toBeNull();
     expect(items()).toHaveLength(0);
   });
 

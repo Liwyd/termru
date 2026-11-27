@@ -29,6 +29,14 @@
  *                    with two conflicts to resolve, `error`: the last cycle failed)
  *   &authprompt      a keyboard-interactive question appears shortly after
  *                    start (`&authprompt=passphrase`: a key passphrase)
+ *   &many[=N]        N more hosts (default 10 000, at most 100 000), in a few
+ *                    folders, with recent connections on the first few: the
+ *                    scroll, filter and window of a very large library
+ *   &long            the worst realistic data on top of the fixtures: names
+ *                    at the 128 character limit, a folder five levels deep with
+ *                    long names, long identity names and comments, a 2 000
+ *                    character comment, twelve tags, a one-letter host, a
+ *                    non-Latin name, two hosts with the same name
  *
  * Every command of `ipc.ts` is implemented here; `dev-harness.test.ts`
  * fails when one is missing. Return shapes follow `types.ts` and the Rust
@@ -91,6 +99,10 @@ export interface MockFlags {
   /** An authentication question appears on start (`kbd` or `passphrase`). */
   authprompt: 'kbd' | 'passphrase' | null;
   theme: ThemePreference | null;
+  /** How many generated hosts to add (0 = none). */
+  many: number;
+  /** The worst-case fixtures are added. */
+  long: boolean;
 }
 
 function readFlags(): MockFlags {
@@ -120,6 +132,10 @@ function readFlags(): MockFlags {
         : 'kbd'
       : null,
     theme: theme === 'dark' || theme === 'light' || theme === 'system' ? theme : null,
+    many: params.has('many')
+      ? Math.min(100_000, Math.max(1, Number.parseInt(params.get('many') || '', 10) || 10_000))
+      : 0,
+    long: params.has('long'),
   };
 }
 
@@ -325,12 +341,20 @@ function seedSync(flags: MockFlags): SyncStatus {
   const conflicts = flags.sync === 'conflicts' ? 2 : 0;
   return {
     ...out,
-    settings: {
-      server_url: 'https://sync.atlas.example',
-      email: 'ops@atlas.example',
-      device_name: 'Linux workstation',
-      device_id: out.settings.device_id,
-    },
+    settings: flags.long
+      ? {
+          server_url:
+            'https://sync.platform.northwind-industries-holdings.example.com/termru/v1/workspaces/platform-infrastructure',
+          email: 'bartholomew.fitzgerald@northwind-industries-holdings.example.com',
+          device_name: 'Aleksandra’s ThinkPad X1 Carbon Gen 11 (platform infrastructure team)',
+          device_id: out.settings.device_id,
+        }
+      : {
+          server_url: 'https://sync.atlas.example',
+          email: 'ops@atlas.example',
+          device_name: 'Linux workstation',
+          device_id: out.settings.device_id,
+        },
     signed_in: true,
     pending: flags.sync === 'conflicts' ? 3 : 0,
     conflicts,
@@ -427,6 +451,157 @@ function demoLayout(): WorkspaceDoc {
 }
 
 // ---------------------------------------------------------------------------
+// Stress fixtures (`&long`, `&many`)
+
+interface LongFixtures {
+  hosts: Host[];
+  groups: Group[];
+  identities: Identity[];
+  tags: Tag[];
+  recents: [string, number][];
+}
+
+/**
+ * The worst data a real library produces, within the limits the backend
+ * accepts (`validation.ts`: name 128, address 253, username 128, comment
+ * 2 000, 32 tags a host, folders nested at most 8 deep).
+ */
+function longFixtures(): LongFixtures {
+  const n = (offset: number) => fixtureId(0x1000 + offset);
+  const groups = [
+    fixtureGroup(10, n(1), 'Northwind Industries Holdings', null),
+    fixtureGroup(11, n(2), 'Platform Infrastructure and Site Reliability', n(1)),
+    fixtureGroup(12, n(3), 'Production (Frankfurt, eu-central-1)', n(2)),
+    fixtureGroup(13, n(4), 'Customer-facing services — blue/green canary', n(3)),
+    fixtureGroup(14, n(5), 'Legacy billing reconciliation (decommission pending Q3)', n(4)),
+    fixtureGroup(15, n(6), '東京リージョン', null),
+  ];
+  const identities = [
+    fixtureIdentity(
+      n(20),
+      'northwind-platform-infrastructure-deploy-ed25519-2026',
+      'Deploy key for the platform infrastructure team’s production bastion hosts (rotated every quarter, see runbook 17)',
+      'SHA256:Zk3qN0yQm1v8cTt2uRk5GxJ7aWb4HsD9eLp6OiXnYfE',
+    ),
+    fixtureIdentity(n(21), 'k', '', 'SHA256:b7Qd2Fh9UoPz4LmEw1KsVx8TnYc3RjA6GiHt5MaOe0u'),
+  ];
+  const now = new Date().toISOString();
+  const tags: Tag[] = [
+    'design',
+    'frontend',
+    'q3',
+    'urgent',
+    'needs-review',
+    'customer-feedback-from-enterprise-onboarding',
+    'eu',
+    'pci',
+    'blue',
+    'green',
+    'canary',
+    'on-call',
+  ].map((name, index) => ({
+    id: n(100 + index),
+    name,
+    color: null,
+    created_at: now,
+    updated_at: now,
+    deleted: false,
+  }));
+  const longName =
+    'customer-facing-reporting-service-eu-central-1-blue-green-canary-deployment-primary';
+  const limitName =
+    `${'analytics-warehouse-replica-'.repeat(5)}primary-eu-central-1-blue-green`.slice(0, 128);
+  const hosts = [
+    fixtureHost(100, {
+      id: n(40),
+      name: longName,
+      address:
+        'ip-10-128-44-203.eu-central-1.compute.internal.northwind-industries-holdings.example.com',
+      port: 2222,
+      username: 'svc-deploy-automation',
+      auth: { type: 'private_key', identity_id: n(20) },
+      group_id: n(5),
+      favorite: true,
+      tags: tags.map((tag) => tag.id),
+      description: 'Primary reporting service for the customer-facing dashboards. '
+        .repeat(31)
+        .slice(0, 2000),
+    }),
+    fixtureHost(101, {
+      id: n(41),
+      name: limitName,
+      address:
+        'a-very-long-hostname-with-many-labels.region-one.zone-b.platform.internal.northwind-industries-holdings.example.test',
+      port: 22,
+      username: 'svc-platform-infrastructure-deploy-automation-readonly-metrics-exporter',
+      auth: { type: 'agent' },
+      group_id: n(4),
+    }),
+    fixtureHost(102, {
+      id: n(42),
+      name: 'x',
+      address: 'a.test',
+      port: 22,
+      username: 'u',
+      auth: { type: 'password' },
+      group_id: null,
+    }),
+    fixtureHost(103, {
+      id: n(43),
+      name: 'Åsa’s staging 東京',
+      address: '2001:db8:85a3:8d3:1319:8a2e:370:7348',
+      port: 65535,
+      username: 'ops',
+      auth: { type: 'private_key', identity_id: n(21) },
+      group_id: n(6),
+    }),
+    // Two hosts with the same name: the address is what tells them apart.
+    fixtureHost(104, {
+      id: n(44),
+      name: 'archive',
+      address: '203.0.113.31',
+      port: 22,
+      username: 'ops',
+      auth: { type: 'password' },
+      group_id: null,
+    }),
+  ];
+  const recents: [string, number][] = [
+    [n(40), todayAt(8, 2)],
+    [n(41), yesterday()],
+    [n(43), eighteenthOfOctober()],
+  ];
+  return { hosts, groups, identities, tags, recents };
+}
+
+/** `count` generated hosts, in the naming pattern of a real fleet. */
+function bulkHosts(count: number): { hosts: Host[]; recents: [string, number][] } {
+  const regions = ['eu', 'us', 'ap'];
+  const roles = ['web', 'api', 'db', 'cache', 'worker', 'batch'];
+  const folders = [ID.production, ID.europe, ID.edge, ID.sandbox, null];
+  const hosts: Host[] = [];
+  const recents: [string, number][] = [];
+  const base = Date.now() - 3 * 24 * 3_600_000;
+  for (let i = 0; i < count; i++) {
+    const id = fixtureId(0x100000 + i);
+    hosts.push(
+      fixtureHost(1000 + i, {
+        id,
+        name: `${roles[i % roles.length]}-${regions[i % regions.length]}-${String(i).padStart(5, '0')}`,
+        address: `10.${(i >> 8) & 255}.${i & 255}.${(i * 7) % 250}`,
+        port: i % 17 === 0 ? 2222 : 22,
+        username: i % 5 === 0 ? 'ops' : 'deploy',
+        auth: i % 3 === 0 ? { type: 'password' } : { type: 'agent' },
+        group_id: folders[i % folders.length],
+        favorite: i % 97 === 0,
+      }),
+    );
+    if (i < 40) recents.push([id, base + i * 3_600_000]);
+  }
+  return { hosts, recents };
+}
+
+// ---------------------------------------------------------------------------
 // State
 
 interface MockState {
@@ -452,17 +627,33 @@ function seed(flags: MockFlags): MockState {
   const prefs = defaultPreferences();
   if (flags.theme) prefs.theme = flags.theme;
   const hosts = flags.empty ? [] : fixtureHosts();
+  const groups = fixtureGroups();
+  const identities = fixtureIdentities();
+  const tags: Tag[] = [];
   const recents = new Map<string, number>();
   if (!flags.empty) {
     recents.set(ID.staging, todayAt(9, 18));
     recents.set(ID.build, yesterday());
     recents.set(ID.archive, eighteenthOfOctober());
+    if (flags.long) {
+      const extra = longFixtures();
+      hosts.push(...extra.hosts);
+      groups.push(...extra.groups);
+      identities.push(...extra.identities);
+      tags.push(...extra.tags);
+      for (const [id, at] of extra.recents) recents.set(id, at);
+    }
+    if (flags.many > 0) {
+      const bulk = bulkHosts(flags.many);
+      hosts.push(...bulk.hosts);
+      for (const [id, at] of bulk.recents) recents.set(id, at);
+    }
   }
   return {
     hosts,
-    groups: fixtureGroups(),
-    tags: [],
-    identities: fixtureIdentities(),
+    groups,
+    tags,
+    identities,
     bindings: new Map([
       [ID.work, '/home/demo/.ssh/work_ed25519'],
       [ID.buildKey, '/home/demo/.ssh/build_ed25519'],
@@ -1500,6 +1691,8 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     sync: null,
     authprompt: null,
     theme: null,
+    many: 0,
+    long: false,
     ...next,
   };
   state = seed(flags);

@@ -126,7 +126,7 @@ describe('HostTable rows', () => {
     expect(target.textContent).toContain('Unfiled');
     expect(target.textContent).toContain('Identity · work-ed25519');
     expect(target.textContent).toContain('18 Oct');
-    expect(target.textContent).toContain('LAST SESSION');
+    expect(target.textContent).toContain('Last session');
   });
 
   it('shows the folder path of a filed host', () => {
@@ -159,6 +159,45 @@ describe('HostTable rows', () => {
     target = rendered.target;
     expect(target.textContent).toContain('Connected');
     expect(target.textContent).toContain('18 Oct');
+  });
+
+  it('shows the last two folders of a deep path, and the whole path as the tooltip', () => {
+    const stamp = new Date().toISOString();
+    const folder = (id: string, name: string, parent: string | null) => ({
+      id,
+      name,
+      parent_id: parent,
+      sort_order: 0,
+      created_at: stamp,
+      updated_at: stamp,
+      deleted: false,
+    });
+    hosts.groups = [
+      folder('g1', 'Northwind Industries Holdings', null),
+      folder('g2', 'Platform Infrastructure', 'g1'),
+      folder('g3', 'Production (Frankfurt)', 'g2'),
+      folder('g4', 'Legacy billing reconciliation', 'g3'),
+    ];
+    const web = host('web', { group_id: 'g4' });
+    const rendered = render([web]);
+    target = rendered.target;
+    const cell = target.querySelector('.folder-cell') as HTMLElement;
+    expect(cell.textContent?.trim()).toBe(
+      '… / Production (Frankfurt) / Legacy billing reconciliation',
+    );
+    expect(cell.title).toBe(
+      'Northwind Industries Holdings / Platform Infrastructure / Production (Frankfurt) / Legacy billing reconciliation',
+    );
+  });
+
+  it('gives the long name and address a tooltip, and keeps both on one line', () => {
+    const name = 'customer-facing-reporting-service-eu-central-1-blue-green-canary-deployment';
+    const rendered = render([host(name, { address: 'ip-10-128-44-203.example.test' })]);
+    target = rendered.target;
+    expect((target.querySelector('.name') as HTMLElement).title).toBe(name);
+    expect((target.querySelector('.target') as HTMLElement).title).toBe(
+      `deploy@ip-10-128-44-203.example.test:22`,
+    );
   });
 
   it('reads the password state from the store for the Authentication cell', () => {
@@ -229,7 +268,7 @@ describe('HostTable actions', () => {
     expect(labels).toEqual(['Connect', 'Edit…', 'Add to favorites', 'Delete']);
 
     const deleteButton = Array.from(menu!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Delete',
+      (button) => button.textContent?.trim() === 'Delete',
     );
     deleteButton?.click();
     expect(rendered.handlers.ondelete).toHaveBeenCalledWith(web);
@@ -245,6 +284,55 @@ describe('HostTable actions', () => {
       ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
     flushSync();
     expect(document.body.querySelector('.menu')).not.toBeNull();
+  });
+
+  it('names the menu after the host and moves only for a pointer', async () => {
+    const web = host('web');
+    const rendered = render([web]);
+    target = rendered.target;
+
+    // The More button pressed by a pointer (detail 1): the menu scales in.
+    const more = target.querySelector('.more') as HTMLButtonElement;
+    more.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    flushSync();
+    await tick();
+    const menu = document.body.querySelector('.menu') as HTMLElement;
+    expect(menu.getAttribute('aria-label')).toBe('Actions for web');
+    expect(menu.classList.contains('still')).toBe(false);
+    // The pointer highlights nothing: the menu itself has the focus.
+    expect(document.activeElement).toBe(menu);
+  });
+
+  it('opens without motion from the keyboard (Enter on the button, the menu key)', async () => {
+    const web = host('web');
+    const rendered = render([web]);
+    target = rendered.target;
+
+    // Enter or Space on a button is a click with no pointer: detail 0.
+    const more = target.querySelector('.more') as HTMLButtonElement;
+    more.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+    flushSync();
+    await tick();
+    const menu = document.body.querySelector('.menu') as HTMLElement;
+    expect(menu.classList.contains('still')).toBe(true);
+    // The keyboard lands on the first entry.
+    expect(document.activeElement?.textContent?.trim()).toBe('Connect');
+    document.body
+      .querySelector('.menu')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+
+  it('a right-click moves the menu in, the menu key does not', () => {
+    const web = host('web');
+    const rendered = render([web]);
+    target = rendered.target;
+    const row = target.querySelector('.row') as HTMLElement;
+
+    row.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }),
+    );
+    flushSync();
+    expect(document.body.querySelector('.menu')?.classList.contains('still')).toBe(false);
   });
 
   it('activates the row with Enter, not the buttons inside it', () => {
@@ -268,6 +356,43 @@ describe('HostTable windowing', () => {
     const domRows = target.querySelectorAll('.row').length;
     expect(domRows).toBeGreaterThan(0);
     expect(domRows).toBeLessThan(100);
+  });
+});
+
+describe('HostTable keyring lookups', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('asks about the rows on screen at once, and about a scrolled window only when it settles', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] });
+    const ask = vi.spyOn(hosts, 'ensurePasswordState').mockResolvedValue();
+    const rendered = render(Array.from({ length: 5_000 }, (_, i) => host(`h-${i}`)));
+    target = rendered.target;
+
+    vi.advanceTimersByTime(1);
+    const first = ask.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(40);
+
+    // A flick through the list: ten scroll events in 100 ms ask nothing.
+    const body = target.querySelector('.body') as HTMLElement;
+    for (let step = 1; step <= 10; step++) {
+      body.scrollTop = step * 14_000;
+      body.dispatchEvent(new Event('scroll'));
+      flushSync();
+      vi.advanceTimersByTime(10);
+    }
+    expect(ask.mock.calls.length).toBe(first);
+
+    // It comes to rest: only the rows now on screen are asked about.
+    vi.advanceTimersByTime(200);
+    const later = ask.mock.calls.slice(first).map((call) => (call[0] as Host).name);
+    expect(later.length).toBeGreaterThan(0);
+    expect(later.length).toBeLessThan(40);
+    const indexes = later.map((name) => Number(name.replace('h-', '')));
+    expect(Math.min(...indexes)).toBeGreaterThan(1_500);
   });
 });
 

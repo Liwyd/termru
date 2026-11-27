@@ -90,6 +90,27 @@ export function folderPath(groups: Group[], id: string): string {
     .join(' / ');
 }
 
+/**
+ * A folder path for a cell with little room: the last two folders, with an
+ * ellipsis for the rest (`… / Production (Frankfurt) / Legacy billing`). The
+ * folder a host is in is the end of the path; the start of it is the part
+ * every host shares. The full path belongs in a tooltip.
+ */
+export function shortenPath(path: string, keep = 2): string {
+  const parts = path.split(' / ');
+  return parts.length <= keep ? path : `… / ${parts.slice(-keep).join(' / ')}`;
+}
+
+/**
+ * How far a folder of the tree is indented (px). The first two levels step by
+ * 22 px; deeper ones by 10, so a folder five levels down still has room for
+ * its name in a 270 px column (it keeps its place in the hierarchy by the
+ * tooltip and the detail pane's path).
+ */
+export function treeIndent(depth: number): number {
+  return Math.min(depth, 2) * 22 + Math.max(0, depth - 2) * 10;
+}
+
 /** Builds the tree with its counts. */
 export function buildFolderTree(groups: Group[], hosts: Host[]): FolderTree {
   const { byId, children } = index(groups);

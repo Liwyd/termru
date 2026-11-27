@@ -371,7 +371,7 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('Your sessions are still running');
     });
 
-    click(findButton(target, '↗ Return to web-1'));
+    click(findButton(target, 'Return to web-1'));
     await vi.waitFor(() => {
       expect(route.route).toBe('sessions');
     });
@@ -464,7 +464,7 @@ describe('desktop UI ↔ Tauri contract', () => {
       ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await vi.waitFor(() => {
       expect(route.route).toBe('sessions');
-      expect(target.querySelector('[role="tablist"]')).not.toBeNull();
+      expect(target.querySelector('nav[aria-label="Open sessions"] li.tab')).not.toBeNull();
     });
 
     // The split command of the registry.
@@ -514,7 +514,7 @@ describe('desktop UI ↔ Tauri contract', () => {
     // The menu offers the actions of the host. The row has its own
     // "Connect" button, so the one of the menu is picked explicitly.
     const menuButtons = Array.from(target.querySelectorAll('.menu button')) as HTMLButtonElement[];
-    const menuConnect = menuButtons.find((button) => button.textContent === 'Connect');
+    const menuConnect = menuButtons.find((button) => button.textContent?.trim() === 'Connect');
     expect(menuConnect).toBeDefined();
     menuConnect!.click();
 

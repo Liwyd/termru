@@ -194,8 +194,16 @@ button {
   cursor: pointer;
 }
 
-button:hover:not(:disabled) {
-  border-color: var(--termru-accent);
+/* Hover only where a pointer can hover: a touch screen fires a false hover on
+   every tap. */
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled) {
+    border-color: var(--termru-accent);
+  }
+
+  button.primary:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--termru-accent) 88%, black);
+  }
 }
 
 button:disabled {
@@ -362,24 +370,25 @@ html:root[data-reduced-motion='on'] {
     color var(--motion-fast) ease;
 }
 
-/* The global rule hovers on every pointer; here only a real one does. */
-:is(.workpage, .sx-dialog) button:hover:not(:disabled) {
-  border-color: var(--termru-border);
-}
-
-:is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
-  border-color: transparent;
-}
-
-:is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
-  border-color: var(--termru-accent);
-}
-
-:is(.workpage, .sx-dialog) button.danger:hover:not(:disabled) {
-  border-color: var(--termru-danger);
-}
-
 @media (hover: hover) and (pointer: fine) {
+  /* The global hover is an accent border; the work pages and dialogs keep
+     the colour each kind of button has at rest. */
+  :is(.workpage, .sx-dialog) button:hover:not(:disabled) {
+    border-color: var(--termru-border);
+  }
+
+  :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
+    border-color: transparent;
+  }
+
+  :is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
+    border-color: var(--termru-accent);
+  }
+
+  :is(.workpage, .sx-dialog) button.danger:hover:not(:disabled) {
+    border-color: var(--termru-danger);
+  }
+
   :is(.workpage, .sx-dialog) input:hover:not(:disabled):not([aria-invalid='true']),
   :is(.workpage, .sx-dialog) select:hover:not(:disabled):not([aria-invalid='true']) {
     border-color: var(--termru-faint);
@@ -464,14 +473,55 @@ html:root[data-reduced-motion='on'] {
 html:root {
   /* How far a notice travels in and out (Doc B: 8 px, transform and opacity). */
   --notice-shift: -8px;
+  /* How far a block that arrives on a page rises, and how long it takes
+     (`actions/appear.ts`). */
+  --appear-shift: 4px;
+  --appear-duration: var(--motion-context);
 }
 
 @media (prefers-reduced-motion: reduce) {
   html:root:not([data-reduced-motion='off']) {
     --notice-shift: 0px;
+    --appear-shift: 0px;
+    --appear-duration: 80ms;
   }
 }
 
 html:root[data-reduced-motion='on'] {
   --notice-shift: 0px;
+  --appear-shift: 0px;
+  --appear-duration: 80ms;
+}
+
+/* motion (4d) — what every pressable and every arriving block does. */
+
+/* Every button gives under the finger (100 ms, transform only). Specificity 0
+   (`:where`): a component that sets its own transition or transform wins.
+   Menu entries do not press: they are a list, not buttons. Rows and the
+   terminal are not buttons either. */
+:where(button:not([role='menuitem'])) {
+  transition:
+    transform var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+:where(button:not([role='menuitem']):active:not(:disabled):not([aria-disabled='true'])) {
+  transform: scale(var(--press-scale, 0.97));
+}
+
+/* A block that arrives on a page (`actions/appear.ts`): opacity and a 4 px
+   rise, in only. */
+.appear {
+  opacity: 0;
+  transform: translateY(var(--appear-shift));
+}
+
+.appear.appear-in {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--appear-duration) var(--ease-out),
+    transform var(--appear-duration) var(--ease-out);
 }

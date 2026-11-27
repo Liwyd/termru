@@ -2,8 +2,10 @@
   import { tick } from 'svelte';
   import { hosts } from '../stores/hosts.svelte';
   import { authLabel } from '../auth-label';
+  import { shortenPath } from '../folders';
   import { formatLastSession } from '../last-session';
-  import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
+  import PopMenu from './PopMenu.svelte';
+  import type { MenuEntry } from '../menu';
   import type { Host } from '../types';
 
   let {
@@ -28,8 +30,8 @@
     ontogglefavorite: (host: Host) => void;
   } = $props();
 
-  /** Fixed row height: the windowing is a calculation, not a measurement. */
-  const ROW_HEIGHT = 66;
+  /** Fixed row height (frame 1): the windowing is a calculation, not a measurement. */
+  const ROW_HEIGHT = 70;
   const OVERSCAN = 6;
   /** Used before the first layout (and where the height is unknown). */
   const FALLBACK_HEIGHT = 600;
@@ -37,6 +39,8 @@
   let body: HTMLDivElement | null = $state(null);
   let scrollTop = $state(0);
   let viewportHeight = $state(FALLBACK_HEIGHT);
+  /** Width of the body's scrollbar, so the header band lines up with the rows. */
+  let scrollbarWidth = $state(0);
   let selectedId = $state<string | null>(null);
   /** The row that owns the table's single tab stop (roving tabindex). */
   let activeId = $state<string | null>(null);
@@ -45,12 +49,15 @@
   let menuX = $state(0);
   let menuY = $state(0);
   let menuHost = $state<Host | null>(null);
+  /** False when the keyboard opened the menu: it appears without motion. */
+  let menuAnimate = $state(true);
 
   $effect(() => {
     const node = body;
     if (!node) return;
     const measure = () => {
       viewportHeight = node.clientHeight || FALLBACK_HEIGHT;
+      scrollbarWidth = Math.max(0, node.offsetWidth - node.clientWidth);
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -78,20 +85,40 @@
       ? activeId
       : (visibleRows.slice[0]?.id ?? null),
   );
-  const padTop = $derived(visibleRows.start * ROW_HEIGHT);
-  const padBottom = $derived(Math.max(0, rows.length - visibleRows.end) * ROW_HEIGHT);
+  /**
+   * The row drawn as the current one (frame 1 tints the first): the row the
+   * user clicked, else the first row. It is a fixed row, not the roving
+   * tab stop, so the tint does not jump while the list scrolls.
+   */
+  const currentId = $derived(selectedId ?? rows[0]?.id ?? null);
+  /** Where the rendered rows start (px), and how tall the whole list is. */
+  const offsetTop = $derived(visibleRows.start * ROW_HEIGHT);
+  const totalHeight = $derived(rows.length * ROW_HEIGHT);
 
   // The rows on screen ask the credential store about their password once
-  // each; the answer is cached on the store.
+  // each; the answer is cached on the store. A scroll that is still moving
+  // asks nothing: a fast flick through 10 000 hosts would otherwise put
+  // thousands of keyring lookups in the queue, for rows nobody looked at.
+  /** When the list last scrolled (performance.now). */
+  let lastScrollAt = -Infinity;
+  const SETTLE_MS = 150;
   $effect(() => {
-    for (const host of visibleRows.slice) {
-      if (host.auth.type === 'password' && hosts.passwordStored[host.id] === undefined) {
-        void hosts.ensurePasswordState(host);
-      }
-    }
+    const unknown = visibleRows.slice.filter(
+      (host) => host.auth.type === 'password' && hosts.passwordStored[host.id] === undefined,
+    );
+    if (unknown.length === 0) return;
+    const moving = performance.now() - lastScrollAt < SETTLE_MS;
+    const timer = setTimeout(
+      () => {
+        for (const host of unknown) void hosts.ensurePasswordState(host);
+      },
+      moving ? SETTLE_MS : 0,
+    );
+    return () => clearTimeout(timer);
   });
 
   function onScroll(event: Event): void {
+    lastScrollAt = performance.now();
     scrollTop = (event.currentTarget as HTMLDivElement).scrollTop;
   }
 
@@ -100,7 +127,7 @@
     else onconnect(host);
   }
 
-  function menuItems(host: Host): MenuItem[] {
+  function menuItems(host: Host): MenuEntry[] {
     return [
       { id: 'connect', label: 'Connect' },
       { id: 'edit', label: 'Edit…' },
@@ -108,7 +135,7 @@
         id: 'favorite',
         label: host.favorite ? 'Remove from favorites' : 'Add to favorites',
       },
-      { id: 'delete', label: 'Delete', danger: true },
+      { id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
     ];
   }
 
@@ -137,6 +164,8 @@
     menuHost = host;
     menuX = event.clientX;
     menuY = event.clientY;
+    // A right-click is button 2; the menu key and Shift+F10 report button 0.
+    menuAnimate = event.button === 2;
     menuOpen = true;
   }
 
@@ -144,15 +173,21 @@
     event.stopPropagation();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     menuHost = host;
-    menuX = rect.left;
-    menuY = rect.bottom;
+    menuX = rect.right;
+    menuY = rect.bottom + 4;
+    // Enter or Space on the button is a click without a pointer (detail 0).
+    menuAnimate = event.detail > 0;
     menuOpen = true;
   }
 
+  /** The path of every folder, built once (the getter sorts every folder on each read). */
+  const folderLabels = $derived(
+    new Map(hosts.folderOptions.map((option) => [option.id, option.label])),
+  );
+
   function folderLabel(host: Host): string {
     if (!host.group_id) return 'Unfiled';
-    const option = hosts.folderOptions.find((entry) => entry.id === host.group_id);
-    return option?.label ?? 'Unfiled';
+    return folderLabels.get(host.group_id) ?? 'Unfiled';
   }
 
   function cellAuth(host: Host): string {
@@ -231,195 +266,282 @@
 </script>
 
 <div class="table" role="table" aria-label="Hosts" aria-rowcount={rows.length + 1}>
-  <div class="head" role="row" aria-rowindex={1}>
-    <span class="star-cell" role="columnheader">STAR</span>
-    <span role="columnheader">HOST / ADDRESS</span>
-    <span role="columnheader">FOLDER</span>
-    <span role="columnheader">AUTHENTICATION</span>
-    <span role="columnheader">LAST SESSION</span>
-    <span class="actions-cell" role="columnheader">ACTIONS</span>
+  <div class="head" role="row" aria-rowindex={1} style:--sbw="{scrollbarWidth}px">
+    <span class="star-cell" role="columnheader">Star</span>
+    <span role="columnheader">Host / address</span>
+    <span class="col-folder" role="columnheader">Folder</span>
+    <span class="col-auth" role="columnheader">Authentication</span>
+    <span role="columnheader">Last session</span>
+    <span class="actions-cell" role="columnheader">Actions</span>
   </div>
   <div class="body" bind:this={body} onscroll={onScroll}>
-    {#if padTop > 0}<div class="pad" style:height="{padTop}px"></div>{/if}
-    {#each visibleRows.slice as host, i (host.id)}
-      {@const session = lastSession(host)}
-      <div
-        class="row"
-        class:selected={selectedId === host.id}
-        role="row"
-        tabindex={rovingId === host.id ? 0 : -1}
-        data-host-id={host.id}
-        aria-rowindex={visibleRows.start + i + 2}
-        onclick={() => select(host)}
-        onfocus={() => (activeId = host.id)}
-        ondblclick={() => activate(host)}
-        onkeydown={(event) => onRowKeyDown(event, host)}
-        oncontextmenu={(event) => openMenuAtPointer(host, event)}
-      >
-        <span class="star-cell" role="cell">
-          <button
-            type="button"
-            class="star"
+    <!-- The sizer is as tall as every row; the rows on screen sit in a window that
+         is moved with a transform, so a scroll does not lay the rows out again. -->
+    <div class="sizer" style:height="{totalHeight}px">
+      <div class="window" style:transform="translateY({offsetTop}px)">
+        {#each visibleRows.slice as host, i (host.id)}
+          {@const session = lastSession(host)}
+          <div
+            class="row"
+            class:selected={currentId === host.id}
+            role="row"
             tabindex={rovingId === host.id ? 0 : -1}
-            class:favorite={host.favorite}
-            aria-label={host.favorite
-              ? `Remove ${host.name} from favorites`
-              : `Add ${host.name} to favorites`}
-            aria-pressed={host.favorite}
-            onclick={(event) => {
-              event.stopPropagation();
-              ontogglefavorite(host);
-            }}
+            data-host-id={host.id}
+            aria-rowindex={visibleRows.start + i + 2}
+            onclick={() => select(host)}
+            onfocus={() => (activeId = host.id)}
+            ondblclick={() => activate(host)}
+            onkeydown={(event) => onRowKeyDown(event, host)}
+            oncontextmenu={(event) => openMenuAtPointer(host, event)}
           >
-            {host.favorite ? '★' : '☆'}
-          </button>
-        </span>
-        <span class="host-cell" role="cell">
-          <span class="name">{host.name}</span>
-          <span class="target">{host.username}@{host.address}:{host.port}</span>
-        </span>
-        <span class="folder-cell" role="cell" class:unfiled={!host.group_id}>
-          {folderLabel(host)}
-        </span>
-        <span class="auth-cell" role="cell">{cellAuth(host)}</span>
-        <span class="session-cell" role="cell">
-          {#if session.live}
-            <span class="pill"><span class="dot" aria-hidden="true"></span>{session.text}</span>
-          {:else}
-            <span class="date">{session.text}</span>
-          {/if}
-        </span>
-        <span class="actions actions-cell" role="cell">
-          <button
-            type="button"
-            class="primary"
-            tabindex={rovingId === host.id ? 0 : -1}
-            onclick={(event) => {
-              event.stopPropagation();
-              activate(host);
-            }}>{live.has(host.id) ? 'Open' : 'Connect'}</button
-          >
-          <button
-            type="button"
-            tabindex={rovingId === host.id ? 0 : -1}
-            onclick={(event) => {
-              event.stopPropagation();
-              select(host);
-              onedit(host);
-            }}>Edit</button
-          >
-          <button
-            type="button"
-            class="more"
-            tabindex={rovingId === host.id ? 0 : -1}
-            aria-label="More actions for {host.name}"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen && menuHost?.id === host.id}
-            onclick={(event) => openMenuFromButton(host, event)}
-          >
-            <span aria-hidden="true">⋯</span>
-            <span class="sr-only">More actions</span>
-          </button>
-        </span>
+            <span class="star-cell" role="cell">
+              <button
+                type="button"
+                class="star"
+                tabindex={rovingId === host.id ? 0 : -1}
+                class:favorite={host.favorite}
+                aria-label={host.favorite
+                  ? `Remove ${host.name} from favorites`
+                  : `Add ${host.name} to favorites`}
+                aria-pressed={host.favorite}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  ontogglefavorite(host);
+                }}
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  width="18"
+                  height="18"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
+                    fill={host.favorite ? 'currentColor' : 'none'}
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </span>
+            <span class="host-cell" role="cell">
+              <span class="name" title={host.name}>{host.name}</span>
+              <span class="target" title="{host.username}@{host.address}:{host.port}"
+                >{host.username}@{host.address}:{host.port}</span
+              >
+            </span>
+            <span class="folder-cell col-folder" role="cell" title={folderLabel(host)}>
+              {shortenPath(folderLabel(host))}
+            </span>
+            <span class="auth-cell col-auth" role="cell" title={cellAuth(host)}
+              >{cellAuth(host)}</span
+            >
+            <span class="session-cell" role="cell">
+              {#if session.live}
+                <span class="pill"><span class="dot" aria-hidden="true"></span>{session.text}</span>
+              {:else}
+                <span class="date">{session.text}</span>
+              {/if}
+            </span>
+            <span class="actions actions-cell" role="cell">
+              <button
+                type="button"
+                class="act primary-act"
+                tabindex={rovingId === host.id ? 0 : -1}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  activate(host);
+                }}>{live.has(host.id) ? 'Open' : 'Connect'}</button
+              >
+              <button
+                type="button"
+                class="act"
+                tabindex={rovingId === host.id ? 0 : -1}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  select(host);
+                  onedit(host);
+                }}>Edit</button
+              >
+              <button
+                type="button"
+                class="act more"
+                tabindex={rovingId === host.id ? 0 : -1}
+                aria-label="More actions for {host.name}"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen && menuHost?.id === host.id}
+                onclick={(event) => openMenuFromButton(host, event)}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  width="16"
+                  height="16"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <circle cx="3" cy="8" r="1.2" />
+                  <circle cx="8" cy="8" r="1.2" />
+                  <circle cx="13" cy="8" r="1.2" />
+                </svg>
+              </button>
+            </span>
+          </div>
+        {/each}
       </div>
-    {/each}
-    {#if padBottom > 0}<div class="pad" style:height="{padBottom}px"></div>{/if}
+    </div>
   </div>
 </div>
 
-{#if menuHost}
-  <ContextMenu
-    open={menuOpen}
-    x={menuX}
-    y={menuY}
-    items={menuItems(menuHost)}
-    onchoose={choose}
-    onclose={() => (menuOpen = false)}
-  />
-{/if}
+<PopMenu
+  open={menuOpen && menuHost !== null}
+  x={menuX}
+  y={menuY}
+  align="right"
+  animate={menuAnimate}
+  label={menuHost ? `Actions for ${menuHost.name}` : 'Host actions'}
+  items={menuHost ? menuItems(menuHost) : []}
+  onchoose={choose}
+  onclose={() => (menuOpen = false)}
+/>
 
 <style>
   .table {
     display: flex;
     flex-direction: column;
-    flex: 1;
-    min-height: 0;
+    /* Frame 1: the table is as tall as its rows, and shrinks to what the
+       page leaves it (the banner and the hint sit under it, not over it). */
+    flex: 0 1 auto;
+    /* Never less than five rows: with the banner and the hint under it, a
+       short window would leave a long list two. The page scrolls instead. */
+    min-height: calc(34px + 5 * 70px);
     min-width: 0;
   }
 
   .head,
   .row {
     display: grid;
+    /* Frame 1: 26 | host | folder | authentication | last session | actions.
+       The actions column is a fixed width, so the columns of every row line up. */
     grid-template-columns:
-      3.2rem minmax(11rem, 2.2fr) minmax(7rem, 1.2fr) minmax(9rem, 1.4fr)
-      minmax(7rem, 1fr) auto;
+      26px minmax(11rem, 1.4fr) minmax(7rem, 1fr) minmax(9rem, 1fr)
+      minmax(7rem, 1.2fr) 152px;
     align-items: center;
-    gap: var(--termru-space-3);
-    padding: 0 var(--termru-space-3);
+    gap: var(--termru-space-4);
+    padding: 0 var(--termru-space-4);
   }
 
   .head {
-    height: 2.4rem;
-    border-bottom: 1px solid var(--termru-border);
+    flex: none;
+    height: 34px;
+    padding-right: calc(var(--termru-space-4) + var(--sbw, 0px));
+    background: var(--termru-subtle);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--termru-muted);
   }
 
+  .head > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* "Star" is wider than its 26 px column; it may run into the gap. */
+  .head > .star-cell {
+    overflow: visible;
+  }
+
   .body {
-    flex: 1 1 0;
+    flex: 0 1 auto;
     overflow-y: auto;
     min-height: 0;
   }
 
   .row {
-    height: 66px;
+    height: 70px;
     border-bottom: 1px solid var(--termru-border);
     cursor: default;
+    /* A row is laid out and painted on its own: one row coming into the window
+       does not touch the others. */
+    contain: layout style;
   }
 
-  .row:hover,
   .row.selected {
     background: var(--termru-accent-soft);
   }
 
-  .pad {
-    flex: none;
+  /* The ring sits inside the row: the scrolling body would clip it outside. */
+  .row:focus-visible {
+    outline-offset: calc(var(--termru-focus-w) * -1);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .row {
+      transition: background-color var(--motion-fast) ease;
+    }
+
+    .row:hover {
+      background: var(--termru-accent-soft);
+    }
+  }
+
+  .sizer {
+    position: relative;
+  }
+
+  .window {
+    position: absolute;
+    inset: 0 0 auto 0;
   }
 
   .star-cell {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
   }
 
   .star {
-    background: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    width: 26px;
+    height: 26px;
+    padding: 0;
     border: none;
-    padding: 0.2rem;
-    font-size: 1rem;
-    line-height: 1;
+    border-radius: var(--termru-radius);
+    background: none;
     color: var(--termru-muted);
     cursor: pointer;
+    transition:
+      transform var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) ease;
   }
 
   .star.favorite {
     color: var(--termru-accent);
   }
 
+  .star:active {
+    transform: scale(var(--press-scale));
+  }
+
   .host-cell {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 2px;
     min-width: 0;
   }
 
   .name {
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
-    font-weight: 600;
+    font-weight: var(--termru-text-control-weight);
     color: var(--termru-fg);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -428,8 +550,8 @@
 
   .target {
     font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-terminal-size);
-    line-height: var(--termru-text-terminal-lh);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
     color: var(--termru-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -437,17 +559,19 @@
   }
 
   .folder-cell,
+  .auth-cell,
+  .date {
+    font-size: var(--termru-text-control-size);
+    line-height: var(--termru-text-control-lh);
+    color: var(--termru-muted);
+  }
+
+  .folder-cell,
   .auth-cell {
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-fg);
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .folder-cell.unfiled {
-    color: var(--termru-muted);
   }
 
   .session-cell {
@@ -457,27 +581,28 @@
   }
 
   .date {
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: var(--termru-radius);
+    gap: 8px;
+    height: 23px;
+    padding: 0 8px;
+    border-radius: 4px;
     background: var(--termru-accent-soft);
     color: var(--termru-accent);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    font-weight: 600;
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-control-weight);
   }
 
   .pill .dot {
-    width: 0.45rem;
-    height: 0.45rem;
+    width: 5px;
+    height: 5px;
     background: var(--termru-accent);
   }
 
@@ -492,39 +617,60 @@
     justify-self: end;
   }
 
-  .actions button {
-    background: none;
+  .act {
+    min-height: 32px;
+    padding: 0 6px;
     border: none;
-    padding: 0.25rem 0.35rem;
-    border-radius: var(--termru-radius);
+    background: none;
     color: var(--termru-fg);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    cursor: pointer;
-  }
-
-  .actions button:hover {
-    background: var(--termru-surface);
-  }
-
-  .actions .primary {
+    font-size: var(--termru-text-control-size);
+    line-height: var(--termru-text-control-lh);
     font-weight: var(--termru-text-control-weight);
+    cursor: pointer;
+    transition:
+      transform var(--motion-fast) var(--ease-out),
+      background-color var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
 
-  .actions .more {
-    padding: 0.25rem 0.4rem;
+  .act:active {
+    transform: scale(var(--press-scale));
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .act:hover:not(:disabled) {
+      background: var(--termru-subtle);
+      color: var(--termru-accent);
+    }
+
+    .star:hover {
+      color: var(--termru-accent);
+    }
+  }
+
+  .more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    padding: 0;
     color: var(--termru-muted);
   }
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+  .more svg {
+    fill: currentColor;
+  }
+
+  /* Narrow windows: the folder and the authentication move to the editor. */
+  @media (max-width: 900px) {
+    .head,
+    .row {
+      grid-template-columns: 26px minmax(9rem, 1fr) minmax(6rem, 0.6fr) 152px;
+    }
+
+    .col-folder,
+    .col-auth {
+      display: none;
+    }
   }
 </style>

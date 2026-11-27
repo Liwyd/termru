@@ -439,7 +439,9 @@
             <div class="text">
               <p class="name" id="pref-scroll-name">Scrollback</p>
               <p class="desc" id="pref-scroll-desc">Keep recent terminal output in memory</p>
-              {#if scrollError}<p class="error" role="alert">{scrollError}</p>{/if}
+              {#if scrollError}<p class="error" id="pref-scroll-error" role="alert">
+                  {scrollError}
+                </p>{/if}
             </div>
             <div class="unit wide">
               <input
@@ -447,7 +449,9 @@
                 type="text"
                 inputmode="numeric"
                 aria-labelledby="pref-scroll-name"
-                aria-describedby="pref-scroll-desc"
+                aria-describedby={scrollError
+                  ? 'pref-scroll-desc pref-scroll-error'
+                  : 'pref-scroll-desc'}
                 aria-invalid={scrollError ? 'true' : undefined}
                 value={scrollText}
                 oninput={(event) => (scrollText = event.currentTarget.value)}
@@ -653,7 +657,7 @@
             <div class="text">
               <p class="name" id="pref-notices-name">Routine notices</p>
               <p class="desc" id="pref-notices-desc">
-                No sound. Never take terminal focus. Failures always show.
+                No sound. They never take terminal focus. Failures always show.
               </p>
             </div>
             <Toggle

@@ -65,28 +65,23 @@
     renaming = false;
   }
 
-  /** Keyboard on the tab itself: Enter or Space opens it, F2 renames it. */
-  function onTabKeyDown(event: KeyboardEvent): void {
-    if (event.target !== event.currentTarget) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      sessions.setActive(tab.id);
-    } else if (event.key === 'F2') {
+  /** Keyboard on the name button: F2 renames (Enter and Space press the button). */
+  function onLabelKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'F2') {
       event.preventDefault();
       startRename();
     }
   }
 </script>
 
-<div
+<!-- One item of the list of open sessions: a name button and a close button.
+     (Not role="tab": a tab may not contain buttons, and the strip does not
+     have the arrow-key behaviour of a tab list.) -->
+<li
   class="tab"
   class:active
   class:drop-target={dropIndex !== null}
-  role="tab"
-  aria-selected={active}
-  tabindex="0"
   draggable="true"
-  onkeydown={onTabKeyDown}
   ondragstart={(event) => onDragStart(event, sessions.tabs.indexOf(tab))}
   ondragover={(event) => onDragOver(event, sessions.tabs.indexOf(tab))}
   ondragleave={() => (dropIndex = null)}
@@ -115,9 +110,11 @@
     <button
       type="button"
       class="label"
+      aria-current={active ? 'true' : undefined}
       title="Double-click or press F2 to rename"
       onclick={() => sessions.setActive(tab.id)}
       ondblclick={startRename}
+      onkeydown={onLabelKeyDown}
     >
       <span class="dot {tone}" aria-hidden="true"></span>
       <span class="name">{tab.title}</span>
@@ -139,11 +136,12 @@
   >
     <SessionIcon name="close" size={12} />
   </button>
-</div>
+</li>
 
 <style>
   .tab {
     position: relative;
+    list-style: none;
     display: flex;
     align-items: center;
     gap: var(--termru-space-1);
@@ -193,6 +191,13 @@
     line-height: var(--termru-text-body-lh);
     font-weight: 450;
     text-align: left;
+    /* A tab is switched from the keyboard as often as with the pointer: the
+       name does not press, fade or move. */
+    transition: none;
+  }
+
+  .label:active {
+    transform: none;
   }
 
   .tab.active .label {

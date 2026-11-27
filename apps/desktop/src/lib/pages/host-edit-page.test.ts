@@ -170,6 +170,30 @@ describe('the page', () => {
     expect(target.querySelector('[aria-modal]')).toBeNull();
   });
 
+  it('keeps the breadcrumb to one short line for a deep folder and a long name', () => {
+    const longName =
+      'customer-facing-reporting-service-eu-central-1-blue-green-canary-deployment-primary';
+    hosts.groups = [
+      { ...group('g1', 'Northwind Industries Holdings'), parent_id: null },
+      { ...group('g2', 'Platform Infrastructure and Site Reliability'), parent_id: 'g1' },
+      { ...group('g3', 'Production (Frankfurt, eu-central-1)'), parent_id: 'g2' },
+    ];
+    open(host({ name: longName, group_id: 'g3' }));
+    const crumbs = Array.from(
+      target.querySelectorAll<HTMLElement>('nav[aria-label="Breadcrumb"] li > :not(.sep)'),
+    );
+    expect(crumbs.map((crumb) => crumb.textContent?.trim())).toEqual([
+      'Hosts',
+      '… / Production (Frankfurt, eu-central-1)',
+      longName,
+    ]);
+    // Each is cut to one line by the stylesheet; the title has the whole text.
+    expect(crumbs[1].title).toBe(
+      'Northwind Industries Holdings / Platform Infrastructure and Site Reliability / Production (Frankfurt, eu-central-1)',
+    );
+    expect(crumbs[2].title).toBe(longName);
+  });
+
   it('is a new connection when no host is edited, with the name focused', () => {
     open(null);
     expect(target.querySelector('h1')?.textContent).toBe('New connection');

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
+  import { appear } from '../actions/appear';
+  import { formatCount } from '../count-line';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -14,10 +16,12 @@
     hostIsInSubtree,
     parentOptions,
     subtreeIds,
+    treeIndent,
   } from '../folders';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { notify } from '../notify.svelte';
+  import { afterFirstPaint } from '../settled.svelte';
   import type { Group, Host } from '../types';
   import type { Pane } from '../stores/sessions.svelte';
 
@@ -29,6 +33,8 @@
 
   /** The rail edits the selected folder, or makes a new one. */
   let mode = $state<'edit' | 'create'>('edit');
+  /** The form of a rail that opens while the page is open moves in; one there at the start does not. */
+  const page = afterFirstPaint();
   let name = $state('');
   let parentId = $state('');
   let nameTouched = $state(false);
@@ -97,7 +103,7 @@
       : 'Every folder',
   );
   const hostCount = $derived(
-    `${listed.length} ${listed.length === 1 ? 'HOST' : 'HOSTS'}${node && node.childCount > 0 ? ` · ${node.childCount} ${node.childCount === 1 ? 'SUBFOLDER' : 'SUBFOLDERS'}` : ''}`,
+    `${formatCount(listed.length)} ${listed.length === 1 ? 'HOST' : 'HOSTS'}${node && node.childCount > 0 ? ` · ${formatCount(node.childCount)} ${node.childCount === 1 ? 'SUBFOLDER' : 'SUBFOLDERS'}` : ''}`,
   );
 
   /** The pane of a running session by host id (the card shows "Connected"). */
@@ -308,6 +314,20 @@
   }
 
   const movable = $derived(selection !== 'all');
+
+  // In a narrow window the tree is a short list that scrolls: the folder that
+  // is selected (also the one the page opened on) is brought into view, so the
+  // tree never shows a selection nobody can see.
+  let treeList = $state<HTMLUListElement | null>(null);
+  $effect(() => {
+    void selection;
+    void tree.nodes.length;
+    if (!treeList) return;
+    const list = treeList;
+    void tick().then(() => {
+      list.querySelector<HTMLElement>('.item.active')?.scrollIntoView?.({ block: 'nearest' });
+    });
+  });
 </script>
 
 <div class="workpage folders">
@@ -330,7 +350,7 @@
       <nav class="tree" aria-label="Folders">
         <p class="wp-label">FOLDER TREE</p>
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <ul onkeydown={onTreeKeyDown}>
+        <ul onkeydown={onTreeKeyDown} bind:this={treeList}>
           <li>
             <button
               type="button"
@@ -341,7 +361,7 @@
             >
               <Icon name="layers" size={17} />
               <span class="label">All hosts</span>
-              <span class="count">{tree.total}</span>
+              <span class="count">{formatCount(tree.total)}</span>
             </button>
           </li>
           {#each tree.nodes as entry (entry.group.id)}
@@ -350,14 +370,14 @@
                 type="button"
                 class="item"
                 class:active={selection === entry.group.id}
-                style:padding-left="calc(var(--termru-space-3) + {entry.depth * 22}px)"
+                style:padding-left="calc(var(--termru-space-3) + {treeIndent(entry.depth)}px)"
                 aria-current={selection === entry.group.id ? 'true' : undefined}
                 title={entry.path}
                 onclick={() => select(entry.group.id)}
               >
                 <Icon name="folder" size={17} />
                 <span class="label">{entry.group.name}</span>
-                <span class="count">{entry.count}</span>
+                <span class="count">{formatCount(entry.count)}</span>
               </button>
             </li>
           {/each}
@@ -371,7 +391,7 @@
             >
               <Icon name="inbox" size={17} />
               <span class="label">Unfiled</span>
-              <span class="count">{tree.unfiled}</span>
+              <span class="count">{formatCount(tree.unfiled)}</span>
             </button>
           </li>
         </ul>
@@ -427,7 +447,9 @@
           </ul>
           {#if listed.length > shown}
             <button type="button" class="more" onclick={() => (shown += 100)}>
-              Show {Math.min(100, listed.length - shown)} more of {listed.length - shown}
+              Show {formatCount(Math.min(100, listed.length - shown))} more of {formatCount(
+                listed.length - shown,
+              )}
             </button>
           {/if}
         {:else if hosts.hosts.length === 0}
@@ -517,7 +539,11 @@
         <p class="wp-label accent">{railLabel}</p>
 
         {#if canEdit}
-          <form onsubmit={(event) => void saveFolder(event)} novalidate>
+          <form
+            onsubmit={(event) => void saveFolder(event)}
+            novalidate
+            use:appear={{ enabled: page.value }}
+          >
             <Field label="Name" id="folder-name" error={nameTouched ? nameError : null}>
               {#snippet control(attrs)}
                 <input
@@ -547,7 +573,7 @@
                       disabled={option.disabled}
                       title={option.reason ?? undefined}
                       >{option.label}{option.disabled && option.reason
-                        ? ' — unavailable'
+                        ? ' (unavailable)'
                         : ''}</option
                     >
                   {/each}
@@ -582,8 +608,7 @@
 
         <hr />
         <p class="rule-note small">
-          New folder opens this same editor with a blank name and the selected folder as its parent.
-          No dialog interrupts your workspace.
+          New folder opens this editor with a blank name and the selected folder as its parent.
         </p>
 
         {#if folder && mode === 'edit'}

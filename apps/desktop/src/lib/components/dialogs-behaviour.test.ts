@@ -7,7 +7,7 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConnectDialog from './ConnectDialog.svelte';
-import ContextMenu from './ContextMenu.svelte';
+import PopMenu from './PopMenu.svelte';
 import HostKeyDialog from './HostKeyDialog.svelte';
 import { notices } from '../notify.svelte';
 import { noticeText } from '../test-support/notices';
@@ -340,20 +340,21 @@ describe('HostKeyDialog', () => {
   });
 });
 
-describe('ContextMenu', () => {
+describe('PopMenu', () => {
   const items = [
     { id: 'connect', label: 'Connect' },
     { id: 'edit', label: 'Edit…' },
-    { id: 'off', label: 'Unavailable', disabled: true },
+    { id: 'off', label: 'Unavailable', disabled: true, reason: 'Not now' },
     { id: 'delete', label: 'Delete', danger: true },
   ];
 
-  function openMenu() {
+  /** `animate: false` is a menu the keyboard opened: no motion, first entry focused. */
+  function openMenu(animate = false) {
     const onchoose = vi.fn<(id: string) => void>();
     const onclose = vi.fn();
-    component = mount(ContextMenu, {
+    component = mount(PopMenu, {
       target,
-      props: { open: true, x: 10, y: 10, items, onchoose, onclose },
+      props: { open: true, x: 10, y: 10, items, label: 'Actions', animate, onchoose, onclose },
     });
     flushSync();
     return { onchoose, onclose };
@@ -361,13 +362,20 @@ describe('ContextMenu', () => {
 
   const entries = () => Array.from(target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
 
-  it('focuses the first entry when it opens', async () => {
+  it('names itself, and focuses the first entry when the keyboard opened it', async () => {
     openMenu();
     await tick();
+    expect(target.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Actions');
     expect(document.activeElement).toBe(entries()[0]);
   });
 
-  it('moves with the arrow keys, Home and End, skipping disabled entries', async () => {
+  it('keeps the focus on the menu, with nothing highlighted, when a pointer opened it', async () => {
+    openMenu(true);
+    await tick();
+    expect(document.activeElement).toBe(target.querySelector('[role="menu"]'));
+  });
+
+  it('moves with the arrow keys, Home and End, and wraps; a disabled entry stays reachable', async () => {
     openMenu();
     await tick();
     const menu = target.querySelector('[role="menu"]') as HTMLElement;
@@ -375,10 +383,13 @@ describe('ContextMenu', () => {
     press(menu, 'ArrowDown');
     expect(document.activeElement).toBe(entries()[1]);
     press(menu, 'ArrowDown');
-    // The disabled entry is skipped.
+    // Its reason can be read, so it takes the focus.
+    expect(document.activeElement).toBe(entries()[2]);
+    expect(entries()[2].getAttribute('aria-disabled')).toBe('true');
+    expect(entries()[2].title).toBe('Not now');
+    press(menu, 'ArrowDown');
     expect(document.activeElement).toBe(entries()[3]);
     press(menu, 'ArrowDown');
-    // And it wraps.
     expect(document.activeElement).toBe(entries()[0]);
     press(menu, 'ArrowUp');
     expect(document.activeElement).toBe(entries()[3]);
@@ -400,10 +411,15 @@ describe('ContextMenu', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it('chooses an entry with Enter (a focused button)', async () => {
-    const { onchoose } = openMenu();
+  it('chooses an entry, and does nothing for a disabled one', async () => {
+    const { onchoose, onclose } = openMenu();
     await tick();
     click(entries()[1]);
     expect(onchoose).toHaveBeenCalledWith('edit');
+    expect(onclose).toHaveBeenCalledTimes(1);
+
+    click(entries()[2]);
+    expect(onchoose).toHaveBeenCalledTimes(1);
+    expect(onclose).toHaveBeenCalledTimes(1);
   });
 });

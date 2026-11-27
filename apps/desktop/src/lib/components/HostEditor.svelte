@@ -10,6 +10,7 @@
   import { connectFlow } from '../stores/connect.svelte';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { identities } from '../stores/identities.svelte';
+  import { shortenPath } from '../folders';
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { notify } from '../notify.svelte';
@@ -152,7 +153,14 @@
     ...(form.isNew
       ? [{ label: 'New connection' }]
       : [
-          ...(folderLabel(form.groupId) ? [{ label: folderLabel(form.groupId) }] : []),
+          ...(folderLabel(form.groupId)
+            ? [
+                {
+                  label: shortenPath(folderLabel(form.groupId), 1),
+                  title: folderLabel(form.groupId),
+                },
+              ]
+            : []),
           { label: form.name.trim() || 'Untitled' },
         ]),
   ]);
@@ -585,7 +593,21 @@
                 aria-pressed={form.favorite}
                 onclick={() => (form.favorite = !form.favorite)}
               >
-                <span aria-hidden="true">{form.favorite ? '★' : '☆'}</span>
+                <svg
+                  viewBox="0 0 20 20"
+                  width="16"
+                  height="16"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
+                    fill={form.favorite ? 'currentColor' : 'none'}
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linejoin="round"
+                  />
+                </svg>
                 {form.favorite ? 'Favorited' : 'Favorite'}
               </button>
             </div>
@@ -612,6 +634,8 @@
                 <input
                   type="text"
                   aria-label="New tag"
+                  aria-invalid={tagError ? 'true' : undefined}
+                  aria-describedby={tagError ? 'host-tag-error' : undefined}
                   placeholder="New tag"
                   maxlength="64"
                   bind:value={newTag}
@@ -624,7 +648,9 @@
                 />
                 <button type="button" onclick={() => void addTag()}>Add tag</button>
               </div>
-              {#if tagError}<p class="field-error" role="alert">{tagError}</p>{/if}
+              {#if tagError}<p class="field-error" id="host-tag-error" role="alert">
+                  {tagError}
+                </p>{/if}
             </fieldset>
 
             <Field

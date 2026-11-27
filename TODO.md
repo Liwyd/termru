@@ -34,7 +34,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [x] Host editor page: numbered sections, rail (unsaved indicator, local credential with Forget, connection preview), Cancel / Save host / Save & connect, inline validation with aria wiring, unsaved-changes guard on a page change and on the window closing.
 - [x] Folders page: tree with counts, detail list with Move, edit rail, cycle guard in the UI and in the store (Rust tests), delete confirmation that says what moves.
 - [x] Identities page and `identity_generate` / `identity_public_key` (ed25519, 0600, no overwrite, optional passphrase; Rust tests, including `ssh-keygen -y` reading the output).
-- [x] One background for every page: the shell draws the page on the white surface (frames 1, 4, 5 and 8). The body of the Hosts page itself is not rebuilt to frame 1 yet (own header instead of `PageHeader`, the running-sessions banner above the filters instead of below the table, 66 px rows, plain tabs).
+- [x] One background for every page: the shell draws the page on the white surface (frames 1, 4, 5 and 8).
 - [ ] "Choose hosts" is a searchable list of up to 50 hosts, not a multi-select; moving several hosts at once is still one at a time.
 - [ ] Generated keys are ed25519 only; RSA/ECDSA generation, importing a key into the app's folder and deleting a generated key's file with its identity are not offered (deleting the identity leaves the file).
 - [ ] The window-close guard (`onCloseRequested`) is only exercised against a fake window in tests; try it on a real desktop session (WebKitGTK, WebView2, WKWebView).
@@ -49,6 +49,15 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Notices: the specification suggests a Sileo toast through a React island; the facade draws native Svelte notices instead. Adopting a library needs the maintainer's approval (second UI runtime) and changes only `components/Toasts.svelte`.
 - [ ] Notices: a notice shows in the window that raised it only; there is no notification centre or history.
 - [ ] Look at the new pages and dialogs on a real desktop session (WebKitGTK, WebView2, WKWebView): focus rings, the select arrow, the shortcut recorder and the notice position have only been checked in headless Chrome.
+
+### Hosts page, accessibility, motion, stress and copy (Phase 4d, frame 1)
+- [x] Hosts page body rebuilt to frame 1: `PageHeader`, filter row, plain tabs, band header, 70 px rows on fixed columns, the running-sessions banner under the rows, the row menu on `PopMenu`. With this the redesign items R4 (Sessions), R5 (editor), R6 (Folders and Identities), R7 (Hosts), R8 and R9 (Sync, Preferences, dialogs, notices) are built to their frames; what is still open for each is listed under its own heading above, and none of it has been seen in a real webview.
+- [x] axe-core over every route and dialog (jsdom), form errors wired with `aria-invalid` / `aria-describedby`, `docs/accessibility.md` with the keyboard checklist.
+- [x] Motion pass (press feedback, hover gate, arriving blocks, the row menu) and the stress pass (10 000 hosts, long names, empty and error states, 760 px, dark): see the CHANGELOG.
+- [ ] Hosts table: the Folder and Authentication columns are hidden under 900 px; a narrow window loses them (they are in the editor). Showing the folder under the name there would keep it.
+- [ ] Hosts table scroll: measured at 54 fps in a headless, software-rendered Chrome against the mock (`scripts/scroll-perf.mjs`, `docs/performance.md`); not measured on WebKitGTK, WebView2 or WKWebView, nor against the real keyring (a lookup per row at rest).
+- [ ] Accessibility, see `docs/accessibility.md` (Known gaps): no run with a real screen reader (Orca, NVDA, VoiceOver); the terminal output is not announced (xterm screen reader mode is off); session tabs can only be reordered by dragging; the session toolbar has no arrow-key roving; no skip link; contrast and target size are not measured in a browser; Windows forced colours and 200 % zoom are untried.
+- [ ] Whether an arriving block moves depends on the last input (a key press or a pointer), not on what caused it: a session started with a key whose banner appears after the user touched the mouse still moves. Decide whether that is right or whether the cause should be passed along.
 
 ### Dependency maintenance
 - [ ] Evaluate migrating `chrono` (RUSTSEC-2026-0543, unmaintained, ignored in `deny.toml`) to `jiff` or `time` before 2027-03-01; keep the stored epoch-ms / RFC 3339 wire formats and the `tokio-postgres` mapping working (see `docs/security/dependency-review.md`).

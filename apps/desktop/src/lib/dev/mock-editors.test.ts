@@ -160,3 +160,46 @@ describe('the mock backend: identity keys', () => {
     expect(await api.identityPublicKey(work.id)).toBeNull();
   });
 });
+
+describe('the mock backend: stress flags', () => {
+  afterEach(() => mockIpc.resetMock());
+
+  it('&many adds that many generated hosts to the fixtures, with recent connections on the first', async () => {
+    mockIpc.resetMock({ many: 1_200 });
+    const hosts = await api.hostList();
+    expect(hosts).toHaveLength(5 + 1_200);
+    expect(new Set(hosts.map((host) => host.id)).size).toBe(hosts.length);
+    const recents = await api.recentList();
+    expect(recents.length).toBeGreaterThan(40);
+  });
+
+  it('&long keeps every value inside what the backend accepts (validate.rs, store)', async () => {
+    mockIpc.resetMock({ long: true });
+    const hosts = await api.hostList();
+    const groups = await api.groupList();
+    // The worst values are really there ...
+    expect(Math.max(...hosts.map((host) => [...host.name].length))).toBeGreaterThan(80);
+    expect(hosts.some((host) => host.name === 'x')).toBe(true);
+    expect(hosts.some((host) => (host.description ?? '').length > 1_900)).toBe(true);
+    expect(hosts.filter((host) => host.name === 'archive')).toHaveLength(2);
+    // ... and none passes a limit of `validation.ts`.
+    for (const host of hosts) {
+      expect([...host.name].length).toBeLessThanOrEqual(128);
+      expect([...host.address].length).toBeLessThanOrEqual(253);
+      expect([...host.username].length).toBeLessThanOrEqual(128);
+      expect([...(host.description ?? '')].length).toBeLessThanOrEqual(2_000);
+      expect(host.tags.length).toBeLessThanOrEqual(32);
+    }
+    // A folder five levels deep (the limit is eight).
+    const byId = new Map(groups.map((group) => [group.id, group]));
+    const depth = (id: string | null): number =>
+      id ? 1 + depth(byId.get(id)?.parent_id ?? null) : 0;
+    expect(Math.max(...groups.map((group) => depth(group.id)))).toBe(5);
+    for (const group of groups) expect([...group.name].length).toBeLessThanOrEqual(128);
+  });
+
+  it('is the plain fixtures without the flags', async () => {
+    mockIpc.resetMock();
+    expect(await api.hostList()).toHaveLength(5);
+  });
+});

@@ -27,7 +27,7 @@
   }
 </script>
 
-<section class="viewport" aria-label="Notifications">
+<section class="viewport" aria-label="Notices">
   {#each notices.visible as notice (notice.id)}
     <div
       class="notice {notice.kind}"

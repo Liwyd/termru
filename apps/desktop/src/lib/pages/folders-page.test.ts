@@ -207,6 +207,58 @@ describe('the page', () => {
   });
 });
 
+describe('the rail form arrives', () => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  const form = () => target.querySelector('.rail form');
+
+  it('moves in when it opens while the page is open, and not on a later click', async () => {
+    window.dispatchEvent(new Event('pointerdown'));
+    mountPage();
+    await frame();
+    await frame();
+    // "All hosts" has no form: choosing a folder opens it.
+    expect(form()).toBeNull();
+    click(treeItem('Sandbox'));
+    expect(form()?.classList.contains('appear')).toBe(true);
+    // Another folder reuses the same form: it does not play again.
+    const same = form();
+    click(treeItem('Europe'));
+    expect(form()).toBe(same);
+  });
+
+  it('does not move when the page opens on a folder', async () => {
+    window.dispatchEvent(new Event('pointerdown'));
+    hosts.folderSelection = 'sand';
+    mountPage();
+    expect(form()).not.toBeNull();
+    await frame();
+    expect(form()?.classList.contains('appear')).toBe(false);
+    hosts.folderSelection = 'all';
+  });
+});
+
+describe('the tree keeps its selection in view', () => {
+  it('scrolls the selected folder into view, on opening and on a new choice', async () => {
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.querySelector('.label')?.textContent?.trim() ?? '?');
+    };
+    try {
+      hosts.folderSelection = 'sand';
+      mountPage();
+      await tick();
+      expect(scrolled).toContain('Sandbox');
+      click(treeItem('Europe'));
+      await tick();
+      expect(scrolled.at(-1)).toBe('Europe');
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+      hosts.folderSelection = 'all';
+    }
+  });
+});
+
 describe('moving hosts', () => {
   it('moves a host with the Move menu, and says where', async () => {
     mountPage();

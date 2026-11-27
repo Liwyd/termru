@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from '../count-line';
   import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import { route } from '../stores/route.svelte';
   import { hosts } from '../stores/hosts.svelte';
@@ -35,9 +36,12 @@
   const context = $derived.by(() => {
     switch (route.route) {
       case 'hosts': {
+        // "No saved hosts" would be false: they could not be read.
+        if (hosts.error) return 'Could not read the hosts';
         const total = hosts.hosts.length;
         const running = sessions.tabs.length;
-        const hostLine = total === 0 ? 'No saved hosts' : `${total} host${total === 1 ? '' : 's'}`;
+        const hostLine =
+          total === 0 ? 'No saved hosts' : `${formatCount(total)} host${total === 1 ? '' : 's'}`;
         const sessionLine =
           running === 0 ? 'no sessions' : `${running} session${running === 1 ? '' : 's'} running`;
         return `${hostLine} · ${sessionLine}`;
@@ -62,13 +66,13 @@
   });
 </script>
 
-<footer class="statusbar" role="status">
+<div class="statusbar" role="status" aria-label="Status">
   <span class="context">{context}</span>
   <span class="right">
     <span>SSH · {syncState}</span>
     <span class="hint">{paletteHint} Quick switch</span>
   </span>
-</footer>
+</div>
 
 <style>
   .statusbar {

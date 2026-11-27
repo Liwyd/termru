@@ -275,6 +275,22 @@ describe('the key of an identity', () => {
   });
 });
 
+describe('the rail form arrives', () => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+  it('moves in when New identity opens it, not when the page opens on an identity', async () => {
+    window.dispatchEvent(new Event('pointerdown'));
+    await mountPage();
+    await frame();
+    // The page opened on the first identity: its form is part of the first paint.
+    expect(target.querySelector('.rail form')?.classList.contains('appear')).toBe(false);
+    click(listItem('work-ed25519'));
+    click(findButton(target, 'New identity'));
+    // The same form element is reused between edit and create: no replay.
+    expect(target.querySelector('.rail form')).not.toBeNull();
+  });
+});
+
 describe('renaming', () => {
   it('renames an identity and its comment', async () => {
     await mountPage();

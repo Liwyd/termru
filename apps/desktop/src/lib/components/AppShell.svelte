@@ -19,9 +19,9 @@
 
   <AppNav />
 
-  <div class="outlet">
+  <main class="outlet">
     {@render children()}
-  </div>
+  </main>
 
   <StatusBar />
 </div>

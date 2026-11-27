@@ -97,13 +97,23 @@
     font-weight: var(--termru-text-control-weight);
     line-height: var(--termru-text-control-lh);
     cursor: pointer;
-    transition:
-      color var(--motion-fast) var(--ease-quiet),
-      border-color var(--motion-fast) var(--ease-quiet);
+    /* Only the press moves. The active page changes at once: a route is often
+       switched from the keyboard, and that is never animated. */
+    transition: transform var(--motion-fast) var(--ease-out);
   }
 
-  .item:hover {
-    color: var(--termru-fg);
+  /* The hover fade belongs to the items that are not active, so becoming
+     active (a click, or a shortcut) does not fade. */
+  @media (hover: hover) and (pointer: fine) {
+    .item:not(.active) {
+      transition:
+        transform var(--motion-fast) var(--ease-out),
+        color var(--motion-fast) ease;
+    }
+
+    .item:not(.active):hover {
+      color: var(--termru-fg);
+    }
   }
 
   /* Active = weight + underline, never colour alone (Doc A.04). */
@@ -124,8 +134,18 @@
 
   .connected {
     margin-left: auto;
+    flex: none;
+    white-space: nowrap;
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     color: var(--termru-muted);
+  }
+
+  /* The six pages fill a narrow window: the count of connected sessions is on
+     the Sessions item and in the status bar. */
+  @media (max-width: 900px) {
+    .connected {
+      display: none;
+    }
   }
 </style>

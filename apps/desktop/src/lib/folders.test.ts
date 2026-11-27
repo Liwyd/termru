@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  shortenPath,
+  treeIndent,
   MAX_GROUP_DEPTH,
   buildFolderTree,
   canMoveUnder,
@@ -216,5 +218,20 @@ describe('deleting a folder', () => {
     expect(deleteSentence('Empty', { hosts: 0, subfolders: 0, destination: null })).toBe(
       '“Empty” is empty. No host is affected.',
     );
+  });
+});
+
+describe('long folder paths', () => {
+  it('shortens a path to its last two folders and leaves a short one alone', () => {
+    expect(shortenPath('Sandbox')).toBe('Sandbox');
+    expect(shortenPath('Production / Europe')).toBe('Production / Europe');
+    expect(shortenPath('Northwind / Platform / Production / Europe / Legacy billing')).toBe(
+      '… / Europe / Legacy billing',
+    );
+    expect(shortenPath('a / b / c', 1)).toBe('… / c');
+  });
+
+  it('indents the first two levels by 22 px and the deeper ones by 10', () => {
+    expect([0, 1, 2, 3, 4, 7].map(treeIndent)).toEqual([0, 22, 44, 54, 64, 94]);
   });
 });

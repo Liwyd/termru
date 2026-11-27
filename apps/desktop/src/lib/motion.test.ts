@@ -107,3 +107,83 @@ describe('motion tokens (Doc B)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('what arrives and what is pressed (4d)', () => {
+  it('moves an arriving block by opacity and transform only, 160 ms ease-out, 4 px', () => {
+    const rule = /\.appear\.appear-in\s*\{([^{}]*)\}/.exec(CSS)?.[1] ?? '';
+    expect(rule).toMatch(/opacity var\(--appear-duration\) var\(--ease-out\)/);
+    expect(rule).toMatch(/transform var\(--appear-duration\) var\(--ease-out\)/);
+    // Nothing else is transitioned.
+    expect(rule.match(/(^|\s)(width|height|margin|padding|top|left)\b/)).toBeNull();
+    const shift = /--appear-shift:\s*4px/.exec(CSS);
+    expect(shift).not.toBeNull();
+    expect(/--appear-duration:\s*var\(--motion-context\)/.test(CSS)).toBe(true);
+  });
+
+  it('takes the shift away and keeps an 80 ms fade under reduced motion (system and preference)', () => {
+    const reduced =
+      /prefers-reduced-motion: reduce\)\s*\{\s*html:root:not\(\[data-reduced-motion='off'\]\)\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
+    expect(reduced.test(CSS)).toBe(true);
+    const forced =
+      /html:root\[data-reduced-motion='on'\]\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
+    expect(forced.test(CSS)).toBe(true);
+  });
+
+  it('presses every button by 3 % in 100 ms, menu entries excepted, at specificity zero', () => {
+    expect(CSS).toMatch(
+      /:where\(button:not\(\[role='menuitem'\]\):active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\)\s*\{\s*transform:\s*scale\(var\(--press-scale, 0\.97\)\)/,
+    );
+    expect(CSS).toMatch(
+      /:where\(button:not\(\[role='menuitem'\]\)\)\s*\{\s*transition:\s*transform var\(--motion-fast\) var\(--ease-out\)/,
+    );
+  });
+
+  it('puts every global hover behind a pointer that can hover', () => {
+    // Strip the (nested) media blocks that gate hover, then look for the rest.
+    let rest = CSS;
+    const media = /@media \(hover: hover\) and \(pointer: fine\)\s*\{/g;
+    for (let match = media.exec(rest); match; match = media.exec(rest)) {
+      let depth = 1;
+      let end = match.index + match[0].length;
+      while (depth > 0 && end < rest.length) {
+        if (rest[end] === '{') depth += 1;
+        else if (rest[end] === '}') depth -= 1;
+        end += 1;
+      }
+      rest = rest.slice(0, match.index) + rest.slice(end);
+      media.lastIndex = match.index;
+    }
+    expect(rest.match(/[^{}]*:hover[^{}]*\{/g)).toBeNull();
+  });
+
+  it('changes the state of a tab, a switch and a nav item at once (they are keyboard targets)', () => {
+    const read = (path: string) =>
+      readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+    // The tab name: no transition and no press.
+    expect(read('./components/TabBar.svelte')).toMatch(
+      /\.label \{[^}]*transition: none;[^}]*\}\s*\.label:active \{\s*transform: none;/,
+    );
+    // The switch: only the press moves.
+    expect(read('./components/Toggle.svelte')).toMatch(
+      /\.toggle \{[^}]*transition: transform var\(--motion-fast\) var\(--ease-out\);[^}]*\}/,
+    );
+    // The nav item and the hosts filter tab: the base rule moves the press only; the colour
+    // fade is declared for the items that are not active, under the hover gate.
+    for (const [path, selector] of [
+      ['./components/AppNav.svelte', '\\.item'],
+      ['./pages/HostsPage.svelte', '\\.tabs button'],
+    ] as const) {
+      const source = read(path);
+      expect(source).toMatch(
+        new RegExp(
+          `${selector} \\{[^}]*transition:\\s*transform var\\(--motion-fast\\) var\\(--ease-out\\);[^}]*\\}`,
+        ),
+      );
+      expect(source).toMatch(
+        new RegExp(
+          `@media \\(hover: hover\\) and \\(pointer: fine\\) \\{\\s*${selector}:not\\(\\.active\\) \\{\\s*transition:[^}]*color var\\(--motion-fast\\) ease`,
+        ),
+      );
+    }
+  });
+});

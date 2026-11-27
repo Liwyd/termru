@@ -62,6 +62,40 @@ the jsdom flush, which is unstable at 10–90 ms).
 **Budget:** filtering stays inside a frame at 10,000 hosts, and the DOM
 holds a constant number of rows.
 
+### Scrolling 10,000 rows (a real browser)
+
+The rows are 70 px (frame 1), windowed with 6 rows of overscan. The rendered
+rows sit in one window that is moved with a `transform`, inside a sizer as tall
+as the whole list, so a scroll does not lay the other rows out again; a row is
+`contain: layout style`. Password lookups (a keyring call per row) wait until
+the scroll has been still for 150 ms, so a flick through the list asks about
+the rows it stops on, not about every row it passes.
+
+Measured in headless Chrome (software rendering, no GPU, the Vite dev build,
+the 2-core machine above) against the mock backend at `?mock&many=10000`: a
+script moves `scrollTop` by 240 px on every animation frame for four seconds,
+which is 14,000 px/s, several times faster than a hard wheel flick.
+
+| | Before | After |
+|---|---|---|
+| Frames per second | 44–46 | 53–54 |
+| Frames over 25 ms (of ~200) | 49–54 | 20–26 |
+| Layout, main thread, 4 s | 1,195 ms | 462 ms |
+| Long tasks (over 50 ms) | 1–3 | 0–1 |
+| Rows in the DOM | 18–19 | 18–19 |
+
+The same script on the 5-host page, where nothing scrolls, gives 60 fps, so
+about 60 fps is this machine's ceiling. A CPU profile of the run shows that
+the script's own `scrollTop` writes (they force a layout) take most of the
+JavaScript time, and the application's share is about 2 ms per frame. It
+has not been measured on a webview (WebKitGTK, WebView2, WKWebView) or on a
+machine with a GPU.
+
+Repeat it with `npm run dev` running in `apps/desktop`, then
+`node scripts/scroll-perf.mjs 'http://127.0.0.1:1420/?mock&many=10000#hosts' 4 240`
+(`PROFILE=1` adds a CPU profile). The script drives headless Chrome through the
+DevTools protocol and reads `Performance.getMetrics`.
+
 ## The SSH session
 
 `cargo test -p termru-ssh --test sshd large_output_flood -- --nocapture`

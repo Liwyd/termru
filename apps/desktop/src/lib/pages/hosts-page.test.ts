@@ -151,7 +151,9 @@ describe('hosts page header', () => {
     render();
 
     expect(document.body.textContent).toContain('Two saved connections. One session running.');
-    expect(document.body.textContent).toContain('WORKSPACE / CONNECTION LIBRARY');
+    expect(document.body.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toMatch(
+      /Workspace\s*\/\s*Connection library/,
+    );
     expect(document.body.textContent).toContain('2 hosts');
     expect(document.body.textContent).toContain('Recent activity');
   });
@@ -162,13 +164,13 @@ describe('hosts page header', () => {
     render();
 
     expect(findButton('All hosts 2').getAttribute('aria-pressed')).toBe('true');
-    expect(findButton('☆ Favorites 1').getAttribute('aria-pressed')).toBe('false');
+    expect(findButton('Favorites 1').getAttribute('aria-pressed')).toBe('false');
     expect(findButton('Unfiled 2')).toBeTruthy();
 
-    findButton('☆ Favorites 1').click();
+    findButton('Favorites 1').click();
     flushSync();
     expect(hosts.filterTab).toBe('favorites');
-    expect(findButton('☆ Favorites 1').getAttribute('aria-pressed')).toBe('true');
+    expect(findButton('Favorites 1').getAttribute('aria-pressed')).toBe('true');
   });
 });
 
@@ -187,7 +189,7 @@ describe('hosts page state matrix', () => {
     render();
 
     expect(document.body.textContent).toContain('No hosts yet');
-    const button = findButton('+ New host');
+    const button = findButton('New host');
     button.click();
     flushSync();
     expect(route.route).toBe('host-edit');
@@ -250,7 +252,7 @@ describe('hosts page banner', () => {
       'atlas-prod and relay-edge stay connected while you organize your workspace.',
     );
 
-    findButton('↗ Return to atlas-prod').click();
+    findButton('Return to atlas-prod').click();
     expect(rendered.onopen).toHaveBeenCalledWith(sessions.tabs[0]?.panes[0]?.host);
   });
 
@@ -262,7 +264,74 @@ describe('hosts page banner', () => {
     expect(document.body.textContent).toContain(
       'atlas-prod stays connected while you organize your workspace.',
     );
-    expect(findButton('↗ Return to atlas-prod')).toBeTruthy();
+    expect(findButton('Return to atlas-prod')).toBeTruthy();
+  });
+});
+
+describe('hosts page with a lot of everything', () => {
+  it('counts a big library with separators', () => {
+    hosts.hosts = Array.from({ length: 10_005 }, (_, i) => host(`h-${i}`));
+    render();
+    expect(document.body.textContent).toContain('10,005 saved connections.');
+    expect(document.body.textContent).toContain('10,005 hosts · Recent activity');
+    expect(findButton('All hosts 10,005').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('names three sessions at most in the banner, and keeps its button on one line', () => {
+    const longName =
+      'customer-facing-reporting-service-eu-central-1-blue-green-canary-deployment-primary';
+    hosts.hosts = ['a', 'b', 'c', 'd', 'e', longName].map((name) => host(name));
+    sessions.tabs = [longName, 'b', 'c', 'd', 'e', 'a'].map((name) => liveTab(name));
+    render();
+    expect(document.body.textContent).toContain(
+      `${longName}, b and 4 more stay connected while you organize your workspace.`,
+    );
+    const back = document.body.querySelector('.banner-return') as HTMLButtonElement;
+    expect(back.title).toBe(`Return to ${longName}`);
+    expect(back.querySelector('.return-label')?.textContent).toBe(`Return to ${longName}`);
+  });
+});
+
+describe('hosts page banner motion', () => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  const banner = () => document.body.querySelector('section[aria-label="Running sessions"]');
+
+  it('does not move when it is part of the first paint', async () => {
+    window.dispatchEvent(new Event('pointerdown'));
+    hosts.hosts = [host('atlas-prod')];
+    sessions.tabs = [liveTab('atlas-prod')];
+    render();
+    await frame();
+    await frame();
+    expect(banner()).not.toBeNull();
+    expect(banner()?.classList.contains('appear')).toBe(false);
+  });
+
+  it('moves in when a session starts while the page is open', async () => {
+    window.dispatchEvent(new Event('pointerdown'));
+    hosts.hosts = [host('atlas-prod')];
+    render();
+    await frame();
+    await frame();
+    expect(banner()).toBeNull();
+
+    sessions.tabs = [liveTab('atlas-prod')];
+    flushSync();
+    expect(banner()?.classList.contains('appear')).toBe(true);
+    await vi.waitFor(() => expect(banner()?.classList.contains('appear-in')).toBe(true));
+  });
+
+  it('does not move when a key started the session', async () => {
+    hosts.hosts = [host('atlas-prod')];
+    render();
+    await frame();
+    await frame();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    sessions.tabs = [liveTab('atlas-prod')];
+    flushSync();
+    expect(banner()).not.toBeNull();
+    expect(banner()?.classList.contains('appear')).toBe(false);
+    window.dispatchEvent(new Event('pointerdown'));
   });
 });
 

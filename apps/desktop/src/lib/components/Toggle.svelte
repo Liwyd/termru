@@ -43,6 +43,9 @@
     font-size: var(--termru-text-secondary-size);
     font-weight: 500;
     color: var(--termru-muted);
+    /* A switch is flipped with Space as often as with a click: its state
+       changes at once. Only the press gives. */
+    transition: transform var(--motion-fast) var(--ease-out);
   }
 
   .toggle.on {

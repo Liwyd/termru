@@ -149,9 +149,9 @@ afterEach(() => {
 });
 
 describe('opening the host editor', () => {
-  it('"+ New host" opens an empty editor and Cancel goes back', async () => {
+  it('"New host" opens an empty editor and Cancel goes back', async () => {
     await start();
-    click(findButton(target, '+ New host'));
+    click(findButton(target, 'New host'));
     await vi.waitFor(() => expect(route.route).toBe('host-edit'));
     expect(target.textContent).toContain('New connection');
     // It does not bounce back to the hosts page.

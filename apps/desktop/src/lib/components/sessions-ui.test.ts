@@ -239,20 +239,25 @@ describe('TabBar rename', () => {
     expect(tab.title).toBe('web-1');
   });
 
-  it('is reachable from the keyboard: F2 renames, Enter and Space open the tab', () => {
+  it('is reachable from the keyboard: the name is a button (Enter, Space) and F2 renames', () => {
     const first = openTab('web-1');
     const second = openTab('db-1');
     expect(sessions.activeId).toBe(second.tab.id);
     mountBar(first.tab);
-    const tabElement = target.querySelector('[role="tab"]') as HTMLElement;
+    const item = target.querySelector('li.tab') as HTMLElement;
+    const name = item.querySelector('button.label') as HTMLButtonElement;
 
-    press(tabElement, 'Enter');
-    expect(sessions.activeId).toBe(first.tab.id);
-    sessions.setActive(second.tab.id);
-    press(tabElement, ' ');
+    // One tab stop per tab, no widget role that would promise arrow keys.
+    expect(item.getAttribute('role')).toBeNull();
+    expect(item.getAttribute('tabindex')).toBeNull();
+    expect(name.tagName).toBe('BUTTON');
+    // The tab on screen says so to a screen reader.
+    expect(name.getAttribute('aria-current')).toBe('true');
+
+    click(name);
     expect(sessions.activeId).toBe(first.tab.id);
 
-    press(tabElement, 'F2');
+    press(name, 'F2');
     expect(input()).not.toBeNull();
     expect(document.activeElement).toBe(input());
   });
@@ -357,6 +362,22 @@ describe('StatusBar', () => {
     flushSync();
   }
 
+  it('does not claim there are no hosts when they could not be read, and counts a big library', () => {
+    hosts.hosts = [];
+    hosts.error = 'the store is locked';
+    route.route = 'hosts';
+    mountBar();
+    expect(target.textContent).toContain('Could not read the hosts');
+    expect(target.textContent).not.toContain('No saved hosts');
+    hosts.error = null;
+    flushSync();
+    expect(target.textContent).toContain('No saved hosts');
+    hosts.hosts = Array.from({ length: 10_005 }, (_, i) => host(`h-${i}`));
+    flushSync();
+    expect(target.textContent).toContain('10,005 hosts');
+    hosts.hosts = [];
+  });
+
   it('shows the local workspace when signed out', () => {
     sync.status = null;
     mountBar();
@@ -435,7 +456,7 @@ describe('HostsPage', () => {
     click(target.querySelector('[aria-label="More actions for web-1"]') as Element);
     click(
       Array.from(document.querySelectorAll('[role="menuitem"]')).find(
-        (item) => item.textContent === 'Delete',
+        (item) => item.textContent?.trim() === 'Delete',
       ) as Element,
     );
     click(findButton(document.querySelector('[role="alertdialog"]') as HTMLElement, 'Delete'));
@@ -452,7 +473,7 @@ describe('HostsPage', () => {
     click(target.querySelector('[aria-label="More actions for web-1"]') as Element);
     click(
       Array.from(document.querySelectorAll('[role="menuitem"]')).find(
-        (item) => item.textContent === 'Delete',
+        (item) => item.textContent?.trim() === 'Delete',
       ) as Element,
     );
     click(findButton(document.querySelector('[role="alertdialog"]') as HTMLElement, 'Delete'));

@@ -5,6 +5,8 @@
   export interface Crumb {
     label: string;
     onclick?: () => void;
+    /** The full text, when `label` is a shortened form of it (shown on hover). */
+    title?: string;
   }
 
   /**
@@ -33,10 +35,14 @@
         <li>
           {#if index > 0}<span class="sep" aria-hidden="true">/</span>{/if}
           {#if crumb.onclick}
-            <button type="button" class="crumb-link" onclick={crumb.onclick}>{crumb.label}</button>
+            <button type="button" class="crumb-link" title={crumb.title} onclick={crumb.onclick}
+              >{crumb.label}</button
+            >
           {:else}
-            <span aria-current={index === crumbs.length - 1 ? 'page' : undefined}
-              >{crumb.label}</span
+            <span
+              class="crumb-text"
+              title={crumb.title ?? crumb.label}
+              aria-current={index === crumbs.length - 1 ? 'page' : undefined}>{crumb.label}</span
             >
           {/if}
         </li>
@@ -84,8 +90,14 @@
     min-width: 0;
   }
 
-  .crumbs li > span:not(.sep) {
-    overflow-wrap: anywhere;
+  /* A crumb is one line, whatever it holds (a 128 character host name, a
+     folder five levels deep): it ends in an ellipsis and its title has the rest. */
+  .crumbs li > .crumb-text,
+  .crumbs li > .crumb-link {
+    max-width: 36ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .sep {

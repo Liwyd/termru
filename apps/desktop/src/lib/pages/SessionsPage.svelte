@@ -47,15 +47,19 @@
 </script>
 
 <div class="page" data-sx-page>
-  <div class="strip" role="tablist" aria-label="Open sessions">
-    {#each sessions.tabs as tab (tab.id)}
-      <TabBar {tab} active={tab.id === sessions.activeId} />
-    {/each}
-    <button type="button" class="new sx-press" onclick={startNewSession}>
-      <SessionIcon name="plus" />
-      New session
-    </button>
-  </div>
+  <nav class="strip-nav" aria-label="Open sessions">
+    <ul class="strip">
+      {#each sessions.tabs as tab (tab.id)}
+        <TabBar {tab} active={tab.id === sessions.activeId} />
+      {/each}
+      <li class="new-item">
+        <button type="button" class="new sx-press" onclick={startNewSession}>
+          <SessionIcon name="plus" />
+          New session
+        </button>
+      </li>
+    </ul>
+  </nav>
 
   {#if active}
     <SessionToolbar tab={active} />
@@ -118,10 +122,23 @@
   }
 
   /* The strip is the canvas; the active tab is the toolbar's white. */
+  .strip-nav {
+    flex: none;
+  }
+
+  .new-item {
+    display: flex;
+    align-items: center;
+    flex: none;
+    list-style: none;
+  }
+
   .strip {
     display: flex;
     align-items: stretch;
     flex: none;
+    margin: 0;
+    list-style: none;
     height: var(--termru-tabstrip-h);
     padding: 0 var(--termru-space-5) 0 var(--termru-space-5);
     border-bottom: var(--termru-border-w) solid var(--termru-border);

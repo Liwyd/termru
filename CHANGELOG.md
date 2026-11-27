@@ -125,6 +125,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Links in terminal output open in the system browser: `tauri-plugin-opener` and
   `@tauri-apps/plugin-opener`, with a capability that allows only `http://*`,
   `https://*` and `mailto:*` URLs (no file paths, no other schemes).
+* Hosts page body rebuilt to frame 1 (R7): the shared page header (breadcrumb,
+  title, count line, `New host` with an icon), the filter row (search with its
+  shortcut, a folder select with a folder icon and caret, the sort line), plain
+  filter tabs with counts, a table with a band header and 70 px rows (star,
+  host and `user@address:port`, folder, authentication, last session, actions,
+  all on fixed columns so every row lines up), the current row tinted, and the
+  "Your sessions are still running" banner under the rows instead of over the
+  filters. Narrow windows (900 px and below) drop the folder and authentication
+  columns.
+* Accessibility checks: `axe-core` 4.14.1 (MPL-2.0, dev dependency, never
+  bundled) runs over every route and dialog in `src/lib/a11y.test.ts`, with the
+  rules jsdom cannot evaluate (colour contrast, target size) switched off and
+  named in `src/lib/test-support/axe.ts`; a second set of tests proves that
+  every form error is wired with `aria-invalid` and `aria-describedby`.
+  `docs/accessibility.md` has the keyboard checklist of every page, the focus
+  order, screen reader notes and the known gaps.
+* Motion: every button gives under the press (scale 0.97, 100 ms, transform
+  only; menu entries excepted) and the global hover is behind
+  `@media (hover: hover) and (pointer: fine)`. A block that arrives while the
+  user is looking (the running-sessions banner, the form of the Folders and
+  Identities rails) fades in and rises 4 px in 160 ms (`actions/appear.ts`,
+  CSS transitions); it does not move in the first paint of a page, after a key
+  press, or under reduced motion (no shift, 80 ms fade).
+* Dev mock backend flags `&many[=N]` (N generated hosts, default 10 000) and
+  `&long` (names at the 128 character limit, a folder five levels deep with long
+  names, long identity and sync values, a 2 000 character comment, twelve tags,
+  a one-letter host, a non-Latin name, two hosts with the same name).
+  `scripts/scroll-perf.mjs` scrolls the windowed table in headless Chrome and
+  reports frame times (numbers in `docs/performance.md`).
 
 ### Security
 
@@ -163,6 +192,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * A tab moved to a new window keeps its session: a session without a view
   now lives for a 10 s grace period instead of being closed at once.
 * Hosts and preferences reload after a sync pull (`sync-applied` event).
+* Accessibility: the page has a `main` landmark (page headers were counted as
+  extra banners); the status bar is a `status` region on a `div`, not a role on
+  `footer`; the Sessions tab strip is a list of name and close buttons with
+  `aria-current` (a `tab` may not contain buttons, and the strip never had the
+  arrow-key behaviour of a tab list); the Notices region no longer shares its
+  name with the Preferences section; the Scrollback and New tag errors are tied
+  to their fields.
+* The hosts table keeps its columns in line (the actions column was `auto`, so
+  `Open` and `Connect` rows shifted the others), its star and More buttons are
+  drawn the same on every platform, and it scrolls 10 000 rows at about 54 fps
+  instead of 44 in a headless software-rendered Chrome (rows in a window moved
+  with a transform, rows contained). Keyring lookups for the rows on screen wait
+  until a scroll has been still for 150 ms.
+* Counts of 1 000 and more have a thousands separator everywhere (the Hosts
+  header, tabs, sort line, status bar, Folders tree). The banner names at most
+  three sessions ("a, b and 4 more"), its button and the breadcrumbs are one
+  line with the full text as a tooltip, a folder five levels deep shows its last
+  two folders in the table and its leaf in the editor's breadcrumb, the Folders
+  tree indents deep levels by 10 px and scrolls the selected folder into view in
+  a narrow window, and the nav no longer wraps "3 sessions connected" at 760 px
+  (it is hidden under 900 px; the count is on the Sessions item).
+* The nav, the Hosts filter tabs, switches and the session tab names no longer
+  fade when their state changes (a key press changes them as often as a click);
+  only the hover fades, under the hover gate.
 
 ### Changed
 
@@ -195,6 +248,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * The shell draws the page on the white surface (as frames 1, 4, 5 and 8 do),
   the title bar on the canvas and the status bar on the secondary surface; the
   Hosts page no longer sits on the grey canvas.
+* The row menu of the Hosts table is the `PopMenu` of the Sessions page (scales
+  in from the button or the pointer, 160 ms in, 100 ms out, no motion when the
+  keyboard opens it, named "Actions for <host>"); the old unstyled
+  `ContextMenu` is removed.
+* Copy: the empty Hosts state reads "No hosts yet. Add your first host."; the
+  Hosts footer mentions Enter; the Favorites tab and the editor's Favorite
+  button use the same star icon as the rows instead of a text glyph; the Folders
+  rail no longer ends with "No dialog interrupts your workspace".
 
 ## [0.2.0] — 2026-10-25
 

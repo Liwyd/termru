@@ -1,15 +1,19 @@
 <script lang="ts">
-  import { countLine, joinNames } from '../count-line';
+  import { appear } from '../actions/appear';
+  import { countLine, formatCount, joinNames } from '../count-line';
   import { formatLastSession } from '../last-session';
   import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import ContextConfirm from '../components/ContextConfirm.svelte';
   import HostTable from '../components/HostTable.svelte';
+  import Icon from '../components/Icon.svelte';
+  import PageHeader from '../components/PageHeader.svelte';
   import { hosts } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
   import { notify } from '../notify.svelte';
+  import { afterFirstPaint } from '../settled.svelte';
   import type { Host, SessionSecrets } from '../types';
 
   let {
@@ -24,6 +28,8 @@
   let pendingDelete = $state<Host | null>(null);
   let online = $state(true);
   let searchInput = $state<HTMLInputElement | null>(null);
+  /** The banner that comes while the page is open moves in; one that is there at the start does not. */
+  const page = afterFirstPaint();
 
   // "Search hosts" from another page asks for the focus before this page
   // exists: the request waits in the store and is served once the field is
@@ -84,7 +90,7 @@
 
   const headerCount = $derived(countLine(hosts.hosts.length, sessions.tabs.length));
   const sortLine = $derived(
-    `${hosts.rows.length} ${hosts.rows.length === 1 ? 'host' : 'hosts'} · Recent activity ↓`,
+    `${formatCount(hosts.rows.length)} ${hosts.rows.length === 1 ? 'host' : 'hosts'} · Recent activity`,
   );
   const bannerSentence = $derived(
     `${joinNames(runningNames)} ${runningNames.length === 1 ? 'stays' : 'stay'} connected while you organize your workspace.`,
@@ -125,45 +131,27 @@
 </script>
 
 <div class="page">
-  <header class="header">
-    <p class="breadcrumb">WORKSPACE / CONNECTION LIBRARY</p>
-    <div class="title-row">
-      <div>
-        <h1>Hosts</h1>
-        {#if !hosts.error}
-          <p class="count">{headerCount}</p>
-        {/if}
-        {#if !online}
-          <p class="offline">
-            Offline · Changes are safe locally. Last sync {lastSync}.
-          </p>
-        {/if}
-      </div>
-      <button type="button" class="primary" onclick={() => route.edit(null)}>+ New host</button>
-    </div>
-  </header>
-
-  {#if runningNames.length > 0}
-    <section class="banner" aria-label="Running sessions">
-      <span class="prompt" aria-hidden="true">&gt;_</span>
-      <div class="banner-text">
-        <h2>Your sessions are still running</h2>
-        <p>{bannerSentence}</p>
-      </div>
-      <button type="button" class="banner-return" onclick={returnToFirstSession}>
-        <span aria-hidden="true">↗</span>
-        Return to {runningNames[0]}
+  <PageHeader
+    crumbs={[{ label: 'Workspace' }, { label: 'Connection library' }]}
+    title="Hosts"
+    description={hosts.error ? 'The saved connections could not be read.' : headerCount}
+  >
+    {#snippet actions()}
+      <button type="button" class="primary new" onclick={() => route.edit(null)}>
+        <Icon name="plus" size={17} />
+        New host
       </button>
-    </section>
+    {/snippet}
+  </PageHeader>
+
+  {#if !online}
+    <p class="offline">Offline · Changes are safe locally. Last sync {lastSync}.</p>
   {/if}
 
   {#if !hosts.error}
     <div class="filters">
       <div class="search">
-        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-          <circle cx="7" cy="7" r="4.5" />
-          <path d="M10.5 10.5 L14 14" />
-        </svg>
+        <Icon name="search" size={16} />
         <input
           type="search"
           placeholder="Search name, address or username"
@@ -171,15 +159,22 @@
           bind:value={hosts.query}
           bind:this={searchInput}
         />
-        <kbd>{searchHint}</kbd>
+        {#if searchHint}<kbd>{searchHint}</kbd>{/if}
       </div>
-      <select class="folder" aria-label="Folder" bind:value={hosts.folderFilter}>
-        <option value="">All folders</option>
-        {#each hosts.folderOptions as option (option.id)}
-          <option value={option.id}>{option.label}</option>
-        {/each}
-      </select>
-      <p class="sortline">{sortLine}</p>
+      <div class="folder">
+        <Icon name="folder" size={16} />
+        <select aria-label="Folder" bind:value={hosts.folderFilter}>
+          <option value="">All folders</option>
+          {#each hosts.folderOptions as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
+        <Icon name="chevron-down" size={12} />
+      </div>
+      <p class="sortline">
+        {sortLine}
+        <Icon name="arrow-down" size={14} />
+      </p>
     </div>
 
     <div class="tabs" role="group" aria-label="Filter hosts">
@@ -189,7 +184,7 @@
         aria-pressed={hosts.filterTab === 'all'}
         onclick={() => (hosts.filterTab = 'all')}
       >
-        All hosts <span class="n">{hosts.counts.all}</span>
+        All hosts <span class="n">{formatCount(hosts.counts.all)}</span>
       </button>
       <button
         type="button"
@@ -197,7 +192,23 @@
         aria-pressed={hosts.filterTab === 'favorites'}
         onclick={() => (hosts.filterTab = 'favorites')}
       >
-        ☆ Favorites <span class="n">{hosts.counts.favorites}</span>
+        <svg
+          class="fav"
+          viewBox="0 0 20 20"
+          width="14"
+          height="14"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path
+            d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linejoin="round"
+          />
+        </svg>
+        Favorites <span class="n">{formatCount(hosts.counts.favorites)}</span>
       </button>
       <button
         type="button"
@@ -207,14 +218,14 @@
       >
         Recent
       </button>
-      <span class="divider" aria-hidden="true">|</span>
+      <span class="divider" aria-hidden="true"></span>
       <button
         type="button"
         class:active={hosts.filterTab === 'unfiled'}
         aria-pressed={hosts.filterTab === 'unfiled'}
         onclick={() => (hosts.filterTab = 'unfiled')}
       >
-        Unfiled <span class="n">{hosts.counts.unfiled}</span>
+        Unfiled <span class="n">{formatCount(hosts.counts.unfiled)}</span>
       </button>
     </div>
   {/if}
@@ -236,8 +247,11 @@
       </div>
     {:else if hosts.hosts.length === 0}
       <div class="state">
-        <p class="state-text">No hosts yet — add your first one.</p>
-        <button type="button" class="primary" onclick={() => route.edit(null)}>+ New host</button>
+        <p class="state-text">No hosts yet. Add your first host.</p>
+        <button type="button" class="primary" onclick={() => route.edit(null)}>
+          <Icon name="plus" size={17} />
+          New host
+        </button>
       </div>
     {:else if hosts.rows.length === 0}
       <div class="state">
@@ -255,8 +269,31 @@
         ondelete={remove}
         ontogglefavorite={(target) => hosts.toggleFavorite(target)}
       />
+    {/if}
+
+    <!-- Frame 1: the banner sits under the rows, not over the filters. -->
+    {#if runningNames.length > 0}
+      <section class="banner" aria-label="Running sessions" use:appear={{ enabled: page.value }}>
+        <span class="prompt" aria-hidden="true">&gt;_</span>
+        <div class="banner-text">
+          <h2>Your sessions are still running</h2>
+          <p>{bannerSentence}</p>
+        </div>
+        <button
+          type="button"
+          class="banner-return"
+          title="Return to {runningNames[0]}"
+          onclick={returnToFirstSession}
+        >
+          <Icon name="arrow-up-right" size={15} />
+          <span class="return-label">Return to {runningNames[0]}</span>
+        </button>
+      </section>
+    {/if}
+
+    {#if !hosts.loading && !hosts.error && hosts.rows.length > 0}
       <footer class="hint">
-        Double-click a host to connect. Delete is available in the row's More menu.
+        Double-click a row or press Enter to connect. Delete is in the row’s More menu.
       </footer>
     {/if}
   </div>
@@ -280,113 +317,39 @@
     gap: var(--termru-space-5);
   }
 
-  .breadcrumb {
-    margin: 0;
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
-    color: var(--termru-muted);
-  }
-
-  .title-row {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--termru-space-4);
-  }
-
-  h1 {
-    margin: 0;
-    font-size: var(--termru-text-title-size);
-    line-height: var(--termru-text-title-lh);
-    font-weight: var(--termru-text-title-weight);
-    color: var(--termru-fg);
-  }
-
-  .count {
-    margin: 0;
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
-    color: var(--termru-muted);
+  .new {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--termru-space-2);
+    padding: 0 var(--termru-space-4);
   }
 
   .offline {
-    margin: 0.25rem 0 0;
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
+    margin: calc(var(--termru-space-2) * -1) 0 0;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
     color: var(--termru-warning);
-  }
-
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-4);
-    padding: var(--termru-space-4);
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-lg);
-    background: var(--termru-surface);
-  }
-
-  .prompt {
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-terminal-size);
-    color: var(--termru-muted);
-  }
-
-  .banner-text {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .banner-text h2 {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    font-weight: 600;
-    color: var(--termru-fg);
-  }
-
-  .banner-text p {
-    margin: 0.15rem 0 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
-  }
-
-  .banner-return {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 0.8rem;
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-button);
-    background: var(--wp-field, var(--termru-surface));
-    color: var(--termru-fg);
-    font-size: var(--termru-text-control-size);
-    line-height: var(--termru-text-control-lh);
-    font-weight: var(--termru-text-control-weight);
-    cursor: pointer;
   }
 
   .filters {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-4);
     min-width: 0;
   }
 
   .search {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    flex: 1;
+    gap: var(--termru-space-2);
+    flex: 0 1 440px;
     min-width: 12rem;
-    max-width: 30rem;
     height: var(--termru-input-h);
-    padding: 0 0.75rem;
+    padding: 0 var(--termru-space-4);
     border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
+    border-radius: var(--termru-radius-button);
     background: var(--wp-field, var(--termru-surface));
+    color: var(--termru-muted);
   }
 
   .search:focus-within {
@@ -394,24 +357,16 @@
     outline-offset: var(--termru-focus-offset);
   }
 
-  .search svg {
-    width: 0.9rem;
-    height: 0.9rem;
-    flex: none;
-    fill: none;
-    stroke: var(--termru-muted);
-    stroke-width: 1.5;
-    stroke-linecap: round;
-  }
-
   .search input {
     flex: 1;
     min-width: 0;
+    min-height: 0;
+    padding: 0;
     border: none;
     background: none;
     color: var(--termru-fg);
     font: inherit;
-    font-size: var(--termru-text-secondary-size);
+    font-size: var(--termru-text-control-size);
     outline: none;
   }
 
@@ -430,18 +385,59 @@
     color: var(--termru-muted);
   }
 
-  select.folder {
-    height: var(--termru-input-h);
-    padding: 0 0.6rem;
+  /* The native select stays (list, keyboard, screen reader); the icon and the
+     caret are drawn around it. */
+  .folder {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: none;
+    height: var(--termru-control-h);
     border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
+    border-radius: var(--termru-radius-button);
     background: var(--wp-field, var(--termru-surface));
+    color: var(--termru-muted);
+  }
+
+  .folder:focus-within {
+    outline: var(--termru-focus-w) solid var(--termru-accent);
+    outline-offset: var(--termru-focus-offset);
+  }
+
+  .folder :global(svg) {
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .folder :global(svg:first-child) {
+    left: var(--termru-space-3);
+  }
+
+  .folder :global(svg:last-child) {
+    right: var(--termru-space-3);
+  }
+
+  .folder select {
+    min-height: 0;
+    height: 100%;
+    width: 11rem;
+    padding: 0 calc(var(--termru-space-3) + 20px) 0 calc(var(--termru-space-3) + 24px);
+    border: none;
+    border-radius: inherit;
+    background: none;
     color: var(--termru-fg);
-    font-size: var(--termru-text-secondary-size);
+    font-size: var(--termru-text-control-size);
+    font-weight: var(--termru-text-control-weight);
+    appearance: none;
+    outline: none;
     cursor: pointer;
+    text-overflow: ellipsis;
   }
 
   .sortline {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--termru-space-1);
     margin: 0 0 0 auto;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
@@ -452,36 +448,63 @@
   .tabs {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-4);
+    flex-wrap: wrap;
+    gap: var(--termru-space-5);
   }
 
   .tabs button {
-    background: none;
+    min-height: 0;
+    padding: 0;
     border: none;
-    padding: 0.2rem 0;
+    border-radius: 2px;
+    background: none;
     color: var(--termru-muted);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
+    font-size: var(--termru-text-body-size);
+    line-height: var(--termru-text-body-lh);
+    font-weight: 400;
     cursor: pointer;
+    /* Only the press moves; the active tab changes at once (it is a key press
+       as often as a click). The hover fade is below, for the others. */
+    transition: transform var(--motion-fast) var(--ease-out);
   }
 
   .tabs button.active {
     color: var(--termru-accent);
-    font-weight: 600;
-    border-bottom: 2px solid var(--termru-accent);
+    font-weight: var(--termru-text-control-weight);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .tabs button:not(.active) {
+      transition:
+        transform var(--motion-fast) var(--ease-out),
+        color var(--motion-fast) ease;
+    }
+
+    .tabs button:hover:not(.active) {
+      color: var(--termru-fg);
+    }
+  }
+
+  .tabs .fav {
+    margin-right: var(--termru-space-1);
+    vertical-align: -1px;
   }
 
   .tabs .n {
-    font-weight: 600;
+    margin-left: var(--termru-space-1);
+    font-weight: 400;
   }
 
   .tabs .divider {
-    color: var(--termru-border);
+    width: 1px;
+    height: 16px;
+    background: var(--termru-border);
   }
 
   .content {
     display: flex;
     flex-direction: column;
+    gap: var(--termru-space-5);
     flex: 1;
     min-height: 10rem;
     min-width: 0;
@@ -504,31 +527,109 @@
     color: var(--termru-muted);
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
+    overflow-wrap: anywhere;
   }
 
   .state-text.error {
     color: var(--termru-danger);
   }
 
+  .state button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--termru-space-2);
+  }
+
   .placeholders {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: 0;
     width: 100%;
     max-width: 48rem;
   }
 
   .placeholder {
-    height: 3.4rem;
+    height: 70px;
+    border-bottom: 1px solid var(--termru-border);
+    background: var(--termru-subtle);
+  }
+
+  .banner {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--termru-space-5);
+    min-height: 73px;
+    padding: var(--termru-space-4) 22px;
     border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius);
-    background: var(--termru-surface);
+    border-radius: var(--termru-radius-pane);
+    background: var(--termru-subtle);
+  }
+
+  .prompt {
+    flex: none;
+    width: 2.2ch;
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-body-size);
+    color: var(--termru-muted);
+  }
+
+  .banner-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .banner-text h2 {
+    margin: 0;
+    font-size: var(--termru-text-control-size);
+    line-height: var(--termru-text-control-lh);
+    font-weight: var(--termru-text-control-weight);
+    color: var(--termru-fg);
+  }
+
+  .banner-text p {
+    margin: 0;
+    font-size: var(--termru-text-control-size);
+    line-height: var(--termru-text-control-lh);
+    color: var(--termru-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .banner-return {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--termru-space-2);
+    max-width: 22rem;
+    padding: 0 var(--termru-space-4);
+  }
+
+  .return-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .hint {
-    margin: var(--termru-space-3) 0 0;
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
+    flex: none;
+    margin: 0;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
     color: var(--termru-muted);
+  }
+
+  @media (max-width: 900px) {
+    .filters {
+      flex-wrap: wrap;
+    }
+
+    .sortline {
+      margin-left: 0;
+    }
+
+    .banner {
+      flex-wrap: wrap;
+    }
   }
 </style>
