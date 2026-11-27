@@ -2,27 +2,12 @@
   import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import { route } from '../stores/route.svelte';
   import { hosts } from '../stores/hosts.svelte';
+  import { network } from '../stores/network.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
   import { unsaved } from '../stores/unsaved.svelte';
   import { sessionsContext } from '../terminal/session-view';
-
-  // The network state is read from the window's own events: `navigator.onLine`
-  // alone is not reactive.
-  let online = $state(true);
-  $effect(() => {
-    online = navigator.onLine;
-    const apply = (event: Event) => {
-      online = event.type !== 'offline';
-    };
-    window.addEventListener('online', apply);
-    window.addEventListener('offline', apply);
-    return () => {
-      window.removeEventListener('online', apply);
-      window.removeEventListener('offline', apply);
-    };
-  });
 
   // "Connected 12 min ago" needs a clock; it only ticks on the Sessions page.
   let now = $state(Date.now());
@@ -35,7 +20,7 @@
 
   /** The real state of the sync, not a constant. */
   const syncState = $derived(
-    !sync.signedIn ? 'Local workspace' : online ? 'Sync · signed in' : 'Sync · offline',
+    !sync.signedIn ? 'Local workspace' : network.online ? 'Sync · signed in' : 'Sync · offline',
   );
 
   /** The palette chord, as the user has it bound. */
@@ -94,7 +79,8 @@
     height: 28px;
     padding: 0 var(--termru-page-inset-x);
     border-top: 1px solid var(--termru-border);
-    background: var(--termru-surface);
+    /* The secondary surface of the frames (#FAFBF8). */
+    background: var(--termru-subtle);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     color: var(--termru-muted);

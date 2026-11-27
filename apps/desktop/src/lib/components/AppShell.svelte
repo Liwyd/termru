@@ -41,7 +41,8 @@
     height: var(--termru-titlebar-h);
     padding: 0 var(--termru-space-2) 0 var(--termru-space-4);
     border-bottom: 1px solid var(--termru-border);
-    background: var(--termru-surface);
+    /* Window chrome is the canvas; the page below is the surface (Doc A.02). */
+    background: var(--termru-canvas);
     user-select: none;
   }
 
@@ -60,6 +61,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--termru-canvas);
+    /* White page, as every frame draws it (frames 1, 4, 5, 8). */
+    background: var(--termru-surface);
   }
 </style>

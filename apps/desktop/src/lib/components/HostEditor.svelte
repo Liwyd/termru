@@ -12,7 +12,7 @@
   import { identities } from '../stores/identities.svelte';
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import { unsaved } from '../stores/unsaved.svelte';
   import {
     describeAddress,
@@ -250,8 +250,15 @@
       const typed = form.password;
       const note = await applyCredential(saved);
       form.markSaved(saved);
-      if (note) toasts.error(note);
-      else toasts.success(`Saved ${saved.name}`);
+      if (note) {
+        notify({
+          key: 'host.credential-not-stored',
+          entityId: saved.id,
+          values: { name: saved.name, detail: note },
+        });
+      } else {
+        notify({ key: 'host.saved', entityId: saved.id, values: { name: saved.name } });
+      }
       if (connect) {
         if (typed.length > 0 && !form.savePassword && saved.auth.type === 'password') {
           // A password that is not kept is used once, from memory.
@@ -286,7 +293,8 @@
         credential = { ...credential, password: false };
       }
     } catch (err) {
-      return `Saved ${saved.name}, but its password was not stored: ${errorMessage(err)} It is asked for when you connect.`;
+      // Only the reason: the notice owns the sentence around it.
+      return errorMessage(err);
     }
     return null;
   }
@@ -302,13 +310,13 @@
         credential = { ...credential, password: false };
         hosts.markPasswordStored(saved.id, false);
         form.adoptStored(false);
-        toasts.success('Forgot the password this device kept for the host.');
+        notify({ key: 'secret.password-forgotten' });
       } else {
         credential = { ...credential, passphrase: false };
-        toasts.success('Forgot the key passphrase this device kept.');
+        notify({ key: 'secret.passphrase-forgotten' });
       }
     } catch (err) {
-      toasts.error(`Could not forget the ${kind}: ${errorMessage(err)}`);
+      notify({ key: 'secret.forget-failed', values: { detail: errorMessage(err) } });
     } finally {
       forgetting = false;
     }

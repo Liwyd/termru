@@ -11,7 +11,8 @@ import IdentitiesPage from './IdentitiesPage.svelte';
 import { hosts } from '../stores/hosts.svelte';
 import { identities } from '../stores/identities.svelte';
 import { route } from '../stores/route.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { click, findButton, newTarget, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { GeneratedIdentity, Host, Identity, PublicKeyInfo } from '../types';
@@ -107,7 +108,7 @@ beforeEach(() => {
   identities.keys = {};
   identities.bindingsLoaded = false;
   identities.selectedId = null;
-  toasts.toasts = [];
+  notices.reset();
   route.draft = null;
   route.route = 'identities';
   picked.mockReset();
@@ -231,8 +232,8 @@ describe('the key of an identity', () => {
     click(listItem('work-ed25519'));
     await vi.waitFor(() => expect(target.textContent).toContain(PUBLIC_KEY));
     click(target.querySelector('button[aria-label="Copy the public key"]') as HTMLElement);
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.kind).toBe('error'));
-    expect(toasts.toasts.at(-1)?.message).toContain('Could not copy');
+    await vi.waitFor(() => expect(notices.visible.at(-1)?.kind).toBe('error'));
+    expect(noticeText(notices.visible.at(-1))).toContain('Could not copy');
   });
 
   it('says why a key cannot be shown', async () => {
@@ -293,7 +294,9 @@ describe('renaming', () => {
       name: 'laptop key',
       comment: null,
     });
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.message).toBe('Saved laptop key'));
+    await vi.waitFor(() =>
+      expect(noticeText(notices.visible.at(-1))).toBe('Identity saved. laptop key'),
+    );
   });
 
   it('does not save an empty name, and shows a refusal of the backend', async () => {
@@ -360,7 +363,9 @@ describe('generating a key', () => {
       rememberPassphrase: false,
     });
     await vi.waitFor(() =>
-      expect(toasts.toasts.at(-1)?.message).toBe('Generated a key for new laptop'),
+      expect(noticeText(notices.visible.at(-1))).toBe(
+        'Key generated. new laptop · Private key stays on this device',
+      ),
     );
     // The new identity is selected, and its key is shown without asking the backend again.
     expect(target.querySelector('h2')?.textContent).toBe('new laptop');
@@ -391,7 +396,7 @@ describe('generating a key', () => {
     await vi.waitFor(() =>
       expect(target.querySelector('.rail .wp-label')?.textContent).toBe('EDIT IDENTITY'),
     );
-    expect(JSON.stringify(toasts.toasts)).not.toContain('correct horse');
+    expect(JSON.stringify(notices.visible)).not.toContain('correct horse');
   });
 
   it('refuses a passphrase that is too short before asking the backend', async () => {
@@ -429,9 +434,9 @@ describe('generating a key', () => {
     type(field('identity-name'), 'locked');
     click(findButton(target, 'Generate key'));
     await vi.waitFor(() =>
-      expect(toasts.toasts.some((toast) => toast.message.includes('could not be stored'))).toBe(
-        true,
-      ),
+      expect(
+        notices.visible.some((toast) => noticeText(toast).includes('could not be stored')),
+      ).toBe(true),
     );
   });
 
@@ -539,7 +544,9 @@ describe('deleting an identity', () => {
     click(findButton(dialog() as HTMLElement, 'Delete identity'));
     await vi.waitFor(() => expect(callsOf('identity_delete')).toHaveLength(1));
     expect(callsOf('identity_delete')[0].args).toEqual({ id: 'i-ci' });
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.message).toBe('Deleted ci-key'));
+    await vi.waitFor(() =>
+      expect(noticeText(notices.visible.at(-1))).toBe('Identity deleted. ci-key'),
+    );
     // The next identity is selected.
     await vi.waitFor(() => expect(target.querySelector('h2')?.textContent).toBe('work-ed25519'));
   });

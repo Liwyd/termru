@@ -202,3 +202,35 @@ export function describeAddress(value: string): string | null {
   }
   return 'Valid hostname';
 }
+
+/**
+ * The sync server address, mirrored from `validate_server_url` of the
+ * desktop backend: https, or plain http for this machine only (the access
+ * token travels with every request). The backend stays the authority.
+ */
+export function serverUrlError(value: string): string | null {
+  const text = value.trim().replace(/\/+$/, '');
+  if (text.length === 0) return 'Server address is required.';
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return 'Enter a full address, such as https://sync.example.com.';
+  }
+  if (url.protocol === 'https:') return url.hostname ? null : 'The address has no host.';
+  if (url.protocol === 'http:') {
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      ? null
+      : 'Use https. Plain http is only allowed for localhost.';
+  }
+  return `Unsupported scheme “${url.protocol.replace(':', '')}”. Use https.`;
+}
+
+/** A plausible email address; the server decides whether the account exists. */
+export function emailError(value: string): string | null {
+  const text = value.trim();
+  if (text.length === 0) return 'Email is required.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text))
+    return 'Enter an email address like ops@example.com.';
+  return null;
+}

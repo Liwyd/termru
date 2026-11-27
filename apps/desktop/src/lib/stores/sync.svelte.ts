@@ -1,7 +1,7 @@
 import { api } from '../ipc';
 import { errorMessage, hosts } from './hosts.svelte';
 import { prefs } from './prefs.svelte';
-import { toasts } from './toasts.svelte';
+import { notify } from '../notify.svelte';
 import type { ConflictView, SyncOutcome, SyncStatus } from '../types';
 
 /**
@@ -78,11 +78,11 @@ export class SyncStore {
     try {
       this.status = await api.syncSignIn(serverUrl, email, password, deviceName);
       await this.load();
-      toasts.success('Signed in to the sync server.');
+      notify({ key: 'sync.signed-in', values: { name: serverUrl } });
       return true;
     } catch (err) {
       this.error = errorMessage(err);
-      toasts.error(this.error);
+      notify({ key: 'sync.signin-failed', values: { detail: this.error } });
       return false;
     } finally {
       this.busy = false;
@@ -96,10 +96,10 @@ export class SyncStore {
       await api.syncSignOut();
       this.status = null;
       this.conflicts = [];
-      toasts.success('Signed out of the sync server.');
+      notify({ key: 'sync.signed-out' });
     } catch (err) {
       this.error = errorMessage(err);
-      toasts.error(this.error);
+      notify({ key: 'sync.signout-failed', values: { detail: this.error } });
     } finally {
       this.busy = false;
     }
@@ -114,13 +114,21 @@ export class SyncStore {
       await this.load();
       // What the server sent is on disk now: show it.
       await this.reloadApplied();
-      toasts.success(
-        `Synced: ${outcome.pushed} sent, ${outcome.applied} received, ${outcome.conflicts} conflict(s).`,
-      );
+      notify({
+        key: 'sync.synced',
+        values: {
+          pushed: outcome.pushed,
+          received: outcome.applied,
+          conflicts: outcome.conflicts,
+        },
+      });
       return outcome;
     } catch (err) {
       this.error = errorMessage(err);
-      toasts.error(this.error);
+      notify({ key: 'sync.failed', values: { detail: this.error }, action: 'retry-sync' });
+      // The cycle failed: the backend kept the reason, so the page can show it.
+      await this.load();
+      this.error = errorMessage(err);
       return null;
     } finally {
       this.busy = false;
@@ -135,10 +143,10 @@ export class SyncStore {
       await this.load();
       // Taking the server copy changes a record that is on screen.
       await this.reloadApplied();
-      toasts.success(keepLocal ? 'Kept the local copy.' : 'Took the server copy.');
+      notify({ key: keepLocal ? 'sync.kept-local' : 'sync.took-server' });
     } catch (err) {
       this.error = errorMessage(err);
-      toasts.error(this.error);
+      notify({ key: 'sync.resolve-failed', values: { detail: this.error } });
     } finally {
       this.busy = false;
     }

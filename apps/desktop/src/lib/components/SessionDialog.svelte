@@ -11,6 +11,12 @@
    *
    * The caller owns `open`: it turns false on Cancel, Escape and a click on
    * the backdrop, and the dialog plays its exit before it leaves the page.
+   *
+   * The connect, host-key and sign-in dialogs are built on it too: `onsubmit`
+   * makes the body a form (Enter submits), `wide` gives a long fingerprint
+   * room, `tone="danger"` is for a question about a changed host key, and
+   * `backdropCloses={false}` keeps a question that must be answered with a
+   * button from going away on a stray click.
    */
   let {
     open,
@@ -20,6 +26,11 @@
     children,
     actions,
     role = 'alertdialog',
+    wide = false,
+    monoDescription = false,
+    tone = 'default',
+    backdropCloses = true,
+    onsubmit,
   }: {
     open: boolean;
     title: string;
@@ -30,36 +41,56 @@
     children?: Snippet;
     actions: Snippet;
     role?: 'dialog' | 'alertdialog';
+    wide?: boolean;
+    /** The description is an address or a path: mono. */
+    monoDescription?: boolean;
+    tone?: 'default' | 'danger';
+    backdropCloses?: boolean;
+    onsubmit?: (event: SubmitEvent) => void;
   } = $props();
 
   const pop = presence(() => open);
   const uid = $props.id();
 </script>
 
+{#snippet body()}
+  <h2 id="{uid}-title">{title}</h2>
+  {#if description}
+    <p id="{uid}-description" class="description" class:mono={monoDescription}>
+      {description}
+    </p>
+  {/if}
+  {@render children?.()}
+  <div class="actions">
+    {@render actions()}
+  </div>
+{/snippet}
+
 {#if pop.mounted}
   <div
     class="backdrop"
     class:shown={pop.shown}
     role="presentation"
-    onclick={(event) => event.target === event.currentTarget && onclose()}
+    onclick={(event) => backdropCloses && event.target === event.currentTarget && onclose()}
   >
     <div
-      class="dialog"
+      class="dialog sx-dialog"
+      class:wide
+      class:danger={tone === 'danger'}
       {role}
-      aria-modal="true"
+      aria-modal={open ? 'true' : undefined}
       aria-labelledby="{uid}-title"
       aria-describedby={description ? `${uid}-description` : undefined}
       tabindex="-1"
       use:focusTrap={{ onescape: onclose }}
     >
-      <h2 id="{uid}-title">{title}</h2>
-      {#if description}
-        <p id="{uid}-description" class="description">{description}</p>
+      {#if onsubmit}
+        <form {onsubmit}>
+          {@render body()}
+        </form>
+      {:else}
+        {@render body()}
       {/if}
-      {@render children?.()}
-      <div class="actions">
-        {@render actions()}
-      </div>
     </div>
   </div>
 {/if}
@@ -107,6 +138,25 @@
     transition: transform var(--motion-context) var(--ease-out);
   }
 
+  .dialog.wide {
+    width: min(32rem, 100%);
+  }
+
+  .dialog.danger {
+    border-color: color-mix(in srgb, var(--termru-danger) 50%, var(--termru-border));
+  }
+
+  .dialog.danger h2 {
+    color: var(--termru-danger);
+  }
+
+  /* The body is the dialog's own column, form or not. */
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-3);
+  }
+
   h2 {
     margin: 0;
     font-size: var(--termru-text-heading-size);
@@ -119,6 +169,13 @@
     color: var(--termru-muted);
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
+  }
+
+  .description.mono {
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    overflow-wrap: anywhere;
   }
 
   .actions {

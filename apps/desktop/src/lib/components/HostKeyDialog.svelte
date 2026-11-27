@@ -1,19 +1,38 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { listen, type UnlistenFn } from '../ipc-backend';
   import { errorMessage } from '../stores/hosts.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import type { HostKeyPromptMessage } from '../types';
+  import Icon from './Icon.svelte';
+  import SessionDialog from './SessionDialog.svelte';
 
   /**
+   * The host-key question (Doc A.05): Termru never trusts a key silently.
+   *
+   * A host seen for the first time shows where it connects and the
+   * fingerprint to compare. A host whose key changed blocks the connection
+   * until the user decides: both fingerprints side by side, and a warning
+   * that continuing replaces the stored key. The safe answer (Cancel) has
+   * the focus, so an Enter by habit does not trust anything.
+   *
    * The prompts waiting for an answer, oldest first. A second prompt that
    * arrives while the first is open waits its turn: it must never replace
-   * (and so silently drop) a question the user has not answered.
+   * (and so silently drop) a question the user has not answered. Everything
+   * the server sent (host, key type, fingerprint) is shown as plain text.
    */
   let queue = $state<HostKeyPromptMessage[]>([]);
   const prompt = $derived(queue[0] ?? null);
+
+  // What the dialog shows while it fades out, after the queue is empty.
+  let last = $state.raw<HostKeyPromptMessage | null>(null);
+  $effect(() => {
+    if (prompt) last = prompt;
+  });
+  const shown = $derived(prompt ?? last);
+  const request = $derived(shown?.request ?? null);
+  const changed = $derived(request?.state === 'changed');
 
   onMount(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -52,149 +71,205 @@
     queue = queue.slice(1);
     try {
       const accepted = await api.hostKeyPromptResolve(current.id, trust);
-      if (!accepted) {
-        toasts.info('The host-key prompt is no longer active.');
-      }
+      if (!accepted) notify({ key: 'prompt.hostkey-inactive' });
     } catch (err) {
-      toasts.error(`Could not answer the host-key prompt: ${errorMessage(err)}`);
+      notify({ key: 'prompt.hostkey-failed', values: { detail: errorMessage(err) } });
     }
   }
 </script>
 
-{#if prompt}
-  <div class="backdrop" role="presentation">
-    <div
-      class="dialog"
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Host key confirmation"
-      use:focusTrap={{ onescape: () => void answer(false) }}
-    >
-      {#if prompt.request.state === 'unknown'}
-        <h2>Unknown host key</h2>
-        <p class="target">{prompt.request.host}:{prompt.request.port}</p>
-        <dl>
-          <dt>Type</dt>
-          <dd>{prompt.request.key.key_type}</dd>
-          <dt>Fingerprint</dt>
-          <dd class="mono">{prompt.request.key.fingerprint}</dd>
-        </dl>
-        {#if prompt.request.other_key_types && prompt.request.other_key_types.length > 0}
-          <p class="hint danger" data-testid="other-key-types">
-            This host is already known under another key type ({prompt.request.other_key_types.join(
-              ', ',
-            )}), but the server now presents a {prompt.request.key.key_type} key that was never seen before.
-            That is normal after a server upgrade or reinstall, and it is also what an impostor without
-            the real key would do. Verify the fingerprint with the server administrator.
-          </p>
-        {:else}
-          <p class="hint">
-            The server key is not known yet. Verify the fingerprint with the server administrator
-            before trusting it.
-          </p>
-        {/if}
-      {:else}
-        <h2 class="danger">Host key changed</h2>
-        <p class="target">{prompt.request.host}:{prompt.request.port}</p>
-        <dl>
-          <dt>Old</dt>
-          <dd class="mono">{prompt.request.old.fingerprint}</dd>
-          <dt>New</dt>
-          <dd class="mono danger">{prompt.request.new.fingerprint}</dd>
-        </dl>
-        <p class="hint danger">
-          The server key differs from the stored one. This can indicate a man-in-the-middle attack
-          or a rebuilt server. Only continue if you know why it changed.
-        </p>
-      {/if}
-
-      {#if queue.length > 1}
-        <p class="hint">
-          {queue.length - 1} more host key {queue.length === 2 ? 'question' : 'questions'} waiting.
-        </p>
-      {/if}
-
-      <div class="actions">
-        <!-- The safe answer takes the focus: an Enter by habit rejects. -->
-        <button type="button" data-autofocus onclick={() => answer(false)}>Reject</button>
-        <button type="button" class="danger" onclick={() => answer(true)}>Trust</button>
+<SessionDialog
+  open={prompt !== null}
+  role="alertdialog"
+  wide
+  tone={changed ? 'danger' : 'default'}
+  backdropCloses={false}
+  title={changed ? 'Host key changed' : 'Verify this host'}
+  description={request?.state === 'changed'
+    ? `The key ${request.host}:${request.port} presents is not the one Termru stored. Connecting is blocked until you decide.`
+    : request
+      ? `First connection to ${request.host}:${request.port}. Compare the fingerprint with a source you trust before you connect.`
+      : undefined}
+  onclose={() => void answer(false)}
+>
+  {#if request?.state === 'unknown'}
+    <dl class="facts">
+      <div>
+        <dt>Host</dt>
+        <dd>{request.host}:{request.port}</dd>
       </div>
+      <div>
+        <dt>Key type</dt>
+        <dd>{request.key.key_type}</dd>
+      </div>
+      <div>
+        <dt>Fingerprint</dt>
+        <dd class="fingerprint" data-testid="fingerprint-new">{request.key.fingerprint}</dd>
+      </div>
+    </dl>
+    {#if request.other_key_types && request.other_key_types.length > 0}
+      <div class="callout warning" data-testid="other-key-types">
+        <p class="label">Known under another key type</p>
+        <p>
+          This host is already known under {request.other_key_types.join(', ')}, but the server now
+          presents a {request.key.key_type} key Termru has not seen. That is normal after a server upgrade
+          or reinstall. An impostor without the real key would do the same, so check the fingerprint with
+          the server’s administrator.
+        </p>
+      </div>
+    {:else}
+      <p class="how">
+        To check it, run <code>ssh-keygen -lf</code> on the server, or read it in your provider’s console.
+      </p>
+    {/if}
+  {:else if request?.state === 'changed'}
+    <dl class="facts">
+      <div>
+        <dt>Stored key <span class="type">{request.old.key_type}</span></dt>
+        <dd class="fingerprint" data-testid="fingerprint-old">{request.old.fingerprint}</dd>
+      </div>
+      <div>
+        <dt>Key now presented <span class="type">{request.new.key_type}</span></dt>
+        <dd class="fingerprint new" data-testid="fingerprint-new">{request.new.fingerprint}</dd>
+      </div>
+    </dl>
+    <div class="callout danger">
+      <p class="label">Do not continue unless you know why</p>
+      <p>
+        This can mean the server was rebuilt, or that someone is intercepting the connection.
+        Connecting replaces the stored key with the new one.
+      </p>
     </div>
-  </div>
-{/if}
+  {/if}
+
+  {#if queue.length > 1}
+    <p class="more">
+      {queue.length - 1} more host key {queue.length === 2 ? 'question' : 'questions'} waiting.
+    </p>
+  {/if}
+
+  {#snippet actions()}
+    <!-- The safe answer takes the focus: an Enter by habit rejects. -->
+    <button type="button" class="quiet" data-autofocus onclick={() => answer(false)}>Cancel</button>
+    <button
+      type="button"
+      class="verify"
+      class:primary={!changed}
+      class:danger={changed}
+      onclick={() => answer(true)}
+    >
+      <Icon name="arrow-up-right" size={16} />
+      Verify &amp; connect
+    </button>
+  {/snippet}
+</SessionDialog>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 6, 23, 0.55);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-
-  .dialog {
-    width: min(30rem, 92vw);
+  .facts {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    padding: 1.1rem;
-    border-radius: var(--termru-radius-lg);
-    border: 1px solid var(--termru-danger);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
-  }
-
-  h2 {
+    gap: var(--termru-space-3);
     margin: 0;
-    font-size: 1rem;
-  }
-
-  h2.danger {
-    color: var(--termru-danger);
-  }
-
-  .target {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--termru-muted);
-  }
-
-  dl {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.2rem 0.6rem;
-    margin: 0;
-    font-size: 0.82rem;
   }
 
   dt {
+    margin-bottom: var(--termru-space-1);
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--termru-muted);
+  }
+
+  .type {
+    margin-left: var(--termru-space-2);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--termru-faint);
   }
 
   dd {
     margin: 0;
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-control-size);
+    line-height: var(--termru-text-control-lh);
+    overflow-wrap: anywhere;
   }
 
-  .mono {
-    font-family: monospace;
-    word-break: break-all;
+  /* The text to compare: boxed, so it reads as one unit. */
+  .fingerprint {
+    padding: var(--termru-space-3);
+    border: var(--termru-border-w) solid var(--termru-border);
+    border-radius: var(--termru-radius-input);
+    background: var(--termru-subtle);
+    user-select: all;
   }
 
-  .hint {
+  .fingerprint.new {
+    border-color: color-mix(in srgb, var(--termru-danger) 50%, var(--termru-border));
+    background: var(--termru-danger-soft);
+  }
+
+  .how {
     margin: 0;
-    font-size: 0.78rem;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
     color: var(--termru-muted);
   }
 
-  .hint.danger {
+  code {
+    font-family: var(--termru-font-mono);
+    color: var(--termru-fg);
+  }
+
+  .callout {
+    padding: var(--termru-space-3) var(--termru-space-4);
+    border-left: 2px solid var(--termru-warning);
+    background: var(--termru-warning-soft);
+  }
+
+  .callout.danger {
+    border-left-color: var(--termru-danger);
+    background: var(--termru-danger-soft);
+  }
+
+  .callout p {
+    margin: 0;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    overflow-wrap: anywhere;
+  }
+
+  .callout .label {
+    margin-bottom: var(--termru-space-1);
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--termru-warning);
+  }
+
+  .callout.danger .label {
     color: var(--termru-danger);
   }
 
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
+  .more {
+    margin: 0;
+    font-size: var(--termru-text-secondary-size);
+    color: var(--termru-muted);
+  }
+
+  .verify {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--termru-space-2);
+  }
+
+  /* A changed key is not a button to press lightly: filled, in danger. */
+  :global(.sx-dialog) .verify.danger {
+    background: var(--termru-danger);
+    border-color: var(--termru-danger);
+    color: var(--termru-on-danger);
   }
 </style>

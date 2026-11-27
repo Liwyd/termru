@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import { copyText, isOpenGesture, openLink, openableUrl } from './links';
 
-vi.mock('@tauri-apps/api/core', () => import('../test-support/tauri-core-mock'));
+// The opener plugin, as the seam (`ipc-backend.ts`) imports it.
+const opener = vi.hoisted(() => ({ openUrl: vi.fn<(url: string) => Promise<void>>() }));
+vi.mock('@tauri-apps/plugin-opener', () => opener);
 
 let written: string[] = [];
 
 beforeEach(() => {
-  resetTauriMock();
+  opener.openUrl.mockReset().mockResolvedValue();
   written = [];
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
@@ -41,20 +42,25 @@ describe('terminal links', () => {
   });
 
   it('hands the address to the system opener', async () => {
-    answers.set('plugin:opener|open_url', null);
     expect(await openLink('https://example.com')).toBe('opened');
-    expect(callsOf('plugin:opener|open_url')[0].args).toEqual({ url: 'https://example.com/' });
+    expect(opener.openUrl).toHaveBeenCalledTimes(1);
+    expect(opener.openUrl).toHaveBeenCalledWith('https://example.com/');
     expect(written).toEqual([]);
   });
 
-  it('copies the address when the app has no opener', async () => {
-    failures.set('plugin:opener|open_url', 'plugin opener not found');
+  it('opens the normalized address, not the raw text', async () => {
+    await openLink('  https://example.com/a b  ');
+    expect(opener.openUrl).toHaveBeenCalledWith('https://example.com/a%20b');
+  });
+
+  it('copies the address when the opener fails', async () => {
+    opener.openUrl.mockRejectedValue(new Error('not allowed by the capability'));
     expect(await openLink('https://example.com')).toBe('copied');
     expect(written).toEqual(['https://example.com/']);
   });
 
   it('reports a failure when it can neither open nor copy', async () => {
-    failures.set('plugin:opener|open_url', 'plugin opener not found');
+    opener.openUrl.mockRejectedValue(new Error('no browser'));
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
@@ -67,8 +73,10 @@ describe('terminal links', () => {
     expect(await copyText('x')).toBe(false);
   });
 
-  it('refuses a scheme that is not a web link without calling the backend', async () => {
-    expect(await openLink('javascript:alert(1)')).toBe('refused');
-    expect(callsOf('plugin:opener|open_url')).toHaveLength(0);
+  it('refuses a scheme that is not a web link without calling the opener', async () => {
+    for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'ssh://host', 'not a url']) {
+      expect(await openLink(bad)).toBe('refused');
+    }
+    expect(opener.openUrl).not.toHaveBeenCalled();
   });
 });

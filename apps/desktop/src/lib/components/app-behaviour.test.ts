@@ -14,7 +14,8 @@ import { prefs } from '../stores/prefs.svelte';
 import { route } from '../stores/route.svelte';
 import { sessions } from '../stores/sessions.svelte';
 import { shortcuts } from '../stores/shortcuts.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { unsaved } from '../stores/unsaved.svelte';
 import { pruneTerminals } from '../terminal/registry';
 import { click, findButton, stubBrowserApis, type } from '../test-support/dom';
@@ -68,6 +69,7 @@ function storedPrefs(theme: Preferences['theme']): Preferences {
       cursor_blink: true,
       cursor_style: 'block',
       copy_on_select: false,
+      confirm_multiline_paste: true,
       line_height: 1.3,
     },
     keybindings: {},
@@ -120,7 +122,7 @@ beforeEach(() => {
   connectFlow.cancel();
   palette.hide();
   shortcuts.cancel();
-  toasts.toasts = [];
+  notices.reset();
   hosts.hosts = [];
   hosts.loaded = false;
   hosts.searchFocus = false;
@@ -275,9 +277,9 @@ describe('keyboard shortcuts', () => {
     await start();
     failures.set('prefs_set', 'disk full');
     chord('L', { shiftKey: true });
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
-    expect(toasts.toasts[0].kind).toBe('error');
-    expect(toasts.toasts[0].message).toContain('disk full');
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
+    expect(notices.visible[0].kind).toBe('error');
+    expect(noticeText(notices.visible[0])).toContain('disk full');
   });
 
   it('still honour a stored override', async () => {
@@ -385,16 +387,19 @@ describe('pages in flow', () => {
     expect(route.route).toBe('sessions');
   });
 
-  it('Cancel of the preferences returns to where the user was', async () => {
+  it('the preferences have no Save or Cancel: a change applies and saves at once', async () => {
     await start();
     route.go('sync');
     route.go('preferences');
     flushSync();
-    // The last "Cancel" is the panel's own; the others are the shortcut ones.
-    const cancels = Array.from(target.querySelectorAll('button')).filter(
-      (button) => button.textContent?.trim() === 'Cancel',
+    const labels = Array.from(target.querySelectorAll('button')).map((button) =>
+      button.textContent?.trim(),
     );
-    click(cancels[cancels.length - 1]);
+    expect(labels).not.toContain('Save');
+    expect(labels).not.toContain('Cancel');
+    expect(labels).toContain('Restore defaults');
+    // Nothing is pending, so leaving the page asks nothing.
+    route.go('sync');
     expect(route.route).toBe('sync');
   });
 

@@ -83,7 +83,7 @@ is harmless.
 
 | Boundary | What crosses it | What never crosses it |
 |---|---|---|
-| webview ↔ Rust | IPC commands with validated arguments | The webview has no access to the file system, the network or the shell (the capability file grants `core:default` only) |
+| webview ↔ Rust | IPC commands with validated arguments | The webview has no access to the file system, the network or the shell (the capability file grants `core:default`, the window basics, the key file picker and `opener:allow-open-url` for http, https and mailto addresses) |
 | app ↔ SSH server | The SSH protocol, a key or a password | Nothing else; there is no agent forwarding, no port forwarding |
 | app ↔ cloud | The sync protocol: hosts, groups, tags, preferences | Secrets, private keys, the log files, the workspace geometry of other devices |
 | app ↔ OS | The credential store (secrets), the data directory (the database, the logs) | The database never holds a secret |

@@ -17,7 +17,7 @@
   import { sessions } from './lib/stores/sessions.svelte';
   import { shortcuts } from './lib/stores/shortcuts.svelte';
   import { sync } from './lib/stores/sync.svelte';
-  import { toasts } from './lib/stores/toasts.svelte';
+  import { notify, notices } from './lib/notify.svelte';
   import AppShell from './lib/components/AppShell.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
@@ -69,6 +69,9 @@
     })();
     void sync.load();
 
+    // The button of a notice that offers one (a failed sync can be retried).
+    notices.setActions({ 'retry-sync': () => void sync.syncNow() });
+
     // The backend applied a sync (pulled records): the local copies are
     // stale until they are read again.
     let unlistenSync: (() => void) | undefined;
@@ -104,7 +107,7 @@
     try {
       await prefs.update(next);
     } catch (err) {
-      toasts.error(`Could not save the preferences: ${errorMessage(err)}`);
+      notify({ key: 'prefs.save-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -233,18 +236,18 @@
       const sessions_ = await api.sessionList();
       const info = sessions_.find((entry) => entry.id === sessionId);
       if (!info) {
-        toasts.error('The session is no longer available.');
+        notify({ key: 'session.unavailable' });
         return;
       }
       const host = hosts.hosts.find((entry) => entry.id === info.host_id);
       if (!host) {
-        toasts.error('The host of that session no longer exists.');
+        notify({ key: 'session.host-missing' });
         return;
       }
       sessions.attachTab(sessionId, host);
       route.go('sessions');
     } catch (err) {
-      toasts.error(errorMessage(err));
+      notify({ key: 'session.attach-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -279,14 +282,11 @@
   {/if}
 </AppShell>
 
-{#if connectFlow.pending}
-  <ConnectDialog
-    host={connectFlow.pending.host}
-    secretStored={connectFlow.pending.secretStored}
-    oncancel={() => connectFlow.cancel()}
-    onsubmit={(secrets, remember) => connectFlow.submit(secrets, remember)}
-  />
-{/if}
+<ConnectDialog
+  request={connectFlow.pending}
+  oncancel={() => connectFlow.cancel()}
+  onsubmit={(secrets, remember) => connectFlow.submit(secrets, remember)}
+/>
 
 <HostKeyDialog />
 <AuthPromptDialog />

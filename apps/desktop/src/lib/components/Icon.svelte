@@ -18,7 +18,12 @@
     | 'arrow-up-right'
     | 'arrow-right'
     | 'chevron-down'
-    | 'trash';
+    | 'trash'
+    | 'x'
+    | 'check-circle'
+    | 'alert-circle'
+    | 'info'
+    | 'refresh';
 
   const PATHS: Record<IconName, string> = {
     folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -35,6 +40,11 @@
     'arrow-right': 'M5 12h14M13 6l6 6-6 6',
     'chevron-down': 'M6 9l6 6 6-6',
     trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4.5h6V7',
+    x: 'M6 6l12 12M18 6 6 18',
+    'check-circle': 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 12.4l2.8 2.8L16.2 9.6',
+    'alert-circle': 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.6v5.4M12 16.3v.1',
+    info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.4M12 7.8v.1',
+    refresh: 'M20 11a8 8 0 0 0-14.4-3.6M4.5 4.5v4h4M4 13a8 8 0 0 0 14.4 3.6M19.5 19.5v-4h-4',
   };
 
   let { name, size = 16 }: { name: IconName; size?: number } = $props();

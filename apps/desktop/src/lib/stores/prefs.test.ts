@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_LINE_HEIGHT, migratePrefs, prefs } from './prefs.svelte';
+import { DEFAULT_LINE_HEIGHT, defaultPrefs, migratePrefs, prefs } from './prefs.svelte';
 import IsDarkProbe from '../test-support/IsDarkProbe.svelte';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { Preferences } from '../types';
@@ -18,6 +18,7 @@ function stored(lineHeight: number, theme: Preferences['theme'] = 'system'): Pre
       cursor_blink: true,
       cursor_style: 'block',
       copy_on_select: false,
+      confirm_multiline_paste: true,
       line_height: lineHeight,
     },
     keybindings: {},
@@ -53,6 +54,55 @@ describe('terminal line height', () => {
     answers.set('prefs_get', stored(1.65));
     await prefs.load();
     expect(prefs.prefs.terminal.line_height).toBe(DEFAULT_LINE_HEIGHT);
+  });
+});
+
+describe('the paste question', () => {
+  it('is on by default', () => {
+    expect(defaultPrefs().terminal.confirm_multiline_paste).toBe(true);
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(true);
+  });
+
+  it('fills it in for a record from before it existed', () => {
+    const old = stored(1.3) as unknown as { terminal: Record<string, unknown> };
+    delete old.terminal.confirm_multiline_paste;
+    expect(migratePrefs(old as unknown as Preferences).terminal.confirm_multiline_paste).toBe(true);
+  });
+
+  it('keeps the value the user chose, through a load and a save', async () => {
+    const off = stored(1.3);
+    off.terminal.confirm_multiline_paste = false;
+    answers.set('prefs_get', off);
+    await prefs.load();
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(false);
+    await prefs.update({ ...prefs.prefs, theme: 'dark' });
+    const sent = callsOf('prefs_set').at(-1)?.args as { prefs: Preferences };
+    expect(sent.prefs.terminal.confirm_multiline_paste).toBe(false);
+  });
+
+  it('round-trips every preference field, the new ones included', async () => {
+    const full: Preferences = {
+      theme: 'dark',
+      terminal: {
+        font_family: 'Fira Code, monospace',
+        font_size: 16,
+        scrollback: 50_000,
+        cursor_blink: false,
+        cursor_style: 'underline',
+        copy_on_select: true,
+        line_height: 1.5,
+        confirm_multiline_paste: false,
+      },
+      keybindings: { 'tab.close': '', 'palette.open': 'Ctrl+Shift+F8' },
+      reduced_motion: 'on',
+      focus_visibility: true,
+      routine_notices: false,
+    };
+    answers.set('prefs_get', structuredClone(full));
+    await prefs.load();
+    expect(prefs.prefs).toEqual(full);
+    await prefs.update(prefs.prefs);
+    expect((callsOf('prefs_set').at(-1)?.args as { prefs: Preferences }).prefs).toEqual(full);
   });
 });
 

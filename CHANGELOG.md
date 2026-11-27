@@ -52,12 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shift+Enter, a match-case toggle and Escape to close.
 * Links in terminal output (`@xterm/addon-web-links`): Ctrl or Cmd+click.
   Only `http` and `https` links are followed and they never navigate the app
-  window; the address goes to the system opener when the app has one and is
-  copied to the clipboard otherwise (the opener plugin is not part of this build
-  yet).
+  window; the address opens in the system browser through the Tauri opener
+  plugin and is copied to the clipboard when the opener fails.
 * A paste of two or more lines asks first (line count and a preview), with
-  "Don't ask again" for the rest of the session. Control characters are removed
-  from pasted text.
+  "Don't ask again", which turns the question off in Preferences
+  (`terminal.confirm_multiline_paste`). Control characters are removed from
+  pasted text.
 * Closing a tab or a pane with a live session asks first (the close button,
   Close session, `Ctrl+Shift+W` and the pane shortcut).
 * Host editor rebuilt to the design frame (R5): a routed page with numbered
@@ -88,6 +88,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public key of the bound file without its passphrase. `ssh-key` is now a
   direct dependency of the desktop crate (already in the tree through
   `russh`; no new crate).
+
+* Sync page (a routed page, no longer a wrapper around a modal): the status in
+  words and a glyph (up to date, changes waiting, last sync failed, conflicts
+  to decide, syncing, "Sync offline" with the last known state and a note that
+  SSH sessions keep running), server, account and this device, the open
+  conflicts with the fields that differ and Take the server's copy / Keep this
+  device's copy, Sync now, sign in with validation on blur (https required
+  except for localhost), change server or account, and Sign out. It reads the
+  status again on `sync-applied`. The app cannot list the account's other
+  devices yet (no command for it); the page says so.
+* Preferences page rebuilt to frame 8: font family (a list, or a custom
+  family), size, line height, theme, a live preview of the terminal with those
+  values, cursor shape and blink, scrollback, copy on select, confirm
+  multi-line paste, reduce motion, high-visibility focus and routine notices.
+  Every change applies and saves at once; a typed value is checked when the
+  field is left and the reason is shown under it. The shortcut table shows the
+  macOS and Windows / Linux keys of every command, with Record, Unbind and
+  Reset per row and the fixed terminal keys; Restore defaults asks first. An
+  About section shows the version from `app_info`.
+* New preference `terminal.confirm_multiline_paste` (default on, serde default,
+  so old local records and sync payloads load unchanged). An empty keybinding
+  override now means "unbound" and passes validation.
+* Connect, host-key and sign-in dialogs restyled on the session dialog: Connect
+  (password only), "Verify this host" with the fingerprint to compare and how to
+  check it, "Host key changed" that blocks the connection and shows the stored
+  and the presented fingerprint side by side, the "known under another key
+  type" warning, and `Verify & connect` / `Cancel` with Cancel focused. Text
+  from the server stays plain text. The unreachable private-key branch of the
+  connect dialog is removed (the backend asks for passphrases).
+* Notices go through one facade (ADR 0009): keyed copy, cleaned values,
+  deduplication, at most two visible and six queued (a failure never waits
+  behind a routine notice), `role="alert"` for failures and `role="status"` for
+  the rest, top right under the navigation, and the "Routine notices"
+  preference. A failed sync offers Retry.
+* Links in terminal output open in the system browser: `tauri-plugin-opener` and
+  `@tauri-apps/plugin-opener`, with a capability that allows only `http://*`,
+  `https://*` and `mailto:*` URLs (no file paths, no other schemes).
 
 ### Security
 
@@ -152,7 +189,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * The dev mock backend (`?mock`) refuses hosts and folders in the words of the
   real backend, deletes a folder the way the store does (contents move up),
   implements the two new identity commands, and takes `&folder=Name` and
-  `&identity=Name` to start those pages on an entry.
+  `&identity=Name` to start those pages on an entry, `&sync[=conflicts|error]`
+  to start signed in to a sync server and `&connect[=host]` to open the connect
+  dialog.
+* The shell draws the page on the white surface (as frames 1, 4, 5 and 8 do),
+  the title bar on the canvas and the status bar on the secondary surface; the
+  Hosts page no longer sits on the grey canvas.
 
 ## [0.2.0] — 2026-10-25
 

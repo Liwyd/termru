@@ -19,7 +19,14 @@
  *   &folder=Europe   selects that folder on the folders page (by name)
  *   &identity=work-ed25519  selects that identity on the identities page
  *   &hostkey         an unknown-host-key prompt appears shortly after start
- *                    (`&hostkey=other`: the host is known under other key types)
+ *                    (`&hostkey=other`: the host is known under other key types;
+ *                    `&hostkey=changed`: the stored key differs from the one presented)
+ *   &connect[=archive]
+ *                    the connect dialog opens for that host (default archive,
+ *                    a password host with nothing stored)
+ *   &sync[=conflicts|error]
+ *                    this device is signed in to a sync server (`conflicts`:
+ *                    with two conflicts to resolve, `error`: the last cycle failed)
  *   &authprompt      a keyboard-interactive question appears shortly after
  *                    start (`&authprompt=passphrase`: a key passphrase)
  *
@@ -75,6 +82,12 @@ export interface MockFlags {
   hostkey: boolean;
   /** The host-key prompt says the host is known under other key types. */
   hostkeyOtherTypes: boolean;
+  /** The host-key prompt is the "key changed" question. */
+  hostkeyChanged: boolean;
+  /** The host (by name) whose connect dialog opens on start, or null. */
+  connect: string | null;
+  /** Signed in to a sync server from the start (`conflicts`, `error`: with trouble). */
+  sync: 'in' | 'conflicts' | 'error' | null;
   /** An authentication question appears on start (`kbd` or `passphrase`). */
   authprompt: 'kbd' | 'passphrase' | null;
   theme: ThemePreference | null;
@@ -92,6 +105,15 @@ function readFlags(): MockFlags {
     identity: params.get('identity') || null,
     hostkey: params.has('hostkey'),
     hostkeyOtherTypes: params.get('hostkey') === 'other',
+    hostkeyChanged: params.get('hostkey') === 'changed',
+    connect: params.has('connect') ? params.get('connect') || 'archive' : null,
+    sync: params.has('sync')
+      ? params.get('sync') === 'conflicts'
+        ? 'conflicts'
+        : params.get('sync') === 'error'
+          ? 'error'
+          : 'in'
+      : null,
     authprompt: params.has('authprompt')
       ? params.get('authprompt') === 'passphrase'
         ? 'passphrase'
@@ -269,7 +291,8 @@ function defaultPreferences(): Preferences {
       cursor_blink: true,
       cursor_style: 'block',
       copy_on_select: false,
-      line_height: 1.65,
+      line_height: 1.3,
+      confirm_multiline_paste: true,
     },
     keybindings: {},
     reduced_motion: 'system',
@@ -293,6 +316,54 @@ function signedOutSync(): SyncStatus {
     last_sync_at: null,
     last_error: null,
   };
+}
+
+/** This device already signed in (`&sync`): the state of the Sync page with an account. */
+function seedSync(flags: MockFlags): SyncStatus {
+  const out = signedOutSync();
+  if (!flags.sync) return out;
+  const conflicts = flags.sync === 'conflicts' ? 2 : 0;
+  return {
+    ...out,
+    settings: {
+      server_url: 'https://sync.atlas.example',
+      email: 'ops@atlas.example',
+      device_name: 'Linux workstation',
+      device_id: out.settings.device_id,
+    },
+    signed_in: true,
+    pending: flags.sync === 'conflicts' ? 3 : 0,
+    conflicts,
+    cursor: 142,
+    last_sync_at: new Date(todayAt(9, 18)).toISOString(),
+    last_error:
+      flags.sync === 'error'
+        ? 'could not reach https://sync.atlas.example (connection refused)'
+        : null,
+  };
+}
+
+/** Two records that changed on this device and on the server (`&sync=conflicts`). */
+function fixtureConflicts(): ConflictView[] {
+  const at = new Date(todayAt(9, 12)).toISOString();
+  return [
+    {
+      record_id: ID.staging,
+      kind: 'host',
+      server_rev: 141,
+      observed_at: at,
+      local: { id: ID.staging, name: 'staging-api', address: '198.51.100.12', port: 22 },
+      remote: { id: ID.staging, name: 'staging-api', address: '198.51.100.40', port: 2222 },
+    },
+    {
+      record_id: ID.archive,
+      kind: 'host',
+      server_rev: 139,
+      observed_at: at,
+      local: { id: ID.archive, name: 'archive', description: 'Cold storage' },
+      remote: null,
+    },
+  ];
 }
 
 /** Today at the given local time (ms since the epoch). */
@@ -401,8 +472,8 @@ function seed(flags: MockFlags): MockState {
     // The password of staging-api is "stored on this device"; archive asks.
     secrets: new Set(flags.empty ? [] : [`${ID.staging}:password`]),
     prefs,
-    sync: signedOutSync(),
-    conflicts: [],
+    sync: seedSync(flags),
+    conflicts: flags.sync === 'conflicts' ? fixtureConflicts() : [],
     layout: flags.demo ? demoLayout() : null,
   };
 }
@@ -451,16 +522,32 @@ export function listen<T>(event: string, handler: EventCallback<T>): Promise<Unl
     hostKeyPromptScheduled = true;
     setTimeout(() => {
       const id = `mock-prompt-${nextEventId}`;
-      const request: HostKeyPromptRequest = {
-        state: 'unknown',
-        host: '192.0.2.10',
-        port: 22,
-        key: {
-          key_type: 'ssh-ed25519',
-          fingerprint: 'SHA256:Vq8m2nT0cYb5LhZr7WdEa1KsXo4GuPj9RfIt3NxMe6A',
-        },
-        ...(flags.hostkeyOtherTypes ? { other_key_types: ['ssh-rsa', 'ecdsa-sha2-nistp256'] } : {}),
-      };
+      const request: HostKeyPromptRequest = flags.hostkeyChanged
+        ? {
+            state: 'changed',
+            host: '192.0.2.10',
+            port: 22,
+            old: {
+              key_type: 'ssh-ed25519',
+              fingerprint: 'SHA256:Zk3qN0yQm1v8cTt2uRk5GxJ7aWb4HsD9eLp6OiXnYfE',
+            },
+            new: {
+              key_type: 'ssh-ed25519',
+              fingerprint: 'SHA256:Vq8m2nT0cYb5LhZr7WdEa1KsXo4GuPj9RfIt3NxMe6A',
+            },
+          }
+        : {
+            state: 'unknown',
+            host: '192.0.2.10',
+            port: 22,
+            key: {
+              key_type: 'ssh-ed25519',
+              fingerprint: 'SHA256:Vq8m2nT0cYb5LhZr7WdEa1KsXo4GuPj9RfIt3NxMe6A',
+            },
+            ...(flags.hostkeyOtherTypes
+              ? { other_key_types: ['ssh-rsa', 'ecdsa-sha2-nistp256'] }
+              : {}),
+          };
       pendingPrompts.add(id);
       const message: HostKeyPromptMessage = { id, session_id: 'mock-session', request };
       emit('host-key-prompt', message);
@@ -816,7 +903,11 @@ let startupScheduled = false;
 
 function scheduleStartup(): void {
   const acts =
-    flags.demo || flags.edit !== null || flags.folder !== null || flags.identity !== null;
+    flags.demo ||
+    flags.edit !== null ||
+    flags.folder !== null ||
+    flags.identity !== null ||
+    flags.connect !== null;
   if (startupScheduled || !acts) return;
   startupScheduled = true;
   // After the app has applied the layout it just received.
@@ -824,6 +915,7 @@ function scheduleStartup(): void {
     void (async () => {
       if (flags.demo) await connectRestoredPanes();
       if (flags.edit !== null) await openEditor(flags.edit);
+      if (flags.connect !== null) await openConnect(flags.connect);
       await selectEntities();
     })();
   }, 0);
@@ -891,6 +983,16 @@ async function selectEntities(): Promise<void> {
     const found = hosts.identities.find((identity) => identity.name === flags.identity);
     if (found) identities.selectedId = found.id;
   }
+}
+
+/** `?connect`: starts a connection, which asks for the password of a password host. */
+async function openConnect(name: string): Promise<void> {
+  const [{ hosts }, { connectFlow }] = await Promise.all([
+    import('../stores/hosts.svelte'),
+    import('../stores/connect.svelte'),
+  ]);
+  const host = hosts.hosts.find((entry) => entry.name === name);
+  if (host) await connectFlow.request(host);
 }
 
 /** `?edit`: opens the host editor, as the "Edit" row action does. */
@@ -1355,6 +1457,15 @@ export async function openFile(_options: OpenFileOptions = {}): Promise<string |
   return '/home/demo/.ssh/id_ed25519';
 }
 
+/** The addresses the mock "opened in the browser" (for the harness and tests). */
+export const openedUrls: string[] = [];
+
+/** The mock of the opener plugin: it remembers the address and opens nothing. */
+export async function openUrl(url: string): Promise<void> {
+  await Promise.resolve();
+  openedUrls.push(url);
+}
+
 /** The mock of the window: the title bar controls do nothing. */
 export async function currentWindow(): Promise<WindowHandle> {
   return {
@@ -1384,6 +1495,9 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     identity: null,
     hostkey: false,
     hostkeyOtherTypes: false,
+    hostkeyChanged: false,
+    connect: null,
+    sync: null,
     authprompt: null,
     theme: null,
     ...next,

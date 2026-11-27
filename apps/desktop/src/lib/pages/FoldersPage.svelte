@@ -17,7 +17,7 @@
   } from '../folders';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { sessions } from '../stores/sessions.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import type { Group, Host } from '../types';
   import type { Pane } from '../stores/sessions.svelte';
 
@@ -209,7 +209,7 @@
           updated_at: now,
           deleted: false,
         });
-        toasts.success(`Created ${created.name}`);
+        notify({ key: 'folder.created', entityId: created.id, values: { name: created.name } });
         hosts.folderSelection = created.id;
         mode = 'edit';
       } else if (folder) {
@@ -218,7 +218,7 @@
           name: name.trim(),
           parent_id: parentId || null,
         });
-        toasts.success(`Saved ${saved.name}`);
+        notify({ key: 'folder.saved', entityId: saved.id, values: { name: saved.name } });
       }
     } catch (err) {
       // The backend refuses a cycle or too deep a nesting, whatever the page offered.
@@ -248,9 +248,9 @@
     try {
       await hosts.removeGroup(target.id);
       if (hosts.folderSelection === target.id) hosts.folderSelection = parent;
-      toasts.success(`Deleted ${target.name}`);
+      notify({ key: 'folder.deleted', entityId: target.id, values: { name: target.name } });
     } catch (err) {
-      toasts.error(`Could not delete the folder: ${errorMessage(err)}`);
+      notify({ key: 'folder.delete-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -258,11 +258,19 @@
     if ((host.group_id ?? null) === groupId) return;
     const moved = await hosts.moveHost(host, groupId);
     if (!moved) {
-      toasts.error(`Could not move ${host.name}: ${hosts.saveError ?? 'the store refused.'}`);
+      notify({
+        key: 'host.move-failed',
+        entityId: host.id,
+        values: { name: host.name, detail: hosts.saveError ?? 'The store refused.' },
+      });
       return;
     }
     const where = groupId ? folderPath(hosts.groups, groupId) : 'Unfiled';
-    toasts.success(`Moved ${host.name} to ${where}`);
+    notify({
+      key: 'host.moved',
+      entityId: host.id,
+      values: { name: host.name, place: where },
+    });
   }
 
   function folderOf(host: Host): string {

@@ -1,175 +1,135 @@
 <script lang="ts">
-  import { focusTrap } from '../actions/focus-trap';
-  import type { Host, SessionSecrets } from '../types';
+  import type { ConnectRequest } from '../stores/connect.svelte';
+  import type { SessionSecrets } from '../types';
+  import Field from './Field.svelte';
+  import Icon from './Icon.svelte';
+  import SessionDialog from './SessionDialog.svelte';
 
+  /**
+   * Asks for the password of a host before a connection starts. It is only
+   * opened for a password host with nothing stored: a key's passphrase and
+   * the questions of a keyboard-interactive server are asked by the backend
+   * when they come up (`AuthPromptDialog`), and an agent needs no question.
+   *
+   * It stays mounted so it can play its exit; `request` is null while it is
+   * closed.
+   */
   let {
-    host,
+    request,
     oncancel,
     onsubmit,
-    secretStored = false,
   }: {
-    host: Host;
+    request: ConnectRequest | null;
     oncancel: () => void;
     onsubmit: (secrets: SessionSecrets, remember: boolean) => void;
-    secretStored?: boolean;
   } = $props();
 
   let password = $state('');
-  let passphrase = $state('');
   let remember = $state(false);
-  let busy = $state(false);
 
-  const needsPassword = $derived(host.auth.type === 'password');
-  const needsPassphrase = $derived(host.auth.type === 'private_key');
+  // What the dialog shows while it fades out, after the request is gone.
+  let last = $state.raw<ConnectRequest | null>(null);
+  $effect(() => {
+    if (request) last = request;
+  });
+  const shown = $derived(request ?? last);
+
+  // Every request starts with an empty field: a password never carries over
+  // from the host before, and never stays in the page once the dialog closes.
+  $effect(() => {
+    if (request) {
+      password = '';
+      remember = false;
+    }
+  });
+
+  const uid = $props.id();
 
   function submit(event: SubmitEvent): void {
     event.preventDefault();
-    busy = true;
+    if (!request) return;
     // An empty field sends no secret at all: the backend then falls back to
     // the credential store (an empty string would be used as the password).
-    const secrets: SessionSecrets = {};
-    if (needsPassword) secrets.password = password.length > 0 ? password : undefined;
-    if (needsPassphrase) secrets.passphrase = passphrase.length > 0 ? passphrase : undefined;
-    onsubmit(secrets, remember);
+    const secrets: SessionSecrets = password.length > 0 ? { password } : {};
+    const keep = remember;
+    password = '';
+    onsubmit(secrets, keep);
+  }
+
+  function cancel(): void {
+    password = '';
+    oncancel();
   }
 </script>
 
-<div
-  class="backdrop"
-  role="presentation"
-  onclick={(event) => {
-    if (event.target === event.currentTarget) oncancel();
-  }}
+<SessionDialog
+  open={request !== null}
+  role="dialog"
+  title={shown ? `Connect to ${shown.host.name}` : 'Connect'}
+  description={shown
+    ? `${shown.host.username}@${shown.host.address}:${shown.host.port}`
+    : undefined}
+  monoDescription
+  onclose={cancel}
+  onsubmit={submit}
 >
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Connect to host"
-    use:focusTrap={{ onescape: oncancel }}
+  <Field
+    label="Password"
+    id="{uid}-password"
+    hint={shown?.secretStored
+      ? 'A password is saved on this device. Leave this empty to use it.'
+      : 'Used for this connection only.'}
   >
-    <form onsubmit={submit}>
-      <h2>Connect to {host.name}</h2>
-      <p class="target">{host.username}@{host.address}:{host.port}</p>
+    {#snippet control(attrs)}
+      <input
+        {...attrs}
+        type="password"
+        bind:value={password}
+        autocomplete="current-password"
+        data-autofocus
+      />
+    {/snippet}
+  </Field>
 
-      {#if needsPassword}
-        <label>
-          Password
-          <input
-            type="password"
-            bind:value={password}
-            autocomplete="current-password"
-            data-autofocus
-          />
-        </label>
-      {/if}
+  <label class="remember">
+    <input type="checkbox" bind:checked={remember} />
+    <span>
+      Save in this device’s credential store
+      <span class="note">Otherwise Termru asks every time.</span>
+    </span>
+  </label>
 
-      {#if needsPassphrase}
-        <label>
-          Passphrase for the private key
-          <input type="password" bind:value={passphrase} autocomplete="off" data-autofocus />
-        </label>
-      {/if}
-
-      {#if needsPassword || needsPassphrase}
-        <label class="checkbox">
-          <input type="checkbox" bind:checked={remember} />
-          <span>Remember in the system credential store</span>
-        </label>
-        {#if secretStored}
-          <p class="hint">A secret is already stored for this host.</p>
-        {/if}
-      {/if}
-
-      <p class="hint">
-        {#if needsPassword}
-          The password is used for this connection only and is never stored on disk.
-        {:else if needsPassphrase}
-          The passphrase is used for this connection only and is never stored on disk.
-        {:else}
-          This host uses your running SSH agent.
-        {/if}
-      </p>
-
-      <div class="actions">
-        <button type="button" onclick={oncancel}>Cancel</button>
-        <button type="submit" class="primary" disabled={busy}>Connect</button>
-      </div>
-    </form>
-  </div>
-</div>
+  {#snippet actions()}
+    <button type="button" class="quiet" onclick={cancel}>Cancel</button>
+    <button type="submit" class="primary connect">
+      <Icon name="arrow-up-right" size={16} />
+      Connect
+    </button>
+  {/snippet}
+</SessionDialog>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 6, 23, 0.55);
+  .remember {
     display: flex;
+    align-items: flex-start;
+    gap: var(--termru-space-2);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    cursor: pointer;
+  }
+
+  .remember input {
+    margin: 2px 0 0;
+  }
+
+  .note {
+    display: block;
+    color: var(--termru-muted);
+  }
+
+  .connect {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    z-index: 40;
-  }
-
-  .dialog {
-    width: min(26rem, 92vw);
-    padding: 1.1rem;
-    border-radius: var(--termru-radius-lg);
-    border: 1px solid var(--termru-border);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 1rem;
-  }
-
-  .target {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--termru-muted);
-  }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.8rem;
-    color: var(--termru-muted);
-  }
-
-  input {
-    padding: 0.4rem 0.5rem;
-    border-radius: var(--termru-radius);
-    border: 1px solid var(--termru-border);
-    background: var(--termru-bg);
-    color: var(--termru-fg);
-    font: inherit;
-  }
-
-  .checkbox {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.4rem;
-    color: var(--termru-fg);
-    font-size: 0.8rem;
-  }
-
-  .hint {
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--termru-muted);
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
+    gap: var(--termru-space-2);
   }
 </style>

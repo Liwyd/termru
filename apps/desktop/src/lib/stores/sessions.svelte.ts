@@ -15,7 +15,7 @@ import { disposeTerminal } from '../terminal/registry';
 import { clearWriteQueue } from '../terminal/write-queue';
 import { errorMessage, hosts } from './hosts.svelte';
 import { route } from './route.svelte';
-import { toasts } from './toasts.svelte';
+import { notify } from '../notify.svelte';
 import type { Host, SessionSecrets, SessionStatus, SessionUpdate, WorkspaceDoc } from '../types';
 
 export interface Pane {
@@ -283,7 +283,7 @@ export class SessionStore {
     const pane = this.activePaneOf(tab);
     if (!pane) return null;
     if (tab.panes.length >= MAX_PANES_PER_TAB) {
-      toasts.error(`A tab can hold at most ${MAX_PANES_PER_TAB} panes.`);
+      notify({ key: 'session.pane-limit', values: { count: MAX_PANES_PER_TAB } });
       return null;
     }
     const created = this.#newPane(null, {}, false);
@@ -394,7 +394,7 @@ export class SessionStore {
       } catch (err) {
         // The session may already be gone; the pane is closing either way.
         if (!/no session/i.test(errorMessage(err))) {
-          toasts.error(errorMessage(err));
+          notify({ key: 'session.close-failed', values: { detail: errorMessage(err) } });
         }
       }
       // The session is gone: closing the tab must not close it again.
@@ -486,7 +486,7 @@ export class SessionStore {
         await api.sessionClose(pane.sessionId);
       } catch (err) {
         if (!/no session/i.test(errorMessage(err))) {
-          toasts.error(errorMessage(err));
+          notify({ key: 'session.close-failed', values: { detail: errorMessage(err) } });
         }
       }
     }
@@ -706,7 +706,7 @@ export class SessionStore {
         await api.windowOpenSession(pane.sessionId, title);
         moved.push(pane);
       } catch (err) {
-        toasts.error(errorMessage(err));
+        notify({ key: 'session.move-failed', values: { detail: errorMessage(err) } });
       }
     }
     if (moved.length === 0) return;
@@ -776,9 +776,9 @@ export class SessionStore {
     this.#pendingPassphrases.delete(sessionId);
     try {
       await api.secretSet(pending.hostId, 'passphrase', pending.value);
-      toasts.success('The passphrase was stored in your system credential store.');
+      notify({ key: 'credential.stored' });
     } catch (err) {
-      toasts.error(errorMessage(err));
+      notify({ key: 'credential.store-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -927,9 +927,9 @@ export class SessionStore {
       if (passphrase) target.secrets.passphrase = undefined;
       // The hosts table shows the same fact in its Authentication column.
       if (password) hosts.markPasswordStored(target.host.id, true);
-      toasts.success('The secret was stored in your system credential store.');
+      notify({ key: 'credential.stored' });
     } catch (err) {
-      toasts.error(errorMessage(err));
+      notify({ key: 'credential.store-failed', values: { detail: errorMessage(err) } });
     }
   }
 

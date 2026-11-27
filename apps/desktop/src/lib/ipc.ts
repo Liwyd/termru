@@ -1,6 +1,7 @@
 import { invoke } from './ipc-backend';
 import type { Channel } from './ipc-backend';
 import type {
+  AppInfo,
   ConflictView,
   GeneratedIdentity,
   Group,
@@ -26,6 +27,8 @@ import type {
  * camelCase; Tauri maps them to the Rust `snake_case` parameters.
  */
 export const api = {
+  appInfo: () => invoke<AppInfo>('app_info'),
+
   hostList: () => invoke<Host[]>('host_list'),
   recentList: () => invoke<RecentHost[]>('recent_list'),
   hostSave: (host: Host) => invoke<Host>('host_save', { host }),

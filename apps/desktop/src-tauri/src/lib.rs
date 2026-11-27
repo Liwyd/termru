@@ -55,6 +55,9 @@ fn build() -> tauri::Result<tauri::App> {
         // The native file picker: the user chooses the private key file
         // instead of typing its path.
         .plugin(tauri_plugin_dialog::init())
+        // A link in terminal output opens in the system browser. The
+        // capability allows only http, https and mailto addresses.
+        .plugin(tauri_plugin_opener::init())
         // A window that is closed releases its views. A session that no
         // window shows any more is not closed at once (its tab may be moving
         // to a window that has not attached yet): its connection task closes

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PASTE_CONFIRM_MIN_LINES,
   PASTE_PREVIEW_LINES,
@@ -8,7 +8,12 @@ import {
   pasteLines,
   sanitizePaste,
 } from './paste.svelte';
+import { notices } from '../notify.svelte';
+import { defaultPrefs, prefs } from '../stores/prefs.svelte';
+import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import { registerTerminal, pruneTerminals, type TerminalHandle } from './registry';
+
+vi.mock('@tauri-apps/api/core', () => import('../test-support/tauri-core-mock'));
 
 function fakeHandle(paneId: string) {
   const pasted: string[] = [];
@@ -28,7 +33,9 @@ function fakeHandle(paneId: string) {
 beforeEach(() => {
   pruneTerminals(new Set());
   pasteGate.pending = null;
-  pasteGate.skipConfirm = false;
+  resetTauriMock();
+  notices.reset();
+  prefs.prefs = defaultPrefs();
 });
 
 describe('paste thresholds', () => {
@@ -91,7 +98,8 @@ describe('the paste gate', () => {
     expect(pasted).toEqual([text]);
     expect(pasteGate.pending).toBeNull();
     // Without the checkbox the next one asks again.
-    expect(pasteGate.skipConfirm).toBe(false);
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(true);
+    expect(callsOf('prefs_set')).toHaveLength(0);
   });
 
   it('sends nothing when the user cancels', () => {
@@ -105,14 +113,56 @@ describe('the paste gate', () => {
     expect(pasted).toEqual([]);
   });
 
-  it("remembers 'don't ask again' for the session", () => {
+  it('asks by default: the preference is on', () => {
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(true);
+    const { pasted } = fakeHandle('pane-1');
+    expect(pasteGate.request('pane-1', 'a\nb')).toBe('asked');
+    expect(pasted).toEqual([]);
+  });
+
+  it("turns the question off in the preferences with 'don't ask again'", async () => {
     const { pasted } = fakeHandle('pane-1');
     pasteGate.request('pane-1', 'a\nb');
     pasteGate.confirm(true);
-    expect(pasteGate.skipConfirm).toBe(true);
+    // The paste went through, and the next several-line paste does not ask.
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(false);
     expect(pasteGate.request('pane-1', 'c\nd\ne')).toBe('sent');
     expect(pasted).toEqual(['a\nb', 'c\nd\ne']);
     expect(pasteGate.pending).toBeNull();
+    // It is saved, not remembered for the session only.
+    await vi.waitFor(() => expect(callsOf('prefs_set')).toHaveLength(1));
+    const saved = (callsOf('prefs_set')[0].args as { prefs: typeof prefs.prefs }).prefs;
+    expect(saved.terminal.confirm_multiline_paste).toBe(false);
+    // Nothing else in the preferences changed with it.
+    expect(saved.theme).toBe(defaultPrefs().theme);
+    expect(saved.terminal.font_size).toBe(defaultPrefs().terminal.font_size);
+  });
+
+  it('does not ask when the preference is off from the start, and asks again when it is on', () => {
+    const { pasted } = fakeHandle('pane-1');
+    prefs.prefs = {
+      ...defaultPrefs(),
+      terminal: { ...defaultPrefs().terminal, confirm_multiline_paste: false },
+    };
+    expect(pasteGate.request('pane-1', 'a\nb')).toBe('sent');
+    expect(pasted).toEqual(['a\nb']);
+    prefs.prefs = defaultPrefs();
+    expect(pasteGate.request('pane-1', 'c\nd')).toBe('asked');
+  });
+
+  it('keeps asking, and says why, when the preference could not be saved', async () => {
+    failures.set('prefs_set', 'disk full');
+    answers.set('prefs_get', defaultPrefs());
+    const { pasted } = fakeHandle('pane-1');
+    pasteGate.request('pane-1', 'a\nb');
+    pasteGate.confirm(true);
+    // This paste was confirmed, so it goes through.
+    expect(pasted).toEqual(['a\nb']);
+    await vi.waitFor(() => expect(notices.visible).toHaveLength(1));
+    expect(notices.visible[0].kind).toBe('error');
+    expect(notices.visible[0].description).toContain('disk full');
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(true);
+    expect(pasteGate.request('pane-1', 'c\nd')).toBe('asked');
   });
 
   it('drops a paste whose pane went away while it waited', () => {

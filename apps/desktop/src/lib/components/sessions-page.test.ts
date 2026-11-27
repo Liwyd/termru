@@ -10,11 +10,11 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionsPage from '../pages/SessionsPage.svelte';
 import { hosts } from '../stores/hosts.svelte';
-import { prefs } from '../stores/prefs.svelte';
+import { defaultPrefs, prefs } from '../stores/prefs.svelte';
 import { route } from '../stores/route.svelte';
 import { sessions, type Pane, type Tab } from '../stores/sessions.svelte';
 import { terminalUi } from '../stores/terminal-ui.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
 import { pasteGate } from '../terminal/paste.svelte';
 import { getTerminal, pruneTerminals } from '../terminal/registry';
 import { click, findButton, newTarget, press, stubBrowserApis, type } from '../test-support/dom';
@@ -71,12 +71,12 @@ beforeEach(() => {
   sessions.closeRequest = null;
   hosts.hosts = [];
   hosts.loaded = true;
-  toasts.toasts = [];
+  notices.reset();
   route.route = 'sessions';
   terminalUi.menu = null;
   terminalUi.hintDismissed = false;
   pasteGate.pending = null;
-  pasteGate.skipConfirm = false;
+  prefs.prefs = defaultPrefs();
   prefs.prefs = { ...prefs.prefs, keybindings: {} };
   written = [];
   clipboardText = 'ls -la';
@@ -228,7 +228,7 @@ describe('the terminal context menu', () => {
     mountPage();
     rightClick(pane);
     click(item('Paste'));
-    await vi.waitFor(() => expect(toasts.toasts.map((toast) => toast.kind)).toEqual(['error']));
+    await vi.waitFor(() => expect(notices.visible.map((toast) => toast.kind)).toEqual(['error']));
   });
 
   it('selects all and clears the scrollback', () => {
@@ -542,10 +542,11 @@ describe('pasting into the terminal', () => {
     expect(terminalOf(pane).term.pasted).toEqual([]);
   });
 
-  it("stops asking for the session after 'Don't ask again'", () => {
+  it("turns the question off in Preferences after 'Don't ask again'", async () => {
     const { pane } = openTab();
     mountPage();
     nativePaste(pane, 'a\nb');
+    expect(dialog()?.textContent).toContain('turn the question back on in Preferences');
     const box = dialog()?.querySelector('input[type="checkbox"]') as HTMLInputElement;
     box.checked = true;
     box.dispatchEvent(new Event('change', { bubbles: true }));
@@ -553,6 +554,20 @@ describe('pasting into the terminal', () => {
     click(findButton(dialog() as HTMLElement, 'Paste'));
     nativePaste(pane, 'c\nd\ne');
     expect(terminalOf(pane).term.pasted).toEqual(['a\nb', 'c\nd\ne']);
+    expect(prefs.prefs.terminal.confirm_multiline_paste).toBe(false);
+    await vi.waitFor(() => expect(callsOf('prefs_set')).toHaveLength(1));
+  });
+
+  it('does not ask at all while Preferences has the question off', () => {
+    prefs.prefs = {
+      ...defaultPrefs(),
+      terminal: { ...defaultPrefs().terminal, confirm_multiline_paste: false },
+    };
+    const { pane } = openTab();
+    mountPage();
+    nativePaste(pane, 'a\nb');
+    expect(dialog()).toBeNull();
+    expect(terminalOf(pane).term.pasted).toEqual(['a\nb']);
   });
 
   it('traps the focus in the dialog', () => {

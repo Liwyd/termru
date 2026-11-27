@@ -23,6 +23,7 @@ import type { InvokeArgs } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import type { EventCallback, UnlistenFn } from '@tauri-apps/api/event';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
+import { openUrl as tauriOpenUrl } from '@tauri-apps/plugin-opener';
 
 export type { EventCallback, InvokeArgs, UnlistenFn };
 
@@ -115,6 +116,16 @@ export function listen<T>(event: string, handler: EventCallback<T>): Promise<Unl
 export function openFile(options: OpenFileOptions = {}): Promise<string | null> {
   if (mock) return mock.openFile(options);
   return tauriOpen({ multiple: false, directory: false, title: options.title });
+}
+
+/**
+ * Opens an address in the system browser (the opener plugin). The backend's
+ * capability limits it to http, https and mailto: anything else is refused
+ * there, whatever this function is asked for. Rejects when it cannot open.
+ */
+export function openUrl(url: string): Promise<void> {
+  if (mock) return mock.openUrl(url);
+  return tauriOpenUrl(url);
 }
 
 /**

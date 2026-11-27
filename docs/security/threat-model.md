@@ -120,9 +120,16 @@ full-disk-encryption recommendation is part of the install documentation.
 
 ### 3.4 IPC and the webview
 
-* The Tauri capability set is minimal (`core:default`): no filesystem, shell,
-  HTTP or opener permissions. The application registers no plugin
-  permissions.
+* The Tauri capability set is minimal: `core:default`, the window basics, the
+  native key file picker (`dialog:allow-open`) and one scoped opener permission,
+  `opener:allow-open-url`, limited to `http://*`, `https://*` and `mailto:*`.
+  There is no filesystem, shell or HTTP permission, no `opener:default` (it also
+  reveals files in the file manager), no `open-path`, and the scope allows no
+  choice of application. A link in terminal output is only handed to the opener
+  when it parses as an http or https address
+  (`apps/desktop/src/lib/terminal/links.ts`); if the opener refuses or fails, the
+  address is copied instead. `opener-capability.test.ts` fails if the scope
+  widens.
 * A Content-Security-Policy is set for the production bundle.
 * Every command validates its input: terminal geometry bounds, host and
   identity validation (shared with the sync path), secret-kind whitelist,

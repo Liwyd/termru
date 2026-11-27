@@ -24,6 +24,7 @@ const DEFAULT_PREFS: Preferences = {
     cursor_style: 'block',
     copy_on_select: false,
     line_height: DEFAULT_LINE_HEIGHT,
+    confirm_multiline_paste: true,
   },
   keybindings: {},
   reduced_motion: 'system',
@@ -31,13 +32,24 @@ const DEFAULT_PREFS: Preferences = {
   routine_notices: true,
 };
 
-/** Replaces the retired default line height; any other value is the user's. */
+/** A fresh copy of the defaults ("Restore defaults" writes it). */
+export function defaultPrefs(): Preferences {
+  return structuredClone(DEFAULT_PREFS);
+}
+
+/**
+ * Fills what an older record lacks and replaces the retired default line
+ * height; any other value is the user's. The backend already fills the
+ * missing fields (serde defaults); this keeps the frontend safe against a
+ * store that answers with less.
+ */
 export function migratePrefs(loaded: Preferences): Preferences {
-  const lineHeight = loaded.terminal?.line_height;
+  const terminal = { ...DEFAULT_PREFS.terminal, ...loaded.terminal };
+  const lineHeight = terminal.line_height;
   if (typeof lineHeight === 'number' && Math.abs(lineHeight - LEGACY_LINE_HEIGHT) < 1e-6) {
-    return { ...loaded, terminal: { ...loaded.terminal, line_height: DEFAULT_LINE_HEIGHT } };
+    terminal.line_height = DEFAULT_LINE_HEIGHT;
   }
-  return loaded;
+  return { ...DEFAULT_PREFS, ...loaded, terminal };
 }
 
 /** Portable preferences (theme, terminal appearance). */

@@ -6,11 +6,15 @@
  * paste of several lines runs every line as soon as the shell sees it, so it
  * waits for a yes in a dialog; one line is sent at once.
  *
- * "Don't ask again" lasts for the session: there is no preference for it,
- * and a setting that silently makes pastes dangerous is not one to persist
- * by accident.
+ * The question is a preference (`terminal.confirm_multiline_paste`, on by
+ * default; Preferences has the switch). "Don't ask again" in the dialog turns
+ * it off in the same place, so there is one setting and one way back, and the
+ * dialog says where. A refused save is reported, and the question stays on.
  */
 
+import { notify } from '../notify.svelte';
+import { errorMessage } from '../stores/hosts.svelte';
+import { prefs } from '../stores/prefs.svelte';
 import { getTerminal } from './registry';
 
 /** A paste of at least this many lines asks first. */
@@ -58,14 +62,12 @@ export interface PendingPaste {
 class PasteGate {
   /** The paste waiting for the user's answer. */
   pending = $state.raw<PendingPaste | null>(null);
-  /** The user said not to ask again (this session only). */
-  skipConfirm = $state(false);
 
   /** Sends a paste to a pane's terminal, or asks first. Returns what happened. */
   request(paneId: string, raw: string): 'sent' | 'asked' | 'empty' {
     const text = sanitizePaste(raw);
     if (text.length === 0) return 'empty';
-    if (this.skipConfirm || !needsPasteConfirm(text)) {
+    if (!prefs.prefs.terminal.confirm_multiline_paste || !needsPasteConfirm(text)) {
       this.#send(paneId, text);
       return 'sent';
     }
@@ -84,8 +86,23 @@ class PasteGate {
     const pending = this.pending;
     this.pending = null;
     if (!pending) return;
-    if (dontAskAgain) this.skipConfirm = true;
+    if (dontAskAgain) void this.#stopAsking();
     this.#send(pending.paneId, pending.text);
+  }
+
+  /** Turns the question off in the preferences. */
+  async #stopAsking(): Promise<void> {
+    const before = prefs.prefs;
+    try {
+      await prefs.update({
+        ...prefs.prefs,
+        terminal: { ...prefs.prefs.terminal, confirm_multiline_paste: false },
+      });
+    } catch (err) {
+      // Not saved: the question stays on, and the user is told why.
+      prefs.prefs = before;
+      notify({ key: 'prefs.save-failed', values: { detail: errorMessage(err) } });
+    }
   }
 
   /** The user chose Cancel (or Escape): nothing is sent. */

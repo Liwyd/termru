@@ -12,7 +12,8 @@ import { connectFlow } from '../stores/connect.svelte';
 import { hosts } from '../stores/hosts.svelte';
 import { identities } from '../stores/identities.svelte';
 import { route } from '../stores/route.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { unsaved } from '../stores/unsaved.svelte';
 import { click, findButton, newTarget, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
@@ -130,7 +131,7 @@ beforeEach(() => {
   route.editHost = null;
   window.location.hash = '#hosts';
   route.route = 'hosts';
-  toasts.toasts = [];
+  notices.reset();
   target = newTarget();
   answers.set('host_save', (args: unknown) => (args as { host: Host }).host);
   answers.set('identity_bindings', []);
@@ -327,7 +328,7 @@ describe('saving', () => {
       auth: { type: 'password' },
       group_id: null,
     });
-    expect(toasts.toasts.at(-1)?.message).toBe('Saved web-1');
+    expect(noticeText(notices.visible.at(-1))).toBe('Host saved. web-1 · Saved on this device');
   });
 
   it('keeps the typed password in the credential store, not in the host', async () => {
@@ -362,10 +363,10 @@ describe('saving', () => {
     failures.set('secret_set', 'no system credential store is available');
     click(findButton(target, 'Save host'));
     await vi.waitFor(() => expect(callsOf('host_save')).toHaveLength(1));
-    await vi.waitFor(() => expect(toasts.toasts.length).toBeGreaterThan(0));
-    expect(toasts.toasts.at(-1)?.kind).toBe('error');
-    expect(toasts.toasts.at(-1)?.message).toContain('password was not stored');
-    expect(toasts.toasts.at(-1)?.message).not.toContain('s3cret-pass');
+    await vi.waitFor(() => expect(notices.visible.length).toBeGreaterThan(0));
+    expect(notices.visible.at(-1)?.kind).toBe('error');
+    expect(noticeText(notices.visible.at(-1))).toContain('password was not stored');
+    expect(noticeText(notices.visible.at(-1))).not.toContain('s3cret-pass');
   });
 
   it('writes nothing for a host that has no change', () => {
@@ -414,7 +415,7 @@ describe('the local credential rail', () => {
     await vi.waitFor(() =>
       expect(target.textContent).toContain('No password is stored for this host on this device'),
     );
-    expect(toasts.toasts.at(-1)?.message).toContain('Forgot the password');
+    expect(noticeText(notices.visible.at(-1))).toContain('Password forgotten');
     expect(target.querySelector('.pill')).toBeNull();
   });
 
@@ -424,8 +425,8 @@ describe('the local credential rail', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('A password is stored'));
     failures.set('secret_delete', 'the credential store is locked');
     click(findButton(target, 'Forget password'));
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.kind).toBe('error'));
-    expect(toasts.toasts.at(-1)?.message).toContain('the credential store is locked');
+    await vi.waitFor(() => expect(notices.visible.at(-1)?.kind).toBe('error'));
+    expect(noticeText(notices.visible.at(-1))).toContain('the credential store is locked');
     expect(target.textContent).toContain('A password is stored');
   });
 

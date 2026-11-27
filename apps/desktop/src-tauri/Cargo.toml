@@ -51,6 +51,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 uuid = { workspace = true }
 keyring = "4"
 tauri-plugin-dialog = "2"
+# Opens a link from terminal output in the system browser. The capability
+# (capabilities/default.json) limits it to http, https and mailto.
+tauri-plugin-opener = "2.7.3"
 # Key generation for identities (ed25519, OpenSSH format). The crate is
 # already in the tree through russh; the features are the ones russh enables
 # plus `getrandom` for the operating system RNG.

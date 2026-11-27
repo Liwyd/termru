@@ -18,6 +18,7 @@ vi.mock('./ipc-backend', async () => {
     Channel: mock.Channel,
     listen: mock.listen,
     openFile: mock.openFile,
+    openUrl: mock.openUrl,
     currentWindow: mock.currentWindow,
   };
 });
@@ -84,6 +85,7 @@ describe('mock backend: command coverage', () => {
 
   /** One call per `api` function: adding a command to `api` fails to compile until it is listed. */
   const calls: Record<keyof typeof api, () => Promise<unknown>> = {
+    appInfo: () => api.appInfo(),
     hostList: () => api.hostList(),
     recentList: () => api.recentList(),
     hostSave: () => api.hostSave(host),
@@ -405,5 +407,38 @@ describe('dev harness is dev-only', () => {
       .filter((file) => /dev\/mock-ipc/.test(readFileSync(file, 'utf8')))
       .map((file) => relative(SRC, file));
     expect(offenders).toEqual(['lib/ipc-backend.ts']);
+  });
+});
+
+describe('mock backend: the sync flag', () => {
+  it('starts signed out by default', async () => {
+    mockIpc.resetMock();
+    const status = await api.syncStatus();
+    expect(status.signed_in).toBe(false);
+    expect(await api.syncConflicts()).toEqual([]);
+  });
+
+  it('starts signed in with `&sync`, with conflicts on `&sync=conflicts`', async () => {
+    mockIpc.resetMock({ sync: 'in' });
+    expect((await api.syncStatus()).signed_in).toBe(true);
+    expect((await api.syncStatus()).conflicts).toBe(0);
+
+    mockIpc.resetMock({ sync: 'conflicts' });
+    const status = await api.syncStatus();
+    expect(status.conflicts).toBe(2);
+    expect(await api.syncConflicts()).toHaveLength(2);
+    await api.syncResolveConflict((await api.syncConflicts())[0].record_id, true);
+    expect(await api.syncConflicts()).toHaveLength(1);
+
+    mockIpc.resetMock({ sync: 'error' });
+    expect((await api.syncStatus()).last_error).toContain('connection refused');
+    mockIpc.resetMock();
+  });
+
+  it('reports the version and opens links without a browser', async () => {
+    mockIpc.resetMock();
+    expect((await api.appInfo()).version).toMatch(/\d/);
+    await mockIpc.openUrl('https://example.com/');
+    expect(mockIpc.openedUrls.at(-1)).toBe('https://example.com/');
   });
 });

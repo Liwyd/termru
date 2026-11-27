@@ -9,7 +9,8 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FoldersPage from './FoldersPage.svelte';
 import { hosts } from '../stores/hosts.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { click, findButton, newTarget, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { Group, Host } from '../types';
@@ -94,7 +95,7 @@ beforeEach(() => {
   hosts.tags = [];
   hosts.saveError = null;
   hosts.folderSelection = 'all';
-  toasts.toasts = [];
+  notices.reset();
   target = newTarget();
   answers.set('group_save', (args: unknown) => (args as { group: Group }).group);
   answers.set('host_save', (args: unknown) => (args as { host: Host }).host);
@@ -221,7 +222,7 @@ describe('moving hosts', () => {
     await vi.waitFor(() => expect(callsOf('host_save')).toHaveLength(1));
     expect((callsOf('host_save')[0].args?.host as Host).group_id).toBe('eu');
     await vi.waitFor(() =>
-      expect(toasts.toasts.at(-1)?.message).toBe('Moved staging to Production / Europe'),
+      expect(noticeText(notices.visible.at(-1))).toBe('Host moved. staging · Production / Europe'),
     );
     // The tree follows.
     await vi.waitFor(() =>
@@ -274,8 +275,8 @@ describe('moving hosts', () => {
       ) as HTMLSelectElement,
       'eu',
     );
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.kind).toBe('error'));
-    expect(toasts.toasts.at(-1)?.message).toContain('the store is read-only');
+    await vi.waitFor(() => expect(notices.visible.at(-1)?.kind).toBe('error'));
+    expect(noticeText(notices.visible.at(-1))).toContain('the store is read-only');
     expect(treeItem('Sandbox').querySelector('.count')?.textContent).toBe('2');
   });
 
@@ -346,7 +347,9 @@ describe('the edit rail and the cycle guard', () => {
       name: 'Staging',
       parent_id: 'prod',
     });
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.message).toBe('Saved Staging'));
+    await vi.waitFor(() =>
+      expect(noticeText(notices.visible.at(-1))).toBe('Folder saved. Staging'),
+    );
     expect(treeItem('Staging').getAttribute('aria-current')).toBe('true');
   });
 
@@ -389,7 +392,7 @@ describe('the edit rail and the cycle guard', () => {
     click(findButton(target, 'Create folder'));
     await vi.waitFor(() => expect(callsOf('group_save')).toHaveLength(1));
     expect(callsOf('group_save')[0].args?.group).toMatchObject({ name: 'Asia', parent_id: 'prod' });
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.message).toBe('Created Asia'));
+    await vi.waitFor(() => expect(noticeText(notices.visible.at(-1))).toBe('Folder created. Asia'));
     // The new folder is selected and its rail edits it.
     expect(treeItem('Asia').getAttribute('aria-current')).toBe('true');
     expect(target.querySelector('.rail .wp-label')?.textContent).toBe('EDIT FOLDER');
@@ -449,7 +452,9 @@ describe('deleting a folder', () => {
     click(findButton(dialog() as HTMLElement, 'Delete folder'));
     await vi.waitFor(() => expect(callsOf('group_delete')).toHaveLength(1));
     expect(callsOf('group_delete')[0].args).toEqual({ id: 'eu' });
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.message).toBe('Deleted Europe'));
+    await vi.waitFor(() =>
+      expect(noticeText(notices.visible.at(-1))).toBe('Folder deleted. Europe'),
+    );
     // The selection moved up to the parent, and the lists were read again.
     expect(target.querySelector('h2')?.textContent).toBe('Production');
     expect(() => treeItem('Europe')).toThrow();
@@ -462,7 +467,7 @@ describe('deleting a folder', () => {
     click(findButton(target, 'Delete folder'));
     await vi.waitFor(() => expect(dialog()).not.toBeNull());
     click(findButton(dialog() as HTMLElement, 'Delete folder'));
-    await vi.waitFor(() => expect(toasts.toasts.at(-1)?.kind).toBe('error'));
-    expect(toasts.toasts.at(-1)?.message).toContain('the store is read-only');
+    await vi.waitFor(() => expect(notices.visible.at(-1)?.kind).toBe('error'));
+    expect(noticeText(notices.visible.at(-1))).toContain('the store is read-only');
   });
 });

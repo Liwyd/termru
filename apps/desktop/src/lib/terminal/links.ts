@@ -6,14 +6,13 @@
  * page: leaving it would lose every terminal), so a click either hands the
  * address to the system's opener or copies it.
  *
- * The system opener is the Tauri opener plugin's `open_url` command. Termru
- * does not ship that plugin yet (it needs a Rust dependency and a
- * capability), so the call is made through the IPC seam and a missing
- * command falls back to the clipboard. When the plugin is added, links open
- * with no change here.
+ * The system opener is the Tauri opener plugin (`ipc-backend.ts` `openUrl`).
+ * Its capability allows http, https and mailto only, and the app only ever
+ * hands it web links (`openableUrl`). When the opener fails (no browser, a
+ * sandbox that refuses it) the address is copied instead.
  */
 
-import { invoke } from '../ipc-backend';
+import { openUrl } from '../ipc-backend';
 
 /** The schemes a terminal link may open. */
 const OPENABLE_PROTOCOLS = new Set(['http:', 'https:']);
@@ -61,7 +60,7 @@ export async function openLink(raw: string): Promise<OpenResult> {
   const url = openableUrl(raw);
   if (!url) return 'refused';
   try {
-    await invoke<void>('plugin:opener|open_url', { url });
+    await openUrl(url);
     return 'opened';
   } catch {
     return (await copyText(url)) ? 'copied' : 'failed';

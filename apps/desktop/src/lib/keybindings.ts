@@ -269,13 +269,34 @@ export function effectiveBindings(overrides: Record<string, string> = {}): Keybi
   }));
 }
 
-/** The accelerator of one command, with the overrides applied. */
+/**
+ * The accelerator of one command, with the overrides applied. `mac` asks for
+ * another platform's default (the Preferences table shows both columns); an
+ * override applies to every platform as it was recorded.
+ */
 export function acceleratorFor(
   commandId: CommandId,
   overrides: Record<string, string> = {},
+  mac: boolean = isMac(),
 ): string {
   const command = COMMANDS.find((entry) => entry.id === commandId);
-  return overrides[commandId] ?? (command ? defaultAccelerator(command) : '');
+  return overrides[commandId] ?? (command ? defaultAccelerator(command, mac) : '');
+}
+
+/**
+ * The keys of an accelerator as separate labels (`['Ctrl', 'Shift', 'K']`, or
+ * `['⌘', '⇧', 'K']` on macOS), for a table that sets them apart. An empty
+ * accelerator has no keys.
+ */
+export function acceleratorParts(accelerator: string, mac: boolean = isMac()): string[] {
+  if (!accelerator.trim()) return [];
+  const glyphs: Record<string, string> = { Cmd: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' };
+  return splitAccelerator(accelerator).map((part) => {
+    if (part === 'Mod') return mac ? '⌘' : 'Ctrl';
+    if (part === 'Plus') return '+';
+    if (part === 'Minus') return '-';
+    return mac ? (glyphs[part] ?? part) : part;
+  });
 }
 
 /**

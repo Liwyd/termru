@@ -8,7 +8,7 @@
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { identities } from '../stores/identities.svelte';
   import { route } from '../stores/route.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import { MAX_NAME_LEN } from '../validation';
   import type { Host, Identity } from '../types';
 
@@ -35,7 +35,11 @@
   let deleteTarget = $state<Identity | null>(null);
 
   onMount(() => {
-    void identities.loadBindings().catch((err) => toasts.error(errorMessage(err)));
+    void identities
+      .loadBindings()
+      .catch((err) =>
+        notify({ key: 'identity.load-failed', values: { detail: errorMessage(err) } }),
+      );
     return () => clearTimeout(copiedTimer);
   });
 
@@ -175,7 +179,7 @@
     try {
       if (mode === 'edit' && identity) {
         const saved = await identities.rename(identity, name, comment);
-        toasts.success(`Saved ${saved.name}`);
+        notify({ key: 'identity.saved', entityId: saved.id, values: { name: saved.name } });
       } else if (source === 'generate') {
         const made = await identities.generate({
           name,
@@ -183,8 +187,14 @@
           passphrase,
           rememberPassphrase: remember,
         });
-        toasts.success(`Generated a key for ${made.identity.name}`);
-        if (made.passphrase_note) toasts.error(made.passphrase_note);
+        notify({
+          key: 'identity.generated',
+          entityId: made.identity.id,
+          values: { name: made.identity.name },
+        });
+        if (made.passphrase_note) {
+          notify({ key: 'identity.passphrase-note', values: { detail: made.passphrase_note } });
+        }
         offerToParkedEditor(made.identity);
         passphrase = '';
         identities.selectedId = made.identity.id;
@@ -197,9 +207,13 @@
         try {
           await identities.bind(created, picked);
         } catch (err) {
-          toasts.error(`Created ${created.name}, but the key was not bound: ${errorMessage(err)}`);
+          notify({
+            key: 'identity.created-unbound',
+            entityId: created.id,
+            values: { name: created.name, detail: errorMessage(err) },
+          });
         }
-        toasts.success(`Created ${created.name}`);
+        notify({ key: 'identity.created', entityId: created.id, values: { name: created.name } });
         offerToParkedEditor(created);
         identities.selectedId = created.id;
         mode = 'edit';
@@ -216,18 +230,18 @@
       const picked = await openFile({ title: 'Choose a private key file' });
       if (typeof picked !== 'string' || picked.length === 0) return;
       await identities.bind(target, picked);
-      toasts.success(`Bound a key to ${target.name}`);
+      notify({ key: 'identity.bound', entityId: target.id, values: { name: target.name } });
     } catch (err) {
-      toasts.error(`Could not bind the key: ${errorMessage(err)}`);
+      notify({ key: 'identity.bind-failed', values: { detail: errorMessage(err) } });
     }
   }
 
   async function unbind(target: Identity): Promise<void> {
     try {
       await identities.unbind(target);
-      toasts.success(`Unbound the key of ${target.name}`);
+      notify({ key: 'identity.unbound', entityId: target.id, values: { name: target.name } });
     } catch (err) {
-      toasts.error(`Could not unbind the key: ${errorMessage(err)}`);
+      notify({ key: 'identity.unbind-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -235,7 +249,7 @@
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      toasts.error('Could not copy. Select the text and copy it by hand.');
+      notify({ key: 'clipboard.copy-failed' });
       return;
     }
     copied = kind;
@@ -258,9 +272,9 @@
     try {
       await identities.remove(target);
       if (identities.selectedId === target.id) identities.selectedId = null;
-      toasts.success(`Deleted ${target.name}`);
+      notify({ key: 'identity.deleted', entityId: target.id, values: { name: target.name } });
     } catch (err) {
-      toasts.error(`Could not delete the identity: ${errorMessage(err)}`);
+      notify({ key: 'identity.delete-failed', values: { detail: errorMessage(err) } });
     }
   }
 

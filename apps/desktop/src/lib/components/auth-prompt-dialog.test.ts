@@ -10,7 +10,8 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AuthPromptDialog from './AuthPromptDialog.svelte';
 import { sessions } from '../stores/sessions.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { click, findButton, newTarget, press, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { AuthPromptMessage } from '../types';
@@ -34,7 +35,7 @@ let opener: HTMLButtonElement;
 beforeEach(() => {
   resetTauriMock();
   stubBrowserApis();
-  toasts.toasts = [];
+  notices.reset();
   bus.handlers.clear();
   opener = document.createElement('button');
   opener.textContent = 'opener';
@@ -139,7 +140,7 @@ describe('a keyboard-interactive question', () => {
       id: 'a1',
       answers: ['123456', '4321'],
     });
-    expect(dialog()).toBeNull();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
   });
 
   it('submits with the Continue button', async () => {
@@ -162,7 +163,26 @@ describe('a keyboard-interactive question', () => {
     press(dialog() as HTMLElement, 'Escape');
     await vi.waitFor(() => expect(callsOf('auth_prompt_resolve')).toHaveLength(2));
     expect(callsOf('auth_prompt_resolve')[1].args).toEqual({ id: 'a2', answers: null });
-    expect(dialog()).toBeNull();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+  });
+
+  it('does not answer on a click outside: only a button or Escape does', async () => {
+    const emit = await openDialog();
+    emit('auth-prompt', kbd('a1'));
+    click(target.querySelector('.backdrop') as HTMLElement);
+    expect(callsOf('auth_prompt_resolve')).toHaveLength(0);
+    expect(dialog()).not.toBeNull();
+  });
+
+  it('moves the focus to the first field of the next question', async () => {
+    const emit = await openDialog();
+    emit('auth-prompt', kbd('a1'));
+    emit('auth-prompt', kbd('a2'));
+    await tick();
+    click(findButton(target, 'Cancel'));
+    await vi.waitFor(() => expect(callsOf('auth_prompt_resolve')).toHaveLength(1));
+    await tick();
+    expect(document.activeElement).toBe(inputs()[0]);
   });
 
   it('puts the focus on the first field and keeps it inside the dialog', async () => {
@@ -215,7 +235,7 @@ describe('a keyboard-interactive question', () => {
     emit('auth-prompt-closed', { id: 'a1' });
     expect(target.querySelector('h2')?.textContent).toBe('Kept');
     emit('auth-prompt-closed', { id: 'a2' });
-    expect(dialog()).toBeNull();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
     expect(callsOf('auth_prompt_resolve')).toHaveLength(0);
   });
 
@@ -235,9 +255,9 @@ describe('a keyboard-interactive question', () => {
     failures.set('auth_prompt_resolve', 'the backend went away');
     emit('auth-prompt', kbd('a1'));
     submitForm();
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
-    expect(toasts.toasts[0].kind).toBe('error');
-    expect(toasts.toasts[0].message).toContain('the backend went away');
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
+    expect(notices.visible[0].kind).toBe('error');
+    expect(noticeText(notices.visible[0])).toContain('the backend went away');
   });
 
   it('says so when the question is no longer active', async () => {
@@ -245,8 +265,8 @@ describe('a keyboard-interactive question', () => {
     answers.set('auth_prompt_resolve', false);
     emit('auth-prompt', kbd('a1'));
     submitForm();
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
-    expect(toasts.toasts[0].kind).toBe('info');
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
+    expect(notices.visible[0].kind).toBe('info');
   });
 });
 
@@ -302,7 +322,7 @@ describe('a passphrase question', () => {
     target.querySelector<HTMLInputElement>('input[type="checkbox"]')?.click();
     flushSync();
     submitForm();
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
 
     // The question was gone: the session may well succeed with some other
     // passphrase, and this one must not be stored for it.

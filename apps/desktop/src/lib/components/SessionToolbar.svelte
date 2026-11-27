@@ -6,7 +6,7 @@
   import { prefs } from '../stores/prefs.svelte';
   import { sessions, type Tab } from '../stores/sessions.svelte';
   import { terminalUi } from '../stores/terminal-ui.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import { copyText } from '../terminal/links';
   import { getTerminal } from '../terminal/registry';
   import { sshCommand, sshTarget } from '../terminal/session-view';
@@ -114,9 +114,7 @@
       case 'copy-ssh':
         if (host) {
           void copyText(sshCommand(host)).then((ok) =>
-            ok
-              ? toasts.success('SSH command copied.')
-              : toasts.error('Could not copy to the clipboard.'),
+            ok ? notify({ key: 'ssh.command-copied' }) : notify({ key: 'clipboard.copy-failed' }),
           );
         }
         break;

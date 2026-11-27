@@ -1,5 +1,5 @@
 import { api } from '../ipc';
-import { toasts } from './toasts.svelte';
+import { notify } from '../notify.svelte';
 import type { Group, Host, Identity, RecentHost, Tag } from '../types';
 
 /** The filter tabs of the hosts page (frame 1). */
@@ -235,7 +235,7 @@ export class HostsStore {
       this.loaded = true;
     } catch (err) {
       if (first) this.error = errorMessage(err);
-      else toasts.error(`Could not refresh the hosts: ${errorMessage(err)}`);
+      else notify({ key: 'hosts.refresh-failed', values: { detail: errorMessage(err) } });
     } finally {
       this.loading = false;
     }
@@ -337,7 +337,7 @@ export class HostsStore {
       this.hosts = this.hosts.filter((host) => host.id !== id);
       return true;
     } catch (err) {
-      toasts.error(`Could not delete the host: ${errorMessage(err)}`);
+      notify({ key: 'host.delete-failed', values: { detail: errorMessage(err) } });
       return false;
     }
   }
@@ -351,7 +351,7 @@ export class HostsStore {
         entry.id === host.id ? { ...entry, favorite: next } : entry,
       );
     } catch (err) {
-      toasts.error(`Could not update the favorite: ${errorMessage(err)}`);
+      notify({ key: 'host.favorite-failed', values: { detail: errorMessage(err) } });
     }
   }
 }

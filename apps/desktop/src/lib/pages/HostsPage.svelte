@@ -9,7 +9,7 @@
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import type { Host, SessionSecrets } from '../types';
 
   let {
@@ -113,7 +113,9 @@
     pendingDelete = null;
     if (!host) return;
     // A failed delete is reported by the store; only success is announced.
-    if (await hosts.remove(host.id)) toasts.success(`Deleted ${host.name}`);
+    if (await hosts.remove(host.id)) {
+      notify({ key: 'host.deleted', entityId: host.id, values: { name: host.name } });
+    }
   }
 
   function returnToFirstSession(): void {
@@ -358,7 +360,7 @@
     padding: 0.45rem 0.8rem;
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-button);
-    background: var(--termru-bg);
+    background: var(--wp-field, var(--termru-surface));
     color: var(--termru-fg);
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
@@ -384,7 +386,7 @@
     padding: 0 0.75rem;
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-bg);
+    background: var(--wp-field, var(--termru-surface));
   }
 
   .search:focus-within {
@@ -433,7 +435,7 @@
     padding: 0 0.6rem;
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-bg);
+    background: var(--wp-field, var(--termru-surface));
     color: var(--termru-fg);
     font-size: var(--termru-text-secondary-size);
     cursor: pointer;

@@ -9,7 +9,7 @@ import type { MenuEntry } from '../menu';
 import { prefs } from '../stores/prefs.svelte';
 import { sessions } from '../stores/sessions.svelte';
 import { terminalUi } from '../stores/terminal-ui.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notify } from '../notify.svelte';
 import { copyText, isOpenGesture, openLink, type OpenResult } from './links';
 import { pasteGate } from './paste.svelte';
 import { getTerminal } from './registry';
@@ -76,13 +76,13 @@ export function reportOpen(result: OpenResult): void {
     case 'opened':
       return;
     case 'copied':
-      toasts.info('Link copied. This build cannot open a browser yet.');
+      notify({ key: 'link.copied-no-browser' });
       return;
     case 'refused':
-      toasts.error('Only http and https links can be opened.');
+      notify({ key: 'link.refused' });
       return;
     case 'failed':
-      toasts.error('Could not open or copy the link.');
+      notify({ key: 'link.failed' });
   }
 }
 
@@ -104,7 +104,7 @@ export async function runTerminalAction(
     case 'copy': {
       const text = handle?.term.getSelection() ?? '';
       if (text.length === 0) return;
-      if (!(await copyText(text))) toasts.error('Could not copy to the clipboard.');
+      if (!(await copyText(text))) notify({ key: 'clipboard.copy-failed' });
       handle?.term.focus();
       return;
     }
@@ -113,7 +113,7 @@ export async function runTerminalAction(
         const text = await navigator.clipboard.readText();
         pasteGate.request(paneId, text);
       } catch {
-        toasts.error('Could not read the clipboard.');
+        notify({ key: 'clipboard.read-failed' });
       }
       return;
     }
@@ -139,8 +139,8 @@ export async function runTerminalAction(
       return;
     case 'copy-link':
       if (link) {
-        if (await copyText(link)) toasts.success('Link copied.');
-        else toasts.error('Could not copy to the clipboard.');
+        if (await copyText(link)) notify({ key: 'link.copied' });
+        else notify({ key: 'clipboard.copy-failed' });
       }
       return;
   }

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { focusTrap } from '../actions/focus-trap';
   import { api } from '../ipc';
   import { listen, type UnlistenFn } from '../ipc-backend';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { sessions } from '../stores/sessions.svelte';
-  import { toasts } from '../stores/toasts.svelte';
+  import { notify } from '../notify.svelte';
   import type { AuthPromptMessage } from '../types';
+  import Field from './Field.svelte';
+  import SessionDialog from './SessionDialog.svelte';
 
   /**
    * The questions of the authentication phase: the rounds of a
@@ -67,22 +68,45 @@
     };
   });
 
+  // What the dialog shows while it fades out, after the last question.
+  let last = $state.raw<AuthPromptMessage | null>(null);
+  $effect(() => {
+    if (current) last = current;
+  });
+  const shown = $derived(current ?? last);
+
   const passphrase = $derived(
-    current?.request.kind.type === 'passphrase' ? current.request.kind : null,
+    shown?.request.kind.type === 'passphrase' ? shown.request.kind : null,
   );
   /** A passphrase can be remembered when we know whose it is. */
   const canRemember = $derived(
-    passphrase?.identity != null && current?.host_id != null && answers.length === 1,
+    passphrase?.identity != null && shown?.host_id != null && answers.length === 1,
   );
   const hostName = $derived.by(() => {
-    const hostId = current?.host_id ?? null;
+    const hostId = shown?.host_id ?? null;
     return hostId ? (hosts.hosts.find((host) => host.id === hostId)?.name ?? null) : null;
   });
+  // The title is text the server may have chosen: it is shown as it is, as text.
   const title = $derived.by(() => {
-    if (!current) return '';
+    if (!shown) return 'Sign in';
     if (passphrase) return 'Passphrase required';
-    return current.request.name.trim() || 'Authentication required';
+    return shown.request.name.trim() || 'Authentication required';
   });
+  const subtitle = $derived.by(() => {
+    if (passphrase?.identity) {
+      return hostName
+        ? `Unlock the key of ${passphrase.identity.name} to connect to ${hostName}.`
+        : `Unlock the key of ${passphrase.identity.name}.`;
+    }
+    if (passphrase)
+      return hostName ? `Unlock the key to connect to ${hostName}.` : 'Unlock the key.';
+    return hostName ? `${hostName} asks for more than a password.` : undefined;
+  });
+
+  /** A new question: the first field takes the focus (the dialog stays mounted). */
+  function focusFirst(node: HTMLElement): void {
+    node.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+  }
 
   async function answer(values: string[] | null): Promise<void> {
     const question = current;
@@ -104,11 +128,11 @@
       const delivered = await api.authPromptResolve(question.id, values);
       if (!delivered) {
         if (rememberFor) sessions.discardPassphrase(rememberFor.sessionId);
-        toasts.info('The authentication question is no longer active.');
+        notify({ key: 'prompt.auth-inactive' });
       }
     } catch (err) {
       if (rememberFor) sessions.discardPassphrase(rememberFor.sessionId);
-      toasts.error(`Could not answer the authentication question: ${errorMessage(err)}`);
+      notify({ key: 'prompt.auth-failed', values: { detail: errorMessage(err) } });
     }
   }
 
@@ -118,39 +142,36 @@
   }
 </script>
 
-{#if current}
-  {#key current.id}
-    <div class="backdrop" role="presentation">
-      <div
-        class="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="auth-prompt-title"
-        aria-describedby={current.request.instructions.trim()
-          ? 'auth-prompt-instructions'
-          : undefined}
-        use:focusTrap={{ onescape: () => void answer(null) }}
-      >
-        <form onsubmit={submit}>
-          <h2 id="auth-prompt-title">{title}</h2>
-          {#if hostName}
-            <p class="target">{hostName}</p>
-          {/if}
-          {#if current.request.instructions.trim()}
-            <p class="instructions" id="auth-prompt-instructions">
-              {current.request.instructions}
-            </p>
-          {/if}
-          {#if passphrase?.retry}
-            <p class="hint danger" role="alert">
-              That passphrase did not unlock the key. Try again.
-            </p>
-          {/if}
+<SessionDialog
+  open={current !== null}
+  role="dialog"
+  {title}
+  description={subtitle}
+  backdropCloses={false}
+  onclose={() => void answer(null)}
+  onsubmit={submit}
+>
+  {#if shown}
+    {#key shown.id}
+      <div class="question" use:focusFirst>
+        {#if shown.request.instructions.trim()}
+          <p class="instructions">{shown.request.instructions}</p>
+        {/if}
 
-          {#each current.request.prompts as prompt, index (index)}
-            <label>
-              {prompt.text}
+        <!-- A wrong passphrase is announced at once, and the field points at it. -->
+        {#if passphrase?.retry}
+          <p class="retry" id="auth-retry" role="alert">
+            That passphrase did not unlock the key. Try again.
+          </p>
+        {/if}
+
+        {#each shown.request.prompts as prompt, index (index)}
+          <Field label={prompt.text} id="auth-answer-{index}">
+            {#snippet control(attrs)}
               <input
+                {...attrs}
+                aria-invalid={passphrase?.retry && index === 0 ? 'true' : undefined}
+                aria-describedby={passphrase?.retry && index === 0 ? 'auth-retry' : undefined}
                 type={prompt.echo ? 'text' : 'password'}
                 bind:value={answers[index]}
                 autocomplete="off"
@@ -158,118 +179,71 @@
                 spellcheck="false"
                 data-autofocus={index === 0 ? true : undefined}
               />
-            </label>
-          {/each}
+            {/snippet}
+          </Field>
+        {/each}
 
-          {#if canRemember}
-            <label class="checkbox">
-              <input type="checkbox" bind:checked={remember} />
-              <span>Remember in the system credential store</span>
-            </label>
-          {/if}
-
-          {#if queue.length > 1}
-            <p class="hint">
-              {queue.length - 1} more {queue.length === 2 ? 'question' : 'questions'} waiting.
-            </p>
-          {/if}
-
-          <div class="actions">
-            <button type="button" onclick={() => answer(null)}>Cancel</button>
-            <button type="submit" class="primary">
-              {passphrase ? 'Unlock' : 'Continue'}
-            </button>
-          </div>
-        </form>
+        {#if canRemember}
+          <label class="remember">
+            <input type="checkbox" bind:checked={remember} />
+            <span>Save in this device’s credential store</span>
+          </label>
+        {/if}
       </div>
-    </div>
-  {/key}
-{/if}
+    {/key}
+  {/if}
+
+  {#if queue.length > 1}
+    <p class="more">
+      {queue.length - 1} more {queue.length === 2 ? 'question' : 'questions'} waiting.
+    </p>
+  {/if}
+
+  {#snippet actions()}
+    <button type="button" class="quiet" onclick={() => answer(null)}>Cancel</button>
+    <button type="submit" class="primary">{passphrase ? 'Unlock' : 'Continue'}</button>
+  {/snippet}
+</SessionDialog>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 6, 23, 0.55);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-
-  .dialog {
-    width: min(26rem, 92vw);
-    padding: 1.1rem;
-    border-radius: var(--termru-radius-lg);
-    border: 1px solid var(--termru-border);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
-  }
-
-  form {
+  .question {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 1rem;
-  }
-
-  .target {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--termru-muted);
+    gap: var(--termru-space-3);
   }
 
   /* Text the server sent: keep its line breaks, never let it overflow. */
   .instructions {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    color: var(--termru-muted);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.8rem;
-    color: var(--termru-muted);
-    overflow-wrap: anywhere;
-  }
-
-  input {
-    padding: 0.4rem 0.5rem;
-    border-radius: var(--termru-radius);
-    border: 1px solid var(--termru-border);
-    background: var(--termru-bg);
-    color: var(--termru-fg);
-    font: inherit;
-  }
-
-  .checkbox {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.4rem;
-    color: var(--termru-fg);
-    font-size: 0.8rem;
-  }
-
-  .hint {
+  .retry {
     margin: 0;
-    font-size: 0.75rem;
-    color: var(--termru-muted);
-  }
-
-  .hint.danger {
+    padding: var(--termru-space-3) var(--termru-space-4);
+    border-left: 2px solid var(--termru-danger);
+    background: var(--termru-danger-soft);
     color: var(--termru-danger);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
   }
 
-  .actions {
+  .remember {
     display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
+    align-items: center;
+    gap: var(--termru-space-2);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    cursor: pointer;
+  }
+
+  .more {
+    margin: 0;
+    font-size: var(--termru-text-secondary-size);
+    color: var(--termru-muted);
   }
 </style>

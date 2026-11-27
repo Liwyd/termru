@@ -17,7 +17,7 @@ import { prefs } from '../stores/prefs.svelte';
 import { route } from '../stores/route.svelte';
 import { sessions, type Pane, type Tab } from '../stores/sessions.svelte';
 import { sync } from '../stores/sync.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
 import { click, findButton, newTarget, press, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import { resetXtermMock } from '../test-support/xterm-mock';
@@ -73,7 +73,7 @@ beforeEach(() => {
   hosts.query = '';
   hosts.searchFocus = false;
   hosts.passwordStored = {};
-  toasts.toasts = [];
+  notices.reset();
   route.route = 'sessions';
   route.editHost = null;
   window.location.hash = '#sessions';
@@ -439,8 +439,8 @@ describe('HostsPage', () => {
       ) as Element,
     );
     click(findButton(document.querySelector('[role="alertdialog"]') as HTMLElement, 'Delete'));
-    await vi.waitFor(() => expect(toasts.toasts.length).toBeGreaterThan(0));
-    const kinds = toasts.toasts.map((toast) => toast.kind);
+    await vi.waitFor(() => expect(notices.visible.length).toBeGreaterThan(0));
+    const kinds = notices.visible.map((toast) => toast.kind);
     expect(kinds).toEqual(['error']);
     expect(hosts.hosts).toHaveLength(1);
     expect(hosts.error).toBeNull();
@@ -456,7 +456,7 @@ describe('HostsPage', () => {
       ) as Element,
     );
     click(findButton(document.querySelector('[role="alertdialog"]') as HTMLElement, 'Delete'));
-    await vi.waitFor(() => expect(toasts.toasts.map((toast) => toast.kind)).toEqual(['success']));
+    await vi.waitFor(() => expect(notices.visible.map((toast) => toast.kind)).toEqual(['success']));
     expect(hosts.hosts).toHaveLength(0);
   });
 

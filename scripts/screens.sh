@@ -12,7 +12,8 @@
 #   <route>-1440.png        1440x960, light
 #   <route>-760.png         760x1100, light (narrow window)
 #   <route>-dark-1440.png   1440x960, dark theme
-#   state-<name>.png        hosts page states (empty, error), host-key dialog
+#   state-<name>.png        hosts page states (empty, error), the dialogs (host key,
+#                           connect, sign-in question), the Sync page signed in
 #   frame-N.png             the design frames 1, 2, 3, 4, 5, 8 (re-design/N.svg)
 #
 # The pages are loaded as http://127.0.0.1:PORT/?mock&demo[&theme=dark]#route.
@@ -78,6 +79,11 @@ queue "state-hosts-empty" 1440 960 "${BASE}?mock&empty#hosts"
 queue "state-hosts-error" 1440 960 "${BASE}?mock&error#hosts"
 queue "state-hostkey-dialog" 1440 960 "${BASE}?mock&demo&hostkey#hosts"
 queue "state-hostkey-other-types-dialog" 1440 960 "${BASE}?mock&demo&hostkey=other#hosts"
+queue "state-hostkey-changed-dialog" 1440 960 "${BASE}?mock&demo&hostkey=changed#hosts"
+queue "state-connect-dialog" 1440 960 "${BASE}?mock&demo&connect#hosts"
+queue "state-sync-signed-in" 1440 960 "${BASE}?mock&demo&sync#sync"
+queue "state-sync-conflicts" 1440 960 "${BASE}?mock&demo&sync=conflicts#sync"
+queue "state-sync-error" 1440 960 "${BASE}?mock&demo&sync=error#sync"
 queue "state-authprompt-dialog" 1440 960 "${BASE}?mock&demo&authprompt#hosts"
 queue "state-passphrase-dialog" 1440 960 "${BASE}?mock&demo&authprompt=passphrase#hosts"
 

@@ -284,8 +284,12 @@ html:root[data-reduced-motion='on'] {
    folders page and the identities page. White page (frames 4 and 5), mono
    fields, one set of pressables. Additions only; every selector is under
    `.workpage`, and the tokens come from the blocks above. */
-.workpage {
+.workpage,
+.sx-dialog {
   --wp-field: var(--termru-surface);
+}
+
+.workpage {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -296,19 +300,21 @@ html:root[data-reduced-motion='on'] {
 
 /* Dark: a field is a well, one step below the page, so it still reads where
    its hairline border all but vanishes. */
-:root[data-theme='dark'] .workpage {
+:root[data-theme='dark'] .workpage,
+:root[data-theme='dark'] .sx-dialog {
   --wp-field: var(--termru-canvas);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .workpage {
+  :root:not([data-theme='light']) .workpage,
+  :root:not([data-theme='light']) .sx-dialog {
     --wp-field: var(--termru-canvas);
   }
 }
 
-.workpage input:not([type='checkbox']):not([type='radio']),
-.workpage select,
-.workpage textarea {
+:is(.workpage, .sx-dialog) input:not([type='checkbox']):not([type='radio']),
+:is(.workpage, .sx-dialog) select,
+:is(.workpage, .sx-dialog) textarea {
   width: 100%;
   min-height: var(--termru-input-h);
   padding: 0 var(--termru-space-3);
@@ -324,11 +330,11 @@ html:root[data-reduced-motion='on'] {
     background-color var(--motion-fast) ease;
 }
 
-.workpage input::placeholder {
+:is(.workpage, .sx-dialog) input::placeholder {
   color: var(--termru-faint);
 }
 
-.workpage select {
+:is(.workpage, .sx-dialog) select {
   padding-right: 36px;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%2387928b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -338,17 +344,17 @@ html:root[data-reduced-motion='on'] {
   cursor: pointer;
 }
 
-.workpage input[aria-invalid='true'],
-.workpage select[aria-invalid='true'] {
+:is(.workpage, .sx-dialog) input[aria-invalid='true'],
+:is(.workpage, .sx-dialog) select[aria-invalid='true'] {
   border-color: var(--termru-danger);
 }
 
-.workpage input[type='checkbox'],
-.workpage input[type='radio'] {
+:is(.workpage, .sx-dialog) input[type='checkbox'],
+:is(.workpage, .sx-dialog) input[type='radio'] {
   accent-color: var(--termru-accent);
 }
 
-.workpage button {
+:is(.workpage, .sx-dialog) button {
   transition:
     transform var(--motion-fast) var(--ease-out, ease-out),
     background-color var(--motion-fast) ease,
@@ -357,59 +363,59 @@ html:root[data-reduced-motion='on'] {
 }
 
 /* The global rule hovers on every pointer; here only a real one does. */
-.workpage button:hover:not(:disabled) {
+:is(.workpage, .sx-dialog) button:hover:not(:disabled) {
   border-color: var(--termru-border);
 }
 
-.workpage button.quiet:hover:not(:disabled) {
+:is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
   border-color: transparent;
 }
 
-.workpage button.primary:hover:not(:disabled) {
+:is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
   border-color: var(--termru-accent);
 }
 
-.workpage button.danger:hover:not(:disabled) {
+:is(.workpage, .sx-dialog) button.danger:hover:not(:disabled) {
   border-color: var(--termru-danger);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .workpage input:hover:not(:disabled):not([aria-invalid='true']),
-  .workpage select:hover:not(:disabled):not([aria-invalid='true']) {
+  :is(.workpage, .sx-dialog) input:hover:not(:disabled):not([aria-invalid='true']),
+  :is(.workpage, .sx-dialog) select:hover:not(:disabled):not([aria-invalid='true']) {
     border-color: var(--termru-faint);
   }
 
-  .workpage button:hover:not(:disabled):not(.primary):not(.danger):not(.quiet) {
+  :is(.workpage, .sx-dialog) button:hover:not(:disabled):not(.primary):not(.danger):not(.quiet) {
     border-color: var(--termru-accent);
   }
 
-  .workpage button.primary:hover:not(:disabled) {
+  :is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
     background-color: color-mix(in srgb, var(--termru-accent) 88%, black);
   }
 
-  .workpage button.quiet:hover:not(:disabled),
-  .workpage button.link:hover:not(:disabled) {
+  :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled),
+  :is(.workpage, .sx-dialog) button.link:hover:not(:disabled) {
     color: var(--termru-accent);
   }
 }
 
-.workpage button:active:not(:disabled) {
+:is(.workpage, .sx-dialog) button:active:not(:disabled) {
   transform: scale(var(--press-scale, 0.97));
 }
 
-.workpage button:disabled {
+:is(.workpage, .sx-dialog) button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 
 /* No border, no fill: the frame's "Cancel". */
-.workpage button.quiet {
+:is(.workpage, .sx-dialog) button.quiet {
   border-color: transparent;
   background: none;
 }
 
 /* Text that acts: inline, underlined, no box. */
-.workpage button.link {
+:is(.workpage, .sx-dialog) button.link {
   min-height: 0;
   padding: 0;
   border: none;
@@ -420,12 +426,12 @@ html:root[data-reduced-motion='on'] {
   border-radius: 2px;
 }
 
-.workpage button.danger.quiet {
+:is(.workpage, .sx-dialog) button.danger.quiet {
   color: var(--termru-danger);
 }
 
 /* A mono section label: `FOLDER TREE`, `LOCAL CREDENTIAL`. */
-.workpage .wp-label {
+:is(.workpage, .sx-dialog) .wp-label {
   margin: 0;
   font-family: var(--termru-font-mono);
   font-size: var(--termru-text-meta-size);
@@ -433,4 +439,39 @@ html:root[data-reduced-motion='on'] {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--termru-muted);
+}
+
+/* sync/preferences/dialogs/notices (4c) — the Sync and Preferences pages,
+   the connect, host-key and sign-in dialogs (they share the work-page field
+   and button rules above through `.sx-dialog`) and the notices. Additions
+   only. */
+/* A page that is not a `.workpage` (Hosts) takes the same field fill from the
+   * outlet: white on the white page, a well in dark. */
+.outlet {
+  --wp-field: var(--termru-surface);
+}
+
+:root[data-theme='dark'] .outlet {
+  --wp-field: var(--termru-canvas);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .outlet {
+    --wp-field: var(--termru-canvas);
+  }
+}
+
+html:root {
+  /* How far a notice travels in and out (Doc B: 8 px, transform and opacity). */
+  --notice-shift: -8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:root:not([data-reduced-motion='off']) {
+    --notice-shift: 0px;
+  }
+}
+
+html:root[data-reduced-motion='on'] {
+  --notice-shift: 0px;
 }

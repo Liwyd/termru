@@ -26,6 +26,7 @@
 | `rusqlite` | 0.41 | MIT | Local persistence (bundled SQLite via `libsqlite3-sys` 0.39) | WAL mode, `0600` file permissions |
 | `chrono` | 0.4 | MIT / Apache-2.0 | Timestamps in the core types, the store, the cloud server (`tokio-postgres`) and the desktop app | **RUSTSEC-2026-0543** (unmaintained) — accepted, see below |
 | `keyring` | 4.2 | MIT | OS credential store (Secret Service / Credential Manager / Keychain) | Its Linux backend pulls `zbus`/`zvariant`, which are currently *unmaintained* (RUSTSEC-2026-037x) — transitive only, tracked here |
+| `tauri-plugin-opener` | 2.7 | Apache-2.0 / MIT | Opens http, https and mailto links from terminal output in the system browser | Scoped by `capabilities/default.json`; pulls `open`, `is-wsl` and `is-docker` (MIT); `zbus` and the platform crates were already in the tree |
 | `tokio` | 1.x | MIT | Async runtime for the session actors and the Tauri runtime | |
 | `serde` / `serde_json` | 1.x | MIT / Apache-2.0 | Wire format for IPC, the database and the sync payload | `deny_unknown_fields` is **not** used for the IPC types, so a newer frontend can talk to an older backend |
 | `tracing` (+ `tracing-subscriber`, `tracing-appender`) | 0.1 / 0.3 / 0.2 | MIT | Structured logging (stderr + rotating file) | The logging audit test proves no secret reaches a log file |
@@ -93,7 +94,8 @@ distributable under Apache-2.0 without copyleft obligations.
 | `vitest` | 5.0 | MIT | Frontend tests |
 | `jsdom` | latest | MIT | DOM environment for the UI contract test |
 | `prettier` (+ `prettier-plugin-svelte`) | 3.9 | MIT | Formatting |
-| `@tauri-apps/plugin-dialog` | 2.8 | MIT / Apache-2.0 | Native file picker for key files (the only capability besides `core:default`) |
+| `@tauri-apps/plugin-dialog` | 2.8 | MIT / Apache-2.0 | Native file picker for key files |
+| `@tauri-apps/plugin-opener` | 2.7 | MIT / Apache-2.0 | Opens a link from terminal output (scoped to http, https and mailto by the capability) |
 
 `npm audit` reports **0 vulnerabilities** at the time of writing.
 

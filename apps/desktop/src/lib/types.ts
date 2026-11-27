@@ -93,6 +93,12 @@ export interface IdentityBinding {
   keyPath: string;
 }
 
+/** What the `app_info` command reports about the running build. */
+export interface AppInfo {
+  name: string;
+  version: string;
+}
+
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CursorStyle = 'block' | 'bar' | 'underline';
 export type MotionPreference = 'system' | 'on' | 'off';
@@ -105,6 +111,8 @@ export interface TerminalPreferences {
   cursor_style: CursorStyle;
   copy_on_select: boolean;
   line_height: number;
+  /** Ask before a paste of several lines reaches the shell. */
+  confirm_multiline_paste: boolean;
 }
 
 export interface Preferences {

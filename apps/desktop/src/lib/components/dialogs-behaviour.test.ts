@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConnectDialog from './ConnectDialog.svelte';
 import ContextMenu from './ContextMenu.svelte';
 import HostKeyDialog from './HostKeyDialog.svelte';
-import { toasts } from '../stores/toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { click, findButton, newTarget, press, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
+import type { ConnectRequest } from '../stores/connect.svelte';
 import type { Host, HostKeyPromptMessage, SessionSecrets } from '../types';
 
 const bus = vi.hoisted(() => ({
@@ -55,7 +57,7 @@ let opener: HTMLButtonElement;
 beforeEach(() => {
   resetTauriMock();
   stubBrowserApis();
-  toasts.toasts = [];
+  notices.reset();
   bus.handlers.clear();
   opener = document.createElement('button');
   opener.textContent = 'opener';
@@ -71,44 +73,66 @@ afterEach(() => {
 });
 
 describe('ConnectDialog', () => {
-  function open(auth: Host['auth'] = { type: 'password' }) {
+  function open(secretStored = false, name = 'web-1') {
     const onsubmit = vi.fn<(secrets: SessionSecrets, remember: boolean) => void>();
     const oncancel = vi.fn();
-    component = mount(ConnectDialog, {
-      target,
-      props: { host: host(auth), onsubmit, oncancel },
-    });
+    const request: ConnectRequest = {
+      host: { ...host({ type: 'password' }), name },
+      secretStored,
+      pane: null,
+      reconnecting: false,
+    };
+    component = mount(ConnectDialog, { target, props: { request, onsubmit, oncancel } });
     flushSync();
     return { onsubmit, oncancel };
   }
 
-  it('sends no password when the field is empty (the backend falls back to the keychain)', () => {
-    const { onsubmit } = open();
+  const submit = () =>
     target
       .querySelector('form')
       ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+  it('names the host and shows where it connects', () => {
+    open();
+    expect(target.querySelector('h2')?.textContent).toBe('Connect to web-1');
+    expect(target.textContent).toContain('deploy@web-1.test:22');
+  });
+
+  it('sends no password when the field is empty (the backend falls back to the keychain)', () => {
+    const { onsubmit } = open();
+    submit();
     expect(onsubmit).toHaveBeenCalledTimes(1);
     const secrets = onsubmit.mock.calls[0][0];
     expect(secrets.password).toBeUndefined();
     // The wire shape: no `password` key at all once serialized.
     expect(JSON.stringify(secrets)).toBe('{}');
+    expect(onsubmit.mock.calls[0][1]).toBe(false);
   });
 
-  it('sends the password that was typed', () => {
+  it('sends the password that was typed, and whether to keep it', () => {
     const { onsubmit } = open();
     type(target.querySelector('input[type="password"]') as HTMLInputElement, 'hunter2');
-    target
-      .querySelector('form')
-      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    click(target.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    submit();
     expect(onsubmit.mock.calls[0][0]).toEqual({ password: 'hunter2' });
+    expect(onsubmit.mock.calls[0][1]).toBe(true);
   });
 
-  it('sends no passphrase when the field is empty', () => {
-    const { onsubmit } = open({ type: 'private_key', identity_id: 'i1' });
-    target
-      .querySelector('form')
-      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    expect(JSON.stringify(onsubmit.mock.calls[0][0])).toBe('{}');
+  it('asks for a password and nothing else (a passphrase is the backend’s question)', () => {
+    open();
+    expect(target.querySelectorAll('input[type="password"]')).toHaveLength(1);
+    expect(target.textContent).not.toMatch(/passphrase|private key|agent/i);
+  });
+
+  it('tells the user when a password is already saved on this device', () => {
+    open(true);
+    expect(target.textContent).toContain('A password is saved on this device');
+  });
+
+  it('shows a host name as plain text', () => {
+    open(false, '<img src=x onerror=alert(1)>');
+    expect(target.querySelector('h2')?.textContent).toContain('<img src=x');
+    expect(target.querySelector('img')).toBeNull();
   });
 
   it('focuses the password field, keeps Tab inside and cancels on Escape', async () => {
@@ -126,6 +150,13 @@ describe('ConnectDialog', () => {
 
     press(target.querySelector('[role="dialog"]') as HTMLElement, 'Escape');
     expect(oncancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels on a click outside, and on the Cancel button', () => {
+    const { oncancel } = open();
+    click(target.querySelector('.backdrop') as HTMLElement);
+    click(findButton(target, 'Cancel'));
+    expect(oncancel).toHaveBeenCalledTimes(2);
   });
 
   it('gives the focus back to the opener when it goes away', async () => {
@@ -151,6 +182,18 @@ describe('HostKeyDialog', () => {
     },
   });
 
+  const changed = (id: string): HostKeyPromptMessage => ({
+    id,
+    session_id: 's1',
+    request: {
+      state: 'changed',
+      host: 'rebuilt.test',
+      port: 2222,
+      old: { key_type: 'ssh-ed25519', fingerprint: 'SHA256:OLDOLDOLD' },
+      new: { key_type: 'ssh-ed25519', fingerprint: 'SHA256:NEWNEWNEW' },
+    },
+  });
+
   async function openDialog(): Promise<(payload: unknown) => void> {
     component = mount(HostKeyDialog, { target });
     flushSync();
@@ -161,6 +204,9 @@ describe('HostKeyDialog', () => {
     };
   }
 
+  const gone = () =>
+    vi.waitFor(() => expect(target.querySelector('[role="alertdialog"]')).toBeNull());
+
   it('queues a second prompt instead of replacing the first', async () => {
     const emit = await openDialog();
     emit(unknown('p1', 'first.test'));
@@ -170,15 +216,24 @@ describe('HostKeyDialog', () => {
     expect(target.textContent).toContain('1 more host key question');
 
     // Answering the first shows the second, and both are answered.
-    click(findButton(target, 'Reject'));
+    click(findButton(target, 'Cancel'));
     await vi.waitFor(() => expect(target.textContent).toContain('second.test'));
-    click(findButton(target, 'Trust'));
+    click(findButton(target, 'Verify & connect'));
     await vi.waitFor(() => expect(callsOf('host_key_prompt_resolve')).toHaveLength(2));
     expect(callsOf('host_key_prompt_resolve').map((call) => call.args)).toEqual([
       { id: 'p1', trust: false },
       { id: 'p2', trust: true },
     ]);
-    expect(target.querySelector('[role="alertdialog"]')).toBeNull();
+    await gone();
+  });
+
+  it('shows where it connects, the key type and the fingerprint to compare', async () => {
+    const emit = await openDialog();
+    emit(unknown('p1', 'first.test'));
+    expect(target.querySelector('h2')?.textContent).toBe('Verify this host');
+    expect(target.textContent).toContain('first.test:22');
+    expect(target.textContent).toContain('ssh-ed25519');
+    expect(target.querySelector('[data-testid="fingerprint-new"]')?.textContent).toBe('SHA256:p1');
   });
 
   it('warns when the host is already known under other key types', async () => {
@@ -190,11 +245,38 @@ describe('HostKeyDialog', () => {
     expect(warning?.textContent).toContain('ssh-ed25519');
   });
 
-  it('shows the plain explanation for a host that was never seen', async () => {
+  it('shows how to check the fingerprint for a host that was never seen', async () => {
     const emit = await openDialog();
     emit(unknown('p1', 'first.test'));
     expect(target.querySelector('[data-testid="other-key-types"]')).toBeNull();
-    expect(target.textContent).toContain('The server key is not known yet');
+    expect(target.textContent).toContain('Compare the fingerprint with a source you trust');
+    expect(target.textContent).toContain('ssh-keygen -lf');
+  });
+
+  it('blocks a changed key: old and new fingerprints, a warning, and the safe default', async () => {
+    const emit = await openDialog();
+    emit(changed('p9'));
+    expect(target.querySelector('h2')?.textContent).toBe('Host key changed');
+    expect(target.querySelector('[data-testid="fingerprint-old"]')?.textContent).toBe(
+      'SHA256:OLDOLDOLD',
+    );
+    expect(target.querySelector('[data-testid="fingerprint-new"]')?.textContent).toBe(
+      'SHA256:NEWNEWNEW',
+    );
+    expect(target.textContent).toContain('rebuilt.test:2222');
+    expect(target.textContent).toContain('Connecting is blocked until you decide');
+    expect(target.textContent).toContain('replaces the stored key');
+    await tick();
+    expect(document.activeElement).toBe(findButton(target, 'Cancel'));
+    // The accepting button is there, and says what it does.
+    expect(findButton(target, 'Verify & connect').classList.contains('danger')).toBe(true);
+  });
+
+  it('shows what the server sent as plain text', async () => {
+    const emit = await openDialog();
+    emit(unknown('p1', '<b onmouseover=alert(1)>evil</b>.test'));
+    expect(target.textContent).toContain('<b onmouseover=alert(1)>evil</b>.test');
+    expect(target.querySelector('b')).toBeNull();
   });
 
   it('drops a prompt the backend closed (timeout, closed tab, answered elsewhere)', async () => {
@@ -209,7 +291,7 @@ describe('HostKeyDialog', () => {
     expect(target.textContent).not.toContain('first.test');
     close?.({ payload: { id: 'p2' } });
     flushSync();
-    expect(target.querySelector('[role="alertdialog"]')).toBeNull();
+    await gone();
     expect(callsOf('host_key_prompt_resolve')).toHaveLength(0);
   });
 
@@ -224,35 +306,37 @@ describe('HostKeyDialog', () => {
     const emit = await openDialog();
     emit(unknown('p1', 'first.test'));
     await tick();
-    expect(document.activeElement).toBe(findButton(target, 'Reject'));
+    expect(document.activeElement).toBe(findButton(target, 'Cancel'));
   });
 
-  it('rejects on Escape', async () => {
+  it('cancels on Escape, but not on a click outside', async () => {
     const emit = await openDialog();
     emit(unknown('p1', 'first.test'));
+    click(target.querySelector('.backdrop') as HTMLElement);
+    expect(callsOf('host_key_prompt_resolve')).toHaveLength(0);
     press(target.querySelector('[role="alertdialog"]') as HTMLElement, 'Escape');
     await vi.waitFor(() => expect(callsOf('host_key_prompt_resolve')).toHaveLength(1));
     expect(callsOf('host_key_prompt_resolve')[0].args).toEqual({ id: 'p1', trust: false });
-    expect(target.querySelector('[role="alertdialog"]')).toBeNull();
+    await gone();
   });
 
   it('tells the user when the answer could not be delivered', async () => {
     const emit = await openDialog();
     failures.set('host_key_prompt_resolve', 'the backend went away');
     emit(unknown('p1', 'first.test'));
-    click(findButton(target, 'Trust'));
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
-    expect(toasts.toasts[0].kind).toBe('error');
-    expect(toasts.toasts[0].message).toContain('the backend went away');
+    click(findButton(target, 'Verify & connect'));
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
+    expect(notices.visible[0].kind).toBe('error');
+    expect(noticeText(notices.visible[0])).toContain('the backend went away');
   });
 
   it('says so when the prompt is no longer active', async () => {
     const emit = await openDialog();
     answers.set('host_key_prompt_resolve', false);
     emit(unknown('p1', 'first.test'));
-    click(findButton(target, 'Reject'));
-    await vi.waitFor(() => expect(toasts.toasts.length).toBe(1));
-    expect(toasts.toasts[0].kind).toBe('info');
+    click(findButton(target, 'Cancel'));
+    await vi.waitFor(() => expect(notices.visible.length).toBe(1));
+    expect(notices.visible[0].kind).toBe('info');
   });
 });
 

@@ -4,8 +4,8 @@
 
   /**
    * "Paste N lines?": a paste of several lines runs each of them as soon as
-   * the shell reads it, so it is shown first. The checkbox stops the
-   * question for the rest of the session.
+   * the shell reads it, so it is shown first. The checkbox turns the
+   * question off in Preferences (`terminal.confirm_multiline_paste`).
    */
   const request = $derived(pasteGate.pending);
 
@@ -43,7 +43,10 @@
   {/if}
   <label class="remember">
     <input type="checkbox" bind:checked={dontAsk} />
-    Don’t ask again this session
+    <span>
+      Don’t ask again
+      <span class="note">You can turn the question back on in Preferences.</span>
+    </span>
   </label>
 
   {#snippet actions()}
@@ -84,11 +87,20 @@
 
   .remember {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--termru-space-2);
     color: var(--termru-muted);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     cursor: pointer;
+  }
+
+  .remember input {
+    margin: 2px 0 0;
+  }
+
+  .note {
+    display: block;
+    color: var(--termru-faint);
   }
 </style>

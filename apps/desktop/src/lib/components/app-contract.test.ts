@@ -8,7 +8,7 @@
  * updates reach the terminal emulator.
  */
 
-import { mount, unmount } from 'svelte';
+import { mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
 import { connectFlow } from '../stores/connect.svelte';
@@ -103,6 +103,7 @@ vi.mock('@tauri-apps/api/core', () => {
               cursor_blink: true,
               cursor_style: 'block',
               copy_on_select: false,
+              confirm_multiline_paste: true,
               line_height: 1.65,
             },
             keybindings: {},
@@ -418,20 +419,20 @@ describe('desktop UI ↔ Tauri contract', () => {
       expect(target.textContent).toContain('web-1');
     });
 
-    // Mod+Comma opens the settings.
+    // Mod+Comma opens the preferences.
     window.dispatchEvent(
       new KeyboardEvent('keydown', { key: ',', ctrlKey: true, bubbles: true, cancelable: true }),
     );
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Settings');
+      expect(target.querySelector('h1')?.textContent).toBe('Preferences');
     });
 
-    const size = target.querySelector('input[type="number"]') as HTMLInputElement;
+    // A change applies and saves at once: there is no Save button.
+    const size = document.getElementById('pref-size') as HTMLInputElement;
     expect(size).not.toBeNull();
     type(size, '18');
-
-    const save = findButton(target, 'Save');
-    click(save);
+    // A typed value is committed when the field is left (the change event).
+    size.dispatchEvent(new Event('change', { bubbles: true }));
 
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'prefs_set')).toBe(true);
@@ -441,7 +442,7 @@ describe('desktop UI ↔ Tauri contract', () => {
     const prefs = call?.args?.prefs as
       { theme: string; terminal: { font_size: number; cursor_style: string } } | undefined;
     expect(prefs?.terminal.font_size).toBe(18);
-    // The theme is the one the backend reports; the dialog only changes
+    // The theme is the one the backend reports; the page only changes
     // what the user edits.
     expect(prefs?.theme).toBe('dark');
     expect(prefs?.terminal.cursor_style).toBe('block');
@@ -635,16 +636,17 @@ describe('desktop UI ↔ Tauri contract', () => {
       new KeyboardEvent('keydown', { key: ',', ctrlKey: true, bubbles: true, cancelable: true }),
     );
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Settings');
+      expect(target.querySelector('h1')?.textContent).toBe('Preferences');
     });
 
     // Rebind the command palette.
-    const change = findButton(target, 'Change');
-    click(change);
+    click(target.querySelector('[aria-label="Record a shortcut for Command palette"]') as Element);
+    // The recorder listens from the next effect flush.
+    await tick();
 
     // A combination that another command already uses is refused (New tab
     // is Ctrl+Shift+T on Linux and Windows, where Ctrl+T belongs to the shell).
-    target.querySelector('.dialog')?.dispatchEvent(
+    window.dispatchEvent(
       new KeyboardEvent('keydown', {
         key: 'T',
         ctrlKey: true,
@@ -656,9 +658,10 @@ describe('desktop UI ↔ Tauri contract', () => {
     await vi.waitFor(() => {
       expect(target.textContent).toContain('Already used by');
     });
+    expect(invokeCalls.some((call) => call.cmd === 'prefs_set')).toBe(false);
 
-    // A free combination is accepted.
-    target.querySelector('.dialog')?.dispatchEvent(
+    // A free combination is accepted and saved at once.
+    window.dispatchEvent(
       new KeyboardEvent('keydown', {
         key: 'F8',
         ctrlKey: true,
@@ -667,11 +670,6 @@ describe('desktop UI ↔ Tauri contract', () => {
         cancelable: true,
       }),
     );
-    await vi.waitFor(() => {
-      expect(target.textContent).toContain('Ctrl+Shift+F8');
-    });
-
-    click(findButton(target, 'Save'));
     await vi.waitFor(() => {
       expect(invokeCalls.some((call) => call.cmd === 'prefs_set')).toBe(true);
     });

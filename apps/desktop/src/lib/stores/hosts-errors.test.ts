@@ -6,7 +6,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HostsStore } from './hosts.svelte';
-import { toasts } from './toasts.svelte';
+import { notices } from '../notify.svelte';
+import { noticeText } from '../test-support/notices';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { Host } from '../types';
 
@@ -43,7 +44,7 @@ function loaded(): HostsStore {
 
 beforeEach(() => {
   resetTauriMock();
-  toasts.toasts = [];
+  notices.reset();
 });
 
 describe('a failed mutation', () => {
@@ -63,8 +64,8 @@ describe('a failed mutation', () => {
     expect(await store.remove('host-a')).toBe(false);
     expect(store.error).toBeNull();
     expect(store.hosts).toHaveLength(2);
-    expect(toasts.toasts.map((toast) => toast.kind)).toEqual(['error']);
-    expect(toasts.toasts[0].message).toContain('the store is locked');
+    expect(notices.visible.map((toast) => toast.kind)).toEqual(['error']);
+    expect(noticeText(notices.visible[0])).toContain('the store is locked');
   });
 
   it('on delete succeeds quietly and returns true', async () => {
@@ -79,7 +80,7 @@ describe('a failed mutation', () => {
     await store.toggleFavorite(store.hosts[0]);
     expect(store.error).toBeNull();
     expect(store.hosts[0].favorite).toBe(false);
-    expect(toasts.toasts[0].kind).toBe('error');
+    expect(notices.visible[0].kind).toBe('error');
   });
 });
 
@@ -122,6 +123,6 @@ describe('loading', () => {
     await store.load();
     expect(store.error).toBeNull();
     expect(store.hosts).toHaveLength(2);
-    expect(toasts.toasts[0].kind).toBe('error');
+    expect(notices.visible[0].kind).toBe('error');
   });
 });
