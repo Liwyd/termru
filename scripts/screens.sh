@@ -77,6 +77,9 @@ echo "states:"
 queue "state-hosts-empty" 1440 960 "${BASE}?mock&empty#hosts"
 queue "state-hosts-error" 1440 960 "${BASE}?mock&error#hosts"
 queue "state-hostkey-dialog" 1440 960 "${BASE}?mock&demo&hostkey#hosts"
+queue "state-hostkey-other-types-dialog" 1440 960 "${BASE}?mock&demo&hostkey=other#hosts"
+queue "state-authprompt-dialog" 1440 960 "${BASE}?mock&demo&authprompt#hosts"
+queue "state-passphrase-dialog" 1440 960 "${BASE}?mock&demo&authprompt=passphrase#hosts"
 
 wait
 echo "design frames:"

@@ -1,6 +1,10 @@
+mod auth_prompts;
 mod host_keys;
+mod prompts;
 pub(crate) mod sessions;
 
+pub use auth_prompts::AuthPrompts;
+pub(crate) use auth_prompts::ENGINE_PROMPT_TIMEOUT;
 pub use host_keys::HostKeyPrompts;
 pub use sessions::{SessionInfo, SessionManager, SessionStatusDto, SessionUpdate};
 
@@ -9,8 +13,10 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use termru_ssh::ConnectParams;
 use termru_store::Store;
 
+use self::prompts::{PromptEmitter, SessionDirectory, TauriEmitter};
 use crate::sync::SyncEngine;
 use crate::sync::scheduler::SyncScheduler;
 
@@ -31,6 +37,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub sessions: Arc<SessionManager>,
     pub host_keys: Arc<HostKeyPrompts>,
+    pub auth_prompts: Arc<AuthPrompts>,
     pub known_hosts_path: PathBuf,
     /// The cloud sync engine (off until the user signs in).
     pub sync: Arc<SyncEngine>,
@@ -54,14 +61,40 @@ impl AppState {
         // user signs in.
         let sync_scheduler =
             crate::sync::scheduler::spawn(sync.clone(), crate::sync::scheduler::DEFAULT_INTERVAL);
+        let sessions = Arc::new(SessionManager::new());
+        let directory: Arc<dyn SessionDirectory> = sessions.clone();
+        let emitter: Arc<dyn PromptEmitter> = Arc::new(TauriEmitter { app: handle });
+        let host_keys = Arc::new(HostKeyPrompts::new(directory.clone(), emitter.clone()));
+        let auth_prompts = Arc::new(AuthPrompts::new(directory, emitter));
+        // A question belongs to its session: when the session goes, so does
+        // the question (and the dialog that shows it).
+        {
+            let host_keys = host_keys.clone();
+            let auth_prompts = auth_prompts.clone();
+            sessions.set_end_hook(Arc::new(move |session_id| {
+                host_keys.cancel_session(session_id);
+                auth_prompts.cancel_session(session_id);
+            }));
+        }
         Self {
             known_hosts_path: data_dir.join("known_hosts"),
             sync,
             sync_scheduler,
             store,
-            sessions: Arc::new(SessionManager::new()),
-            host_keys: Arc::new(HostKeyPrompts::new(handle)),
+            sessions,
+            host_keys,
+            auth_prompts,
         }
+    }
+
+    /// Binds a connection's questions (host key, authentication) to its
+    /// session, so they carry the session id and reach the windows that show
+    /// it. Every way of starting a session goes through here, a duplicated
+    /// session included (it gets its own id).
+    pub fn scope_prompts(&self, mut params: ConnectParams, session_id: &str) -> ConnectParams {
+        params.host_key_prompt = self.host_keys.for_session(session_id);
+        params.auth_prompt = self.auth_prompts.for_session(session_id);
+        params
     }
 }
 

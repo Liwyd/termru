@@ -72,6 +72,12 @@ export const api = {
 
   hostKeyPromptResolve: (id: string, trust: boolean) =>
     invoke<boolean>('host_key_prompt_resolve', { id, trust }),
+  /**
+   * Answers an authentication question: one answer per prompt, in order, or
+   * `null` to cancel. Resolves to false when nobody waits for it any more.
+   */
+  authPromptResolve: (id: string, answers: string[] | null) =>
+    invoke<boolean>('auth_prompt_resolve', { id, answers }),
 
   layoutSave: (doc: WorkspaceDoc) => invoke<void>('layout_save', { doc }),
   layoutLoad: () => invoke<WorkspaceDoc | null>('layout_load'),

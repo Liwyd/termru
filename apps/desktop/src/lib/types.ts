@@ -123,9 +123,19 @@ export interface SessionGeometry {
   rows: number;
 }
 
-/** Payload of the `host-key-prompt` frontend event. */
+/** The host-key question (`HostKeyPromptRequest` of the SSH engine). */
 export type HostKeyPromptRequest =
-  | { state: 'unknown'; host: string; port: number; key: { key_type: string; fingerprint: string } }
+  | {
+      state: 'unknown';
+      host: string;
+      port: number;
+      key: { key_type: string; fingerprint: string };
+      /**
+       * Key types the host is already known under (a different type than
+       * `key`'s); left out when there are none.
+       */
+      other_key_types?: string[];
+    }
   | {
       state: 'changed';
       host: string;
@@ -133,6 +143,54 @@ export type HostKeyPromptRequest =
       old: { key_type: string; fingerprint: string };
       new: { key_type: string; fingerprint: string };
     };
+
+/** Payload of the `host-key-prompt` frontend event. */
+export interface HostKeyPromptMessage {
+  id: string;
+  /** The session whose connection asks. */
+  session_id: string;
+  request: HostKeyPromptRequest;
+}
+
+/** One question of an authentication round. */
+export interface AuthPromptField {
+  text: string;
+  /** What the user types may be shown (false: a secret, hidden). */
+  echo: boolean;
+}
+
+/** The identity a private key belongs to. */
+export interface KeyIdentity {
+  id: string;
+  name: string;
+}
+
+export type AuthPromptKind =
+  | { type: 'keyboard_interactive' }
+  | {
+      type: 'passphrase';
+      identity: KeyIdentity | null;
+      /** An earlier answer did not unlock the key. */
+      retry: boolean;
+    };
+
+export interface AuthPromptRequest {
+  kind: AuthPromptKind;
+  /** Title the server gave the round (often empty; server-controlled text). */
+  name: string;
+  /** Text the server shows above the questions (often empty; server-controlled). */
+  instructions: string;
+  prompts: AuthPromptField[];
+}
+
+/** Payload of the `auth-prompt` frontend event. */
+export interface AuthPromptMessage {
+  id: string;
+  session_id: string;
+  /** The host the session connects to. */
+  host_id: string | null;
+  request: AuthPromptRequest;
+}
 
 /** Layout persistence (mirrors `termru_core::workspace`). */
 export interface PaneNode {

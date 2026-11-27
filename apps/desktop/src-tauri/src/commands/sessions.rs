@@ -7,18 +7,21 @@
 //! session's `ConnectParams`, zeroized on drop).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use tauri::State;
 use tauri::ipc::Channel;
 use termru_core::host::{AuthMethod, Host};
 use termru_core::ids::HostId;
-use termru_ssh::{AuthChoice, ConnectParams, ConnectTimeouts, SecretValue, SessionOptions};
+use termru_ssh::{
+    AuthChoice, ConnectParams, ConnectTimeouts, KeyIdentity, SecretValue, SessionOptions,
+};
 
 use crate::app_error::CommandError;
 use crate::secrets::{SecretKind, SecretStore};
 use crate::state::sessions::spawn_connection;
-use crate::state::{AppState, SessionInfo, SessionUpdate};
+use crate::state::{AppState, ENGINE_PROMPT_TIMEOUT, SessionInfo, SessionUpdate};
 
 const MAX_DIMENSION: u16 = 500;
 
@@ -97,13 +100,34 @@ fn validate_geometry(cols: u16, rows: u16) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// Resolves the host's auth method into a concrete [`AuthChoice`] using the
-/// per-connection secrets supplied by the UI (never persisted).
+/// The agent socket this process was started with (`None` on Windows, where
+/// the engine looks for the OpenSSH named pipe and Pageant itself).
+fn agent_socket() -> Option<PathBuf> {
+    std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from)
+}
+
+/// Resolves the host's auth method into the **ordered chain** of methods the
+/// engine tries, using the per-connection secrets supplied by the UI (never
+/// persisted).
+///
+/// The engine probes the server first and skips the methods it does not
+/// allow, so every chain ends with keyboard-interactive: a server that wants
+/// a one-time code, or that only offers PAM prompts, can still be reached.
+///
+/// * password: the password, then keyboard-interactive answered with the same
+///   password when the server asks for nothing but a password (the common PAM
+///   setup that disables `PasswordAuthentication`);
+/// * key file: the key (its passphrase is asked for when it is needed and not
+///   stored), then keyboard-interactive;
+/// * agent: the agent's keys, then keyboard-interactive.
+///
+/// The chain is derived from the host's single method on purpose: a
+/// user-ordered list of methods is a data-model change of its own.
 pub(crate) fn build_auth(
     host: &Host,
     store: &termru_store::Store,
     secrets: &SessionSecrets,
-) -> Result<AuthChoice, CommandError> {
+) -> Result<Vec<AuthChoice>, CommandError> {
     match &host.auth {
         AuthMethod::Password => {
             // Prefer the secret the user just typed; otherwise fall back to
@@ -115,9 +139,14 @@ pub(crate) fn build_auth(
             .ok_or_else(|| {
                 CommandError::new(format!("host \"{}\" requires a password", host.name))
             })?;
-            Ok(AuthChoice::Password {
-                password: SecretValue::new(password),
-            })
+            Ok(vec![
+                AuthChoice::Password {
+                    password: SecretValue::new(password.clone()),
+                },
+                AuthChoice::KeyboardInteractive {
+                    password: Some(SecretValue::new(password)),
+                },
+            ])
         }
         AuthMethod::PrivateKey { identity_id } => {
             let repos = store.repos();
@@ -131,22 +160,42 @@ pub(crate) fn build_auth(
                     identity.name
                 ))
             })?;
+            // What the user typed, else what the credential store holds for
+            // the identity (or, from an older version, for this host). A key
+            // that needs a passphrase and has none is asked about by the
+            // engine.
             let passphrase = match secrets.passphrase.clone() {
                 Some(passphrase) => Some(passphrase),
-                None => SecretStore::get(&host.id.to_string(), SecretKind::Passphrase),
+                None => SecretStore::get_passphrase(&identity_id.to_string(), &host.id.to_string()),
             };
-            Ok(AuthChoice::PrivateKey {
-                key_path: PathBuf::from(key_path),
-                passphrase: passphrase.map(SecretValue::new),
-            })
+            Ok(vec![
+                AuthChoice::PrivateKey {
+                    key_path: PathBuf::from(key_path),
+                    passphrase: passphrase.map(SecretValue::new),
+                    identity: Some(KeyIdentity {
+                        id: identity_id.to_string(),
+                        name: identity.name,
+                    }),
+                },
+                AuthChoice::KeyboardInteractive { password: None },
+            ])
         }
-        AuthMethod::Agent => Ok(AuthChoice::Agent {
-            socket: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
-        }),
+        AuthMethod::Agent => Ok(vec![
+            AuthChoice::Agent {
+                socket: agent_socket(),
+                // No identity is tied to an agent host (yet): the agent's
+                // own order decides.
+                prefer_fingerprint: None,
+            },
+            AuthChoice::KeyboardInteractive { password: None },
+        ]),
     }
 }
 
-fn build_params(state: &AppState, host: &Host, auth: AuthChoice) -> ConnectParams {
+/// The engine's parameters for a host. The questions it may ask are bound to
+/// the session by [`AppState::scope_prompts`] when the session is started;
+/// until then they refuse everything.
+fn build_params(state: &AppState, host: &Host, auth: Vec<AuthChoice>) -> ConnectParams {
     ConnectParams {
         host: host.address.clone(),
         port: host.port,
@@ -154,9 +203,15 @@ fn build_params(state: &AppState, host: &Host, auth: AuthChoice) -> ConnectParam
         auth,
         term: host.term.clone(),
         keepalive_seconds: host.keepalive_seconds,
-        timeouts: ConnectTimeouts::default(),
+        timeouts: ConnectTimeouts {
+            // The registry of questions ends them first (and tells the
+            // dialog); the engine's bound is the backstop.
+            auth_prompt: ENGINE_PROMPT_TIMEOUT,
+            ..ConnectTimeouts::default()
+        },
         known_hosts_path: state.known_hosts_path.clone(),
-        host_key_prompt: state.host_keys.clone(),
+        host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+        auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
     }
 }
 
@@ -175,9 +230,12 @@ fn start_session(
         rows,
         ..SessionOptions::default()
     };
-    let (id, cancel_rx) = state
+    // The questions of the connection carry the session id: reserve it first.
+    let id = state.sessions.reserve_id();
+    let params = state.scope_prompts(params, &id);
+    let cancel_rx = state
         .sessions
-        .register(host_id, params.clone(), window, channel);
+        .register_with_id(&id, host_id, params.clone(), window, channel);
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -373,6 +431,24 @@ pub fn host_key_prompt_resolve(
     Ok(state.host_keys.resolve(&id, trust))
 }
 
+/// Answers a pending authentication question: `answers` (one per prompt, in
+/// order) or `None` to cancel. `false` when nobody is waiting any more (the
+/// question timed out, or its session ended).
+///
+/// The answers may be secrets: they become `SecretValue`s right here and are
+/// never logged.
+#[tauri::command]
+pub fn auth_prompt_resolve(
+    state: State<'_, AppState>,
+    id: String,
+    answers: Option<Vec<String>>,
+) -> Result<bool, CommandError> {
+    state
+        .auth_prompts
+        .resolve(&id, answers)
+        .map_err(CommandError::new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +478,10 @@ mod tests {
         assert!(message.contains("invalid terminal size"), "{message}");
     }
 
+    fn names(chain: &[AuthChoice]) -> Vec<&'static str> {
+        chain.iter().map(AuthChoice::method_name).collect()
+    }
+
     #[test]
     fn password_auth_requires_a_supplied_password() {
         let (_dir, store) = temp_store();
@@ -420,9 +500,18 @@ mod tests {
             },
         )
         .expect("auth builds");
-        match supplied {
-            AuthChoice::Password { password } => assert_eq!(password.expose(), "hunter2"),
-            other => panic!("wrong variant: {}", other.method_name()),
+        assert_eq!(names(&supplied), ["password", "keyboard-interactive"]);
+        match &supplied[..] {
+            [
+                AuthChoice::Password { password },
+                AuthChoice::KeyboardInteractive {
+                    password: Some(answer),
+                },
+            ] => {
+                assert_eq!(password.expose(), "hunter2");
+                assert_eq!(answer.expose(), "hunter2");
+            }
+            other => panic!("wrong chain: {other:?}"),
         }
     }
 
@@ -430,8 +519,12 @@ mod tests {
     fn agent_auth_never_panics_without_ssh_auth_sock() {
         let (_dir, store) = temp_store();
         let host = host_with(AuthMethod::Agent);
-        let choice = build_auth(&host, &store, &SessionSecrets::default()).expect("agent builds");
-        assert!(matches!(choice, AuthChoice::Agent { .. }));
+        let chain = build_auth(&host, &store, &SessionSecrets::default()).expect("agent builds");
+        assert_eq!(names(&chain), ["publickey (agent)", "keyboard-interactive"]);
+        assert!(matches!(
+            chain[1],
+            AuthChoice::KeyboardInteractive { password: None }
+        ));
     }
 
     #[test]
@@ -470,7 +563,7 @@ mod tests {
             .identities()
             .bind(identity.id, "/home/user/.ssh/id_ed25519")
             .expect("bind");
-        let choice = build_auth(
+        let chain = build_auth(
             &unbound,
             &store,
             &SessionSecrets {
@@ -479,13 +572,23 @@ mod tests {
             },
         )
         .expect("auth builds");
-        match choice {
+        assert_eq!(names(&chain), ["publickey", "keyboard-interactive"]);
+        match &chain[0] {
             AuthChoice::PrivateKey {
                 key_path,
                 passphrase,
+                identity: key_identity,
             } => {
-                assert_eq!(key_path, PathBuf::from("/home/user/.ssh/id_ed25519"));
-                assert_eq!(passphrase.expect("passphrase").expose(), "open-sesame");
+                assert_eq!(key_path, &PathBuf::from("/home/user/.ssh/id_ed25519"));
+                assert_eq!(
+                    passphrase.as_ref().expect("passphrase").expose(),
+                    "open-sesame"
+                );
+                // The prompt names the key by its identity, and a remembered
+                // passphrase is stored for exactly this identity.
+                let key_identity = key_identity.as_ref().expect("identity");
+                assert_eq!(key_identity.name, "default key");
+                assert_eq!(key_identity.id, identity.id.to_string());
             }
             other => panic!("wrong variant: {}", other.method_name()),
         }

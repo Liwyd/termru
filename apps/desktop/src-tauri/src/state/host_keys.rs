@@ -1,130 +1,95 @@
 //! Interactive host-key trust decisions routed to the UI.
 //!
-//! `termru_ssh::HostKeyPrompt` is implemented by [`HostKeyPrompts`]: the
-//! connect task registers a pending decision ([`PendingHostKeys`]), the
-//! frontend receives a `host-key-prompt` event, and answers via
-//! `host_key_prompt_resolve`. Dropped/timeout decisions default to **reject**
-//! (never trust by default).
+//! `termru_ssh::HostKeyPrompt` is implemented per session by
+//! [`SessionHostKeyPrompt`] (made by [`HostKeyPrompts::for_session`]): the
+//! question carries the session id, goes to the windows that show the session
+//! and waits for `host_key_prompt_resolve`. Everything that is not a clear
+//! "trust" — a timeout, a closed session, no window to ask, a full registry —
+//! is a **reject** (never trust by default). See [`super::prompts`] for the
+//! lifecycle of a pending question.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 use termru_ssh::{HostKeyPrompt, HostKeyPromptRequest};
 
-const EVENT_NAME: &str = "host-key-prompt";
-/// Bound on pending prompts; the oldest are evicted (deny) beyond this.
-const MAX_PENDING: usize = 32;
+use super::prompts::{Asked, Envelope, PromptEmitter, PromptHub, SessionDirectory};
+
+pub(crate) const EVENT_NAME: &str = "host-key-prompt";
+pub(crate) const CLOSED_EVENT_NAME: &str = "host-key-prompt-closed";
+
+/// How long the registry keeps a question. A little longer than the engine's
+/// own decision budget (`ConnectTimeouts::host_key_decision`, 120 s), so the
+/// engine normally ends the question and reports the precise error; this is
+/// the backstop.
+const DECISION_TIMEOUT: Duration = Duration::from_secs(125);
 
 /// Payload of the `host-key-prompt` frontend event.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostKeyPromptMessage {
     pub id: String,
+    pub session_id: String,
     pub request: HostKeyPromptRequest,
 }
 
-type Pending = HashMap<String, (HostKeyPromptRequest, tokio::sync::oneshot::Sender<bool>)>;
-
-/// The pending-prompt registry (pure logic; unit-testable without a window).
-pub struct PendingHostKeys {
-    pending: Mutex<Pending>,
-    next: AtomicU64,
-}
-
-impl PendingHostKeys {
-    pub fn new() -> Self {
-        Self {
-            pending: Mutex::new(HashMap::new()),
-            next: AtomicU64::new(1),
-        }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Pending> {
-        self.pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// Registers a decision; returns the id, the event payload to emit, and
-    /// the receiver that resolves to the user's verdict.
-    pub fn register(
-        &self,
-        request: HostKeyPromptRequest,
-    ) -> (
-        String,
-        HostKeyPromptMessage,
-        tokio::sync::oneshot::Receiver<bool>,
-    ) {
-        let seq = self.next.fetch_add(1, Ordering::Relaxed);
-        let id = format!("hk{seq}");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        {
-            let mut guard = self.lock();
-            if guard.len() >= MAX_PENDING {
-                // Evicted senders drop → their `decide` awaits resolve to
-                // `false`; no unbounded growth from vanished connect tasks.
-                guard.clear();
-            }
-            guard.insert(id.clone(), (request.clone(), tx));
-        }
-        let message = HostKeyPromptMessage {
-            id: id.clone(),
-            request,
-        };
-        (id, message, rx)
-    }
-
-    /// Answers (or cancels) a pending prompt. Returns `true` only when a
-    /// live waiter received this answer. Unknown/duplicate ids return
-    /// `false` — a stale answer can never grant trust.
-    pub fn resolve(&self, id: &str, trust: bool) -> bool {
-        match self.lock().remove(id) {
-            // `send` fails only when the waiter is gone (timeout/closed).
-            Some((_, sender)) => sender.send(trust).is_ok(),
-            None => false,
-        }
-    }
-}
-
-impl Default for PendingHostKeys {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// `HostKeyPrompt` implementation backed by the UI: emits the prompt event
-/// and awaits the frontend's answer (default-deny on any failure).
+/// The host-key questions of the whole app.
 pub struct HostKeyPrompts {
-    app: AppHandle,
-    pending: PendingHostKeys,
+    hub: Arc<PromptHub<bool>>,
 }
 
 impl HostKeyPrompts {
-    pub fn new(app: AppHandle) -> Self {
+    pub(crate) fn new(
+        directory: Arc<dyn SessionDirectory>,
+        emitter: Arc<dyn PromptEmitter>,
+    ) -> Self {
         Self {
-            app,
-            pending: PendingHostKeys::new(),
+            hub: PromptHub::new("hk", EVENT_NAME, CLOSED_EVENT_NAME, directory, emitter),
         }
     }
 
+    /// The prompt for one session's connection.
+    pub fn for_session(&self, session_id: &str) -> Arc<dyn HostKeyPrompt> {
+        Arc::new(SessionHostKeyPrompt {
+            hub: self.hub.clone(),
+            session_id: session_id.to_string(),
+        })
+    }
+
+    /// Answers (or rejects) a pending question. `true` only when a live
+    /// waiter received this answer; unknown or repeated ids return `false` —
+    /// a stale answer can never grant trust.
     pub fn resolve(&self, id: &str, trust: bool) -> bool {
-        self.pending.resolve(id, trust)
+        self.hub.resolve(id, trust)
+    }
+
+    /// The session ended: its questions are rejected and removed.
+    pub fn cancel_session(&self, session_id: &str) -> usize {
+        self.hub.cancel_session(session_id)
     }
 }
 
+struct SessionHostKeyPrompt {
+    hub: Arc<PromptHub<bool>>,
+    session_id: String,
+}
+
 #[async_trait::async_trait]
-impl HostKeyPrompt for HostKeyPrompts {
+impl HostKeyPrompt for SessionHostKeyPrompt {
     async fn decide(&self, request: HostKeyPromptRequest) -> bool {
-        let (id, message, rx) = self.pending.register(request);
-        if self.app.emit(EVENT_NAME, message).is_err() {
-            self.pending.resolve(&id, false);
-            return false;
-        }
-        // Default-deny: a dropped receiver (timeout, app shutdown) resolves
-        // to `false`, never trust.
-        rx.await.unwrap_or(false)
+        let asked = self
+            .hub
+            .ask(&self.session_id, DECISION_TIMEOUT, |envelope: &Envelope| {
+                let message = HostKeyPromptMessage {
+                    id: envelope.id.clone(),
+                    session_id: envelope.session_id.clone(),
+                    request,
+                };
+                serde_json::to_value(&message).ok()
+            })
+            .await;
+        // Default-deny: only an explicit "trust" trusts.
+        matches!(asked, Asked::Answer(true))
     }
 
     fn is_interactive(&self) -> bool {
@@ -134,9 +99,10 @@ impl HostKeyPrompt for HostKeyPrompts {
 
 #[cfg(test)]
 mod tests {
+    use super::super::prompts::testing::{FakeDirectory, RecordingEmitter};
     use super::*;
 
-    fn sample_request(marker: &str) -> HostKeyPromptRequest {
+    fn unknown(marker: &str, others: &[&str]) -> HostKeyPromptRequest {
         HostKeyPromptRequest::Unknown {
             host: marker.to_string(),
             port: 22,
@@ -144,69 +110,111 @@ mod tests {
                 key_type: "ssh-ed25519".into(),
                 fingerprint: "SHA256:abc".into(),
             },
+            other_key_types: others.iter().map(|t| (*t).to_string()).collect(),
         }
     }
 
-    #[test]
-    fn register_then_resolve_delivers_verdict() {
-        let pending = PendingHostKeys::new();
-        let (id, message, rx) = pending.register(sample_request("a"));
-        assert_eq!(message.id, id);
-        assert!(pending.resolve(&id, true));
-        // Receiver side of the oneshot (resolve consumed the sender).
-        let accepted = futures_block(rx).unwrap_or(false);
-        assert!(accepted);
+    fn setup() -> (HostKeyPrompts, Arc<FakeDirectory>, Arc<RecordingEmitter>) {
+        let directory = Arc::new(FakeDirectory::default());
+        let emitter = Arc::new(RecordingEmitter::default());
+        let prompts = HostKeyPrompts::new(directory.clone(), emitter.clone());
+        (prompts, directory, emitter)
     }
 
-    #[test]
-    fn unknown_id_is_rejected() {
-        let pending = PendingHostKeys::new();
-        assert!(!pending.resolve("hk-nope", true), "stale id must not trust");
-    }
-
-    #[test]
-    fn duplicate_resolve_only_affects_first_call() {
-        let pending = PendingHostKeys::new();
-        let (id, _, rx) = pending.register(sample_request("b"));
-        assert!(pending.resolve(&id, true));
-        assert!(!pending.resolve(&id, false), "second answer has no waiter");
-        assert!(futures_block(rx).unwrap_or(false));
-    }
-
-    #[test]
-    fn eviction_bounds_the_pending_map_and_denies_evicted() {
-        let pending = PendingHostKeys::new();
-        // Keep receivers alive so a resolve on an evicted id can only return
-        // false because the entry is gone, not because the waiter vanished.
-        let mut keep: Vec<(String, tokio::sync::oneshot::Receiver<bool>)> = Vec::new();
-        for index in 0..(MAX_PENDING + 1) {
-            let (id, _, rx) = pending.register(sample_request(&format!("h{index}")));
-            keep.push((id, rx));
+    async fn emitted_id(emitter: &RecordingEmitter) -> String {
+        loop {
+            if let Some((_, payload)) = emitter.of(EVENT_NAME).first() {
+                return payload["id"].as_str().unwrap().to_string();
+            }
+            tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_event_carries_the_session_the_request_and_goes_to_its_window() {
+        let (prompts, directory, emitter) = setup();
+        directory.show("s7", &["win-a"]);
+        let prompt = prompts.for_session("s7");
+        let decision =
+            tokio::spawn(async move { prompt.decide(unknown("example.test", &[])).await });
+        let id = emitted_id(&emitter).await;
+
+        let events = emitter.of(EVENT_NAME);
+        assert_eq!(events.len(), 1);
+        let (window, payload) = &events[0];
+        assert_eq!(window, "win-a");
+        assert_eq!(payload["session_id"], "s7");
+        assert_eq!(payload["request"]["state"], "unknown");
+        assert_eq!(payload["request"]["host"], "example.test");
+        assert_eq!(payload["request"]["key"]["fingerprint"], "SHA256:abc");
         assert!(
-            !pending.resolve(&keep[0].0, true),
-            "evicted prompt must deny even with a live waiter"
+            payload["request"].get("other_key_types").is_none(),
+            "no other types: the field is left out"
         );
-        let (latest, _, rx) = pending.register(sample_request("latest"));
-        assert!(pending.resolve(&latest, false));
-        assert!(!futures_block(rx).unwrap_or(true), "reject delivered");
+
+        assert!(prompts.resolve(&id, true));
+        assert!(decision.await.unwrap(), "an explicit trust trusts");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn other_known_key_types_are_part_of_the_question() {
+        let (prompts, directory, emitter) = setup();
+        directory.show("s1", &["main"]);
+        let prompt = prompts.for_session("s1");
+        let decision = tokio::spawn(async move {
+            prompt
+                .decide(unknown("example.test", &["ssh-rsa", "ecdsa-sha2-nistp256"]))
+                .await
+        });
+        let id = emitted_id(&emitter).await;
+        assert_eq!(
+            emitter.of(EVENT_NAME)[0].1["request"]["other_key_types"],
+            serde_json::json!(["ssh-rsa", "ecdsa-sha2-nistp256"])
+        );
+        assert!(prompts.resolve(&id, false));
+        assert!(!decision.await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn anything_but_trust_rejects() {
+        let (prompts, directory, emitter) = setup();
+
+        // No window shows the session.
+        assert!(!prompts.for_session("ghost").decide(unknown("a", &[])).await);
+
+        // The question times out.
+        directory.show("s1", &["main"]);
+        assert!(!prompts.for_session("s1").decide(unknown("b", &[])).await);
+        assert_eq!(emitter.of(CLOSED_EVENT_NAME).len(), 1);
+
+        // The session ends while the question is open.
+        let prompt = prompts.for_session("s1");
+        let decision = tokio::spawn(async move { prompt.decide(unknown("c", &[])).await });
+        while emitter.of(EVENT_NAME).len() < 2 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(prompts.cancel_session("s1"), 1);
+        assert!(!decision.await.unwrap());
     }
 
     #[test]
-    fn message_serializes_prompt_state_for_frontend() {
-        let pending = PendingHostKeys::new();
-        let (_, message, _rx) = pending.register(sample_request("example.test"));
+    fn unknown_ids_never_trust() {
+        let (prompts, _, _) = setup();
+        assert!(!prompts.resolve("hk-nope", true), "stale id must not trust");
+    }
+
+    #[test]
+    fn an_unknown_question_serializes_for_the_frontend() {
+        let message = HostKeyPromptMessage {
+            id: "hk1".into(),
+            session_id: "s1".into(),
+            request: unknown("example.test", &["ssh-rsa"]),
+        };
         let json = serde_json::to_string(&message).unwrap();
         assert!(json.contains("\"state\":\"unknown\""));
+        assert!(json.contains("\"session_id\":\"s1\""));
         assert!(json.contains("example.test"));
         assert!(json.contains("SHA256:abc"));
-    }
-
-    fn futures_block<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(future)
+        assert!(json.contains("\"other_key_types\":[\"ssh-rsa\"]"));
     }
 }

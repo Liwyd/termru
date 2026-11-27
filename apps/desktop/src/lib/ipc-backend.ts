@@ -75,9 +75,35 @@ export const Channel = class BackendChannel<T> {
   }
 } as unknown as new <T = unknown>(onmessage?: (response: T) => void) => TauriChannel<T>;
 
-/** Subscribes to a backend event; resolves to the function that unsubscribes. */
+/**
+ * The label of the window this script runs in, as Tauri's own
+ * `getCurrentWebviewWindow()` reads it; `null` outside Tauri (tests).
+ */
+function windowLabel(): string | null {
+  const internals = (
+    globalThis as {
+      __TAURI_INTERNALS__?: { metadata?: { currentWebview?: { label?: unknown } } };
+    }
+  ).__TAURI_INTERNALS__;
+  const label = internals?.metadata?.currentWebview?.label;
+  return typeof label === 'string' ? label : null;
+}
+
+/**
+ * Subscribes to a backend event; resolves to the function that unsubscribes.
+ *
+ * The listener is registered for **this window**. A listener without a
+ * target hears every event, also the ones the backend addresses to one
+ * window — and then each window would show the dialog of a question that
+ * belongs to another window's session. Events the backend broadcasts reach
+ * a window-scoped listener as well.
+ */
 export function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
-  return mock ? mock.listen<T>(event, handler) : tauriListen<T>(event, handler);
+  if (mock) return mock.listen<T>(event, handler);
+  const label = windowLabel();
+  return label
+    ? tauriListen<T>(event, handler, { target: { kind: 'WebviewWindow', label } })
+    : tauriListen<T>(event, handler);
 }
 
 /** Opens the native file picker for one file; `null` when cancelled. */

@@ -8,6 +8,16 @@
 //! When no credential store is reachable the app degrades gracefully: the
 //! user is asked for the secret on every connection and everything else
 //! keeps working.
+//!
+//! ## Whose secret it is
+//!
+//! A **password** belongs to a host (`<host id>/password`). A key
+//! **passphrase** belongs to the key, that is to its *identity*
+//! (`identity:<identity id>/passphrase`): every host that authenticates with
+//! the identity shares one stored passphrase, and changing the host's other
+//! settings never orphans it. Earlier versions stored the passphrase per host
+//! (`<host id>/passphrase`); such an entry is still *read* (and removed the
+//! next time the passphrase is saved under the identity).
 
 use keyring::{Entry, Error as KeyringError};
 
@@ -45,9 +55,68 @@ impl SecretKind {
 /// Reads and writes connection secrets in the OS credential store.
 pub struct SecretStore;
 
+/// The keyring user name of a secret.
+fn entry_name(owner: &str, kind: SecretKind) -> String {
+    format!("{owner}/{}", kind.as_str())
+}
+
+/// The owner of a key passphrase: derived from the identity.
+fn passphrase_owner(identity_id: &str) -> String {
+    format!("identity:{identity_id}")
+}
+
+/// A passphrase lookup that falls back to the pre-identity per-host entry.
+fn passphrase_with_fallback(
+    get: impl Fn(&str) -> Option<String>,
+    identity_id: &str,
+    legacy_host_id: &str,
+) -> Option<String> {
+    get(&passphrase_owner(identity_id)).or_else(|| get(legacy_host_id))
+}
+
 impl SecretStore {
-    fn entry(host_id: &str, kind: SecretKind) -> Result<Entry, KeyringError> {
-        Entry::new(SERVICE, &format!("{host_id}/{}", kind.as_str()))
+    fn entry(owner: &str, kind: SecretKind) -> Result<Entry, KeyringError> {
+        Entry::new(SERVICE, &entry_name(owner, kind))
+    }
+
+    /// The stored passphrase of an identity's key. `legacy_host_id` is the
+    /// host the connection is for: an entry an older version stored under
+    /// that host is used when the identity has none yet.
+    pub fn get_passphrase(identity_id: &str, legacy_host_id: &str) -> Option<String> {
+        passphrase_with_fallback(
+            |owner| Self::get(owner, SecretKind::Passphrase),
+            identity_id,
+            legacy_host_id,
+        )
+    }
+
+    /// Whether a passphrase is stored for the identity (or, from an older
+    /// version, for the host).
+    pub fn has_passphrase(identity_id: &str, legacy_host_id: &str) -> bool {
+        Self::get_passphrase(identity_id, legacy_host_id).is_some()
+    }
+
+    /// Stores the passphrase under the identity. A leftover per-host entry is
+    /// removed: it would be stale the day the passphrase changes.
+    pub fn set_passphrase(
+        identity_id: &str,
+        legacy_host_id: &str,
+        secret: &str,
+    ) -> Result<(), CommandError> {
+        Self::set(
+            &passphrase_owner(identity_id),
+            SecretKind::Passphrase,
+            secret,
+        )?;
+        // Best effort: the new entry is what counts.
+        let _ = Self::delete(legacy_host_id, SecretKind::Passphrase);
+        Ok(())
+    }
+
+    /// Removes the passphrase of the identity and the host's older entry.
+    pub fn delete_passphrase(identity_id: &str, legacy_host_id: &str) -> Result<(), CommandError> {
+        Self::delete(&passphrase_owner(identity_id), SecretKind::Passphrase)?;
+        Self::delete(legacy_host_id, SecretKind::Passphrase)
     }
 
     /// Stores a secret for a host.
@@ -133,6 +202,50 @@ mod tests {
             Some(SecretKind::Passphrase)
         );
         assert_eq!(SecretKind::parse("nope"), None);
+    }
+
+    #[test]
+    fn passphrases_are_keyed_by_identity_not_by_host() {
+        let owner = passphrase_owner("11111111-2222-4333-8444-555555555555");
+        assert_eq!(owner, "identity:11111111-2222-4333-8444-555555555555");
+        assert_eq!(
+            entry_name(&owner, SecretKind::Passphrase),
+            "identity:11111111-2222-4333-8444-555555555555/passphrase"
+        );
+        // A password stays under its host.
+        assert_eq!(
+            entry_name("host-1", SecretKind::Password),
+            "host-1/password"
+        );
+        // Two hosts, one identity: the same entry.
+        assert_eq!(passphrase_owner("i1"), passphrase_owner("i1"));
+        assert_ne!(passphrase_owner("i1"), passphrase_owner("i2"));
+    }
+
+    /// Migration: an older version stored the passphrase under the host. It
+    /// is still found, and the identity's own entry wins once there is one.
+    #[test]
+    fn an_older_per_host_passphrase_is_still_read() {
+        let stored = |entries: &'static [(&'static str, &'static str)]| {
+            move |owner: &str| {
+                entries
+                    .iter()
+                    .find(|(key, _)| *key == owner)
+                    .map(|(_, value)| (*value).to_string())
+            }
+        };
+        let legacy_only = stored(&[("host-1", "old-passphrase")]);
+        assert_eq!(
+            passphrase_with_fallback(legacy_only, "id-1", "host-1").as_deref(),
+            Some("old-passphrase")
+        );
+        let both = stored(&[("host-1", "old"), ("identity:id-1", "new")]);
+        assert_eq!(
+            passphrase_with_fallback(both, "id-1", "host-1").as_deref(),
+            Some("new")
+        );
+        let other_host = stored(&[("host-2", "other")]);
+        assert_eq!(passphrase_with_fallback(other_host, "id-1", "host-1"), None);
     }
 
     #[test]

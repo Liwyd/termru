@@ -33,7 +33,8 @@ use tokio::sync::{mpsc, watch};
 
 use termru_ssh::{
     AuthChoice, ConnectParams, ConnectTimeouts, ErrorCategory, HostKeyPrompt, HostKeyPromptRequest,
-    ReconnectPolicy, SecretValue, Session, SessionEvent, SessionOptions, SessionStatus, SshError,
+    NoAuthPrompts, ReconnectPolicy, SecretValue, Session, SessionEvent, SessionOptions,
+    SessionStatus, SshError,
 };
 
 const ENC_PASSPHRASE: &str = "kite-pass-test";
@@ -43,6 +44,15 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
 const FLOOD_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------- tooling --
+
+/// A key-file method without identity or passphrase.
+fn key_auth(path: &Path) -> AuthChoice {
+    AuthChoice::PrivateKey {
+        key_path: path.to_path_buf(),
+        passphrase: None,
+        identity: None,
+    }
+}
 
 fn which(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -164,6 +174,14 @@ struct TestServer {
 
 impl TestServer {
     fn start() -> Option<Self> {
+        Self::start_with("", |_| {})
+    }
+
+    /// Starts a server whose `sshd_config` begins with `extra` (`{dir}` is
+    /// replaced by the server's directory). sshd keeps the **first** value of
+    /// most keywords, so the extra lines override the defaults below. `setup`
+    /// runs before sshd starts and may create the files `extra` refers to.
+    fn start_with(extra: &str, setup: impl FnOnce(&Path)) -> Option<Self> {
         let Some(sshd) = find_sshd() else {
             eprintln!(
                 "SKIPPED: sshd not found (install openssh-server) — integration test not exercised"
@@ -194,6 +212,8 @@ impl TestServer {
         keygen(&encrypted_key, ENC_PASSPHRASE);
         keygen(&bad_key, "");
         keygen(&decoy_key, "");
+        setup(&dir);
+        let extra = extra.replace("{dir}", &dir.display().to_string());
 
         let authorized_keys = dir.join("authorized_keys");
         std::fs::copy(pub_of(&client_key), &authorized_keys).expect("authorized_keys");
@@ -222,7 +242,8 @@ impl TestServer {
         std::fs::write(
             &config,
             format!(
-                "Port {port}\n\
+                "{extra}\n\
+                 Port {port}\n\
                  ListenAddress 127.0.0.1\n\
                  HostKey {host_key}\n\
                  PidFile {pid_file}\n\
@@ -304,13 +325,14 @@ impl TestServer {
     }
 
     fn client_auth(&self) -> AuthChoice {
-        AuthChoice::PrivateKey {
-            key_path: self.client_key.clone(),
-            passphrase: None,
-        }
+        key_auth(&self.client_key)
     }
 
     fn params(&self, prompt: Arc<dyn HostKeyPrompt>, auth: AuthChoice) -> ConnectParams {
+        self.chain_params(prompt, vec![auth])
+    }
+
+    fn chain_params(&self, prompt: Arc<dyn HostKeyPrompt>, auth: Vec<AuthChoice>) -> ConnectParams {
         ConnectParams {
             host: "127.0.0.1".into(),
             port: self.port,
@@ -322,10 +344,31 @@ impl TestServer {
                 connect: Duration::from_secs(5),
                 auth: Duration::from_secs(5),
                 host_key_decision: Duration::from_secs(10),
+                ..ConnectTimeouts::default()
             },
             known_hosts_path: self.known_hosts.clone(),
             host_key_prompt: prompt,
+            auth_prompt: Arc::new(NoAuthPrompts),
         }
+    }
+
+    /// Authorizes one more public key (sshd re-reads the file per attempt).
+    fn authorize(&self, public_key_file: &Path) {
+        use std::io::Write;
+        let path = self.dir.join("authorized_keys");
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open authorized_keys");
+        let mut line = std::fs::read(public_key_file).expect("read public key");
+        if !line.ends_with(b"\n") {
+            line.push(b'\n');
+        }
+        file.write_all(&line).expect("append key");
+    }
+
+    fn sshd_log(&self) -> String {
+        std::fs::read_to_string(self.dir.join("sshd.log")).unwrap_or_default()
     }
 
     fn seed_known_hosts(&self, key_line: &str) {
@@ -401,6 +444,7 @@ impl HostKeyPrompt for RecordingPrompt {
 #[derive(Default)]
 struct Collector {
     data: Vec<u8>,
+    banners: Vec<String>,
     statuses: Vec<SessionStatus>,
     exits: Vec<Option<i32>>,
 }
@@ -409,6 +453,7 @@ impl Collector {
     fn push(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::Data(bytes) => self.data.extend_from_slice(&bytes),
+            SessionEvent::Banner(text) => self.banners.push(text),
             SessionEvent::Status(status) => self.statuses.push(status),
             SessionEvent::Exit { code } => self.exits.push(code),
         }
@@ -581,7 +626,9 @@ async fn shell_roundtrip_and_tofu_trust() {
     let seen = prompt.seen();
     assert_eq!(seen.len(), 1, "exactly one trust prompt: {seen:?}");
     match &seen[0] {
-        HostKeyPromptRequest::Unknown { host, port, key } => {
+        HostKeyPromptRequest::Unknown {
+            host, port, key, ..
+        } => {
             assert_eq!(host, "127.0.0.1");
             assert_eq!(*port, server.port);
             assert!(
@@ -812,10 +859,7 @@ async fn unauthorized_key_is_auth_failure() {
         return;
     };
     let prompt = RecordingPrompt::new(true);
-    let auth = AuthChoice::PrivateKey {
-        key_path: server.bad_key.clone(),
-        passphrase: None,
-    };
+    let auth = key_auth(&server.bad_key);
     let (tx, mut rx) = mpsc::channel(256);
     let mut col = Collector::default();
 
@@ -850,6 +894,7 @@ async fn wrong_passphrase_is_auth_failure_without_leaking_it() {
     let auth = AuthChoice::PrivateKey {
         key_path: server.encrypted_key.clone(),
         passphrase: Some(SecretValue::new(WRONG_PASSPHRASE.to_string())),
+        identity: None,
     };
     let (tx, _rx) = mpsc::channel(256);
 
@@ -880,6 +925,7 @@ async fn correct_passphrase_opens_shell() {
     let auth = AuthChoice::PrivateKey {
         key_path: server.encrypted_key.clone(),
         passphrase: Some(SecretValue::new(ENC_PASSPHRASE.to_string())),
+        identity: None,
     };
     let (tx, mut rx) = mpsc::channel(256);
     let mut col = Collector::default();
@@ -941,6 +987,7 @@ async fn agent_auth_via_explicit_socket() {
     let prompt = RecordingPrompt::new(true);
     let auth = AuthChoice::Agent {
         socket: Some(sock.clone()),
+        prefer_fingerprint: None,
     };
     let (tx, mut rx) = mpsc::channel(256);
     let mut col = Collector::default();
@@ -1608,5 +1655,504 @@ async fn a_stalled_consumer_is_never_dropped() {
         count(d, b"AFTER_STALL_2") >= 1
     })
     .await;
+    session.close().await.expect("close");
+}
+
+// ------------------------------------------------- the authentication chain --
+
+fn keygen_typed(path: &Path, key_type: &str, bits: &str) {
+    let status = Command::new("ssh-keygen")
+        .args(["-q", "-t", key_type, "-b", bits, "-N", "", "-f"])
+        .arg(path)
+        .status()
+        .expect("ssh-keygen must be available for integration tests");
+    assert!(status.success(), "ssh-keygen failed for {}", path.display());
+}
+
+/// Opens a session and returns once it is `Ready`; the error otherwise.
+async fn open_ready(
+    params: ConnectParams,
+) -> (
+    Result<Session, SshError>,
+    Collector,
+    mpsc::Receiver<SessionEvent>,
+) {
+    let (tx, mut rx) = mpsc::channel(256);
+    let mut col = Collector::default();
+    let result = Session::open(params, SessionOptions::default(), tx).await;
+    if result.is_ok() {
+        col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+            .await;
+    } else {
+        col.drain(&mut rx);
+    }
+    (result, col, rx)
+}
+
+/// An RSA key must sign with the hash the server announced (`server-sig-algs`),
+/// not a hard-coded one: this server accepts exactly one RSA signature
+/// algorithm, so a wrong guess is a rejected login.
+async fn rsa_login_with(accepted: &str) {
+    let Some(server) =
+        TestServer::start_with(&format!("PubkeyAcceptedAlgorithms {accepted}"), |_| {})
+    else {
+        return;
+    };
+    let rsa = server.dir.join("id_rsa");
+    keygen_typed(&rsa, "rsa", "2048");
+    server.authorize(&pub_of(&rsa));
+
+    let params = server.params(RecordingPrompt::new(true), key_auth(&rsa));
+    let (result, _col, _rx) = open_ready(params).await;
+    let session = result.unwrap_or_else(|e| panic!("RSA login with {accepted} failed: {e}"));
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rsa_key_uses_sha512_when_the_server_only_takes_sha512() {
+    rsa_login_with("rsa-sha2-512").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rsa_key_uses_sha256_when_the_server_only_takes_sha256() {
+    rsa_login_with("rsa-sha2-256").await;
+}
+
+/// The password method is configured first but the server does not allow
+/// it: the chain must go on with the key instead of failing on the password.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_method_the_server_does_not_allow_is_skipped() {
+    let Some(server) = TestServer::start_with("PasswordAuthentication no", |_| {}) else {
+        return;
+    };
+    let chain = vec![
+        AuthChoice::Password {
+            password: SecretValue::new(WRONG_PASSWORD.to_string()),
+        },
+        server.client_auth(),
+    ];
+    let (result, _col, _rx) =
+        open_ready(server.chain_params(RecordingPrompt::new(true), chain)).await;
+    let session = result.expect("the key must carry the chain");
+    session.close().await.expect("close");
+    assert!(
+        !server.sshd_log().contains("Failed password"),
+        "the password must not have been tried: {}",
+        server.sshd_log()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn when_nothing_is_allowed_the_error_says_what_the_server_wants() {
+    let Some(server) = TestServer::start_with("PasswordAuthentication no", |_| {}) else {
+        return;
+    };
+    let params = server.params(
+        RecordingPrompt::new(true),
+        AuthChoice::Password {
+            password: SecretValue::new(WRONG_PASSWORD.to_string()),
+        },
+    );
+    let (result, _col, _rx) = open_ready(params).await;
+    let error = result.expect_err("no usable method");
+    let message = error.to_string();
+    assert!(error.is_auth_failure(), "{message}");
+    assert!(message.contains("set up for password"), "{message}");
+    assert!(message.contains("the server allows publickey"), "{message}");
+    assert!(!message.contains(WRONG_PASSWORD), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_chain_lists_every_method_tried_and_what_the_server_allows() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let chain = vec![
+        AuthChoice::Password {
+            password: SecretValue::new(WRONG_PASSWORD.to_string()),
+        },
+        key_auth(&server.bad_key),
+    ];
+    let (result, _col, _rx) =
+        open_ready(server.chain_params(RecordingPrompt::new(true), chain)).await;
+    let error = result.expect_err("both methods must fail");
+    let message = error.to_string();
+    assert!(
+        matches!(
+            &error,
+            SshError::AuthFailed {
+                method: "multiple methods",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        message.contains("password (rejected by the server)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("publickey (rejected by the server)"),
+        "{message}"
+    );
+    assert!(message.contains("the server allows"), "{message}");
+    assert!(!message.contains(WRONG_PASSWORD), "{message}");
+}
+
+/// A certificate next to the key (`<key>-cert.pub`) is used. The key itself
+/// is not in `authorized_keys`: only the CA the server trusts can let it in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_certificate_next_to_the_key_is_used() {
+    let user = current_user();
+    let Some(server) = TestServer::start_with("TrustedUserCAKeys {dir}/ca.pub", |dir| {
+        keygen(&dir.join("ca"), "");
+        keygen(&dir.join("id_certified"), "");
+        let signed = Command::new("ssh-keygen")
+            .args(["-q", "-s"])
+            .arg(dir.join("ca"))
+            .args(["-I", "termru-test", "-n", &user, "-V", "+1h"])
+            .arg(dir.join("id_certified.pub"))
+            .status()
+            .expect("ssh-keygen -s");
+        assert!(signed.success(), "could not sign the user certificate");
+    }) else {
+        return;
+    };
+    let key = server.dir.join("id_certified");
+    assert!(server.dir.join("id_certified-cert.pub").is_file());
+
+    let (result, _col, _rx) =
+        open_ready(server.params(RecordingPrompt::new(true), key_auth(&key))).await;
+    let session = result.expect("the certificate must authenticate the key");
+    session.close().await.expect("close");
+    assert!(
+        server.sshd_log().contains("ED25519-CERT"),
+        "sshd should report a certificate login: {}",
+        server.sshd_log()
+    );
+}
+
+const BANNER_FILE: &str = "Authorized use only.\n\x1b[2J\x1b]0;pwned\x07second line\n";
+
+fn banner_setup(dir: &Path) {
+    std::fs::write(dir.join("banner.txt"), BANNER_FILE).expect("write banner");
+}
+
+/// The server's banner reaches the consumer **before** `Ready`, as plain
+/// text: the escape sequences in it must not survive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_banner_is_forwarded_as_plain_text_before_ready() {
+    let Some(server) = TestServer::start_with("Banner {dir}/banner.txt", banner_setup) else {
+        return;
+    };
+    let (result, col, _rx) =
+        open_ready(server.params(RecordingPrompt::new(true), server.client_auth())).await;
+    let session = result.expect("connect");
+    let banner = col.banners.concat();
+    assert!(banner.contains("Authorized use only."), "{banner:?}");
+    assert!(banner.contains("second line"), "{banner:?}");
+    assert!(
+        !banner.chars().any(|c| c.is_control() && c != '\n'),
+        "no control characters may survive: {banner:?}"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_banner_is_forwarded_when_authentication_fails_too() {
+    let Some(server) = TestServer::start_with("Banner {dir}/banner.txt", banner_setup) else {
+        return;
+    };
+    let (result, col, _rx) =
+        open_ready(server.params(RecordingPrompt::new(true), key_auth(&server.bad_key))).await;
+    assert!(result.is_err());
+    assert!(
+        col.banners.concat().contains("Authorized use only."),
+        "a refused login is where the banner matters: {:?}",
+        col.banners
+    );
+}
+
+// ---------------------------------------------------------- a fake SSH agent --
+
+/// A minimal SSH agent that lists its keys **in a fixed order** (the agent
+/// russh ships keeps them in a hash map) and refuses to sign with some of
+/// them.
+struct FakeAgent {
+    sock: PathBuf,
+    /// Fingerprints the agent signed with, in order.
+    signed: Arc<Mutex<Vec<String>>>,
+    /// Fingerprints it was asked to sign with but refused.
+    refused: Arc<Mutex<Vec<String>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FakeAgent {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn put_string(out: &mut Vec<u8>, data: &[u8]) {
+    out.extend_from_slice(&u32::try_from(data.len()).expect("length").to_be_bytes());
+    out.extend_from_slice(data);
+}
+
+fn take_string<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
+    let (len, rest) = input.split_first_chunk::<4>()?;
+    let len = usize::try_from(u32::from_be_bytes(*len)).ok()?;
+    let (data, rest) = rest.split_at_checked(len)?;
+    *input = rest;
+    Some(data)
+}
+
+fn start_fake_agent(sock: &Path, keys: Vec<(russh::keys::PrivateKey, bool)>) -> FakeAgent {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::UnixListener::bind(sock).expect("bind agent socket");
+    let keys = Arc::new(keys);
+    let signed = Arc::new(Mutex::new(Vec::new()));
+    let refused = Arc::new(Mutex::new(Vec::new()));
+    let (signed_log, refused_log) = (signed.clone(), refused.clone());
+
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let (keys, signed, refused) = (keys.clone(), signed_log.clone(), refused_log.clone());
+            tokio::spawn(async move {
+                loop {
+                    let mut len = [0u8; 4];
+                    if stream.read_exact(&mut len).await.is_err() {
+                        return;
+                    }
+                    let mut body = vec![0u8; usize::try_from(u32::from_be_bytes(len)).unwrap()];
+                    if stream.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    let reply = match body.split_first() {
+                        // SSH_AGENTC_REQUEST_IDENTITIES
+                        Some((11, _)) => {
+                            let mut out = vec![12];
+                            out.extend_from_slice(
+                                &u32::try_from(keys.len()).unwrap().to_be_bytes(),
+                            );
+                            for (key, _) in keys.iter() {
+                                put_string(&mut out, &key.public_key().to_bytes().unwrap());
+                                put_string(&mut out, b"fake");
+                            }
+                            out
+                        }
+                        // SSH_AGENTC_SIGN_REQUEST
+                        Some((13, mut rest)) => {
+                            let blob = take_string(&mut rest).unwrap_or_default().to_vec();
+                            let data = take_string(&mut rest).unwrap_or_default().to_vec();
+                            match keys
+                                .iter()
+                                .find(|(k, _)| k.public_key().to_bytes().ok() == Some(blob.clone()))
+                            {
+                                Some((key, refuse)) => {
+                                    let fp = format!(
+                                        "{}",
+                                        key.public_key().fingerprint(russh::keys::HashAlg::Sha256)
+                                    );
+                                    if *refuse {
+                                        refused.lock().unwrap().push(fp);
+                                        vec![5] // SSH_AGENT_FAILURE
+                                    } else {
+                                        let signature: russh::keys::ssh_key::Signature =
+                                            russh::keys::signature::Signer::try_sign(key, &data)
+                                                .expect("sign");
+                                        signed.lock().unwrap().push(fp);
+                                        let mut out = vec![14];
+                                        put_string(
+                                            &mut out,
+                                            &russh::keys::ssh_encoding::Encode::encode_vec(
+                                                &signature,
+                                            )
+                                            .expect("encode signature"),
+                                        );
+                                        out
+                                    }
+                                }
+                                None => vec![5],
+                            }
+                        }
+                        _ => vec![5],
+                    };
+                    let mut frame = u32::try_from(reply.len()).unwrap().to_be_bytes().to_vec();
+                    frame.extend_from_slice(&reply);
+                    if stream.write_all(&frame).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    FakeAgent {
+        sock: sock.to_path_buf(),
+        signed,
+        refused,
+        task,
+    }
+}
+
+fn load_key(path: &Path) -> russh::keys::PrivateKey {
+    russh::keys::load_secret_key(path, None).expect("load test key")
+}
+
+fn agent_auth(agent: &FakeAgent, prefer: Option<String>) -> AuthChoice {
+    AuthChoice::Agent {
+        socket: Some(agent.sock.clone()),
+        prefer_fingerprint: prefer,
+    }
+}
+
+/// The agent lists an authorized key that it then declines to sign with (a
+/// confirmation was refused, the key was locked...): the next key must be
+/// tried instead of giving up on the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_key_that_cannot_sign_is_skipped() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    server.authorize(&pub_of(&server.decoy_key));
+    let agent = start_fake_agent(
+        &server.dir.join("fake-agent.sock"),
+        vec![
+            (load_key(&server.decoy_key), true),
+            (load_key(&server.client_key), false),
+        ],
+    );
+
+    let (result, _col, _rx) =
+        open_ready(server.params(RecordingPrompt::new(true), agent_auth(&agent, None))).await;
+    let session = result.expect("the second key must authenticate");
+    session.close().await.expect("close");
+
+    assert_eq!(
+        agent.refused.lock().unwrap().as_slice(),
+        [fingerprint_of(&pub_of(&server.decoy_key))],
+        "the first key was asked to sign and declined"
+    );
+    assert_eq!(
+        agent.signed.lock().unwrap().as_slice(),
+        [fingerprint_of(&pub_of(&server.client_key))]
+    );
+}
+
+/// An agent with many keys must not be offered in full: sshd drops the
+/// connection after `MaxAuthTries` failures, and the later methods would
+/// never get their turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_first_agent_keys_are_offered() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let mut keys = Vec::new();
+    for index in 0..7 {
+        let path = server.dir.join(format!("id_unauthorized_{index}"));
+        keygen(&path, "");
+        keys.push((load_key(&path), false));
+    }
+    keys.push((load_key(&server.client_key), false));
+    let agent = start_fake_agent(&server.dir.join("fake-agent.sock"), keys);
+
+    let (result, _col, _rx) =
+        open_ready(server.params(RecordingPrompt::new(true), agent_auth(&agent, None))).await;
+    let error = result.expect_err("the authorized key is beyond the cap");
+    let message = error.to_string();
+    assert!(
+        message.contains("rejected 5 of the agent's 8 key(s)"),
+        "{message}"
+    );
+    assert!(message.contains("only the first 5"), "{message}");
+    assert!(
+        agent.signed.lock().unwrap().is_empty(),
+        "the authorized key was never reached"
+    );
+}
+
+/// With a key tied to the connection, that key goes first: this server
+/// allows two attempts, so the right key at the end of the agent's list is
+/// only reached when it is moved to the front.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_preferred_agent_key_is_offered_first() {
+    let Some(server) = TestServer::start_with("MaxAuthTries 2", |_| {}) else {
+        return;
+    };
+    let mut keys = Vec::new();
+    for index in 0..3 {
+        let path = server.dir.join(format!("id_unauthorized_{index}"));
+        keygen(&path, "");
+        keys.push((load_key(&path), false));
+    }
+    keys.push((load_key(&server.client_key), false));
+    let agent = start_fake_agent(&server.dir.join("fake-agent.sock"), keys);
+
+    let without = open_ready(server.params(RecordingPrompt::new(true), agent_auth(&agent, None)))
+        .await
+        .0;
+    assert!(
+        without.is_err(),
+        "without a preference the right key is out of reach"
+    );
+
+    let preferred = fingerprint_of(&pub_of(&server.client_key));
+    let (result, _col, _rx) = open_ready(server.params(
+        RecordingPrompt::new(true),
+        agent_auth(&agent, Some(preferred)),
+    ))
+    .await;
+    let session = result.expect("the preferred key goes first");
+    session.close().await.expect("close");
+}
+
+// ------------------------------------------------------------------ host keys --
+
+/// The host is known under ECDSA; the server (ed25519 only) presents a type
+/// we have not seen. The question must say so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_prompt_lists_the_other_key_types_known_for_the_host() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let other = server.dir.join("other_ecdsa");
+    keygen_typed(&other, "ecdsa", "256");
+    server.seed_known_hosts(&pubkey_line(&pub_of(&other)));
+
+    let prompt = RecordingPrompt::new(false);
+    let (result, _col, _rx) = open_ready(server.params(prompt.clone(), server.client_auth())).await;
+    assert!(matches!(result, Err(SshError::HostKeyRejected)));
+    match &prompt.seen()[0] {
+        HostKeyPromptRequest::Unknown {
+            key,
+            other_key_types,
+            ..
+        } => {
+            assert_eq!(key.key_type, "ssh-ed25519");
+            assert_eq!(other_key_types, &["ecdsa-sha2-nistp256".to_string()]);
+        }
+        other => panic!("expected an Unknown prompt, got {other:?}"),
+    }
+}
+
+/// The server owns an ed25519 and an ECDSA host key; we know the ECDSA one.
+/// Asking for the known type first makes it present that one, so there is no
+/// prompt at all (russh's own order would have shown the ed25519 key).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_known_host_key_type_is_requested_first() {
+    let Some(server) = TestServer::start_with("HostKey {dir}/host_ecdsa", |dir| {
+        keygen_typed(&dir.join("host_ecdsa"), "ecdsa", "256");
+    }) else {
+        return;
+    };
+    server.seed_known_hosts(&pubkey_line(&pub_of(&server.dir.join("host_ecdsa"))));
+
+    let prompt = RecordingPrompt::new(false);
+    let (result, _col, _rx) = open_ready(server.params(prompt.clone(), server.client_auth())).await;
+    let session = result.expect("the known ECDSA key must be presented and trusted");
+    assert!(prompt.seen().is_empty(), "{:?}", prompt.seen());
     session.close().await.expect("close");
 }

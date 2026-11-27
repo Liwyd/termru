@@ -98,6 +98,12 @@ export class SessionStore {
   #layoutTimer: ReturnType<typeof setTimeout> | undefined;
   /** The pending reconnect watchdog of every pane (one at a time). */
   #watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Passphrases the user asked to remember, by session id. They are stored
+   * only once that session is `ready`: the passphrase was typed into a
+   * question, and a wrong one must never reach the credential store.
+   */
+  #pendingPassphrases = new Map<string, { hostId: string; value: string }>();
 
   /** True in a window opened for a moved session. */
   get isSessionWindow(): boolean {
@@ -608,6 +614,34 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Keeps a passphrase the user typed (and wants remembered) until the
+   * session it unlocked a key for has authenticated. A later answer for the
+   * same session replaces it (the first one was wrong).
+   */
+  stashPassphrase(sessionId: string, hostId: string, value: string): void {
+    this.#pendingPassphrases.set(sessionId, { hostId, value });
+  }
+
+  /** Forgets a stashed passphrase (the answer never reached the backend). */
+  discardPassphrase(sessionId: string): void {
+    this.#pendingPassphrases.delete(sessionId);
+  }
+
+  /** Stores the stashed passphrase of a session (it authenticated). */
+  async #rememberPassphrase(sessionId: string | null): Promise<void> {
+    if (!sessionId) return;
+    const pending = this.#pendingPassphrases.get(sessionId);
+    if (!pending) return;
+    this.#pendingPassphrases.delete(sessionId);
+    try {
+      await api.secretSet(pending.hostId, 'passphrase', pending.value);
+      toasts.success('The passphrase was stored in your system credential store.');
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    }
+  }
+
   /** Applies a backend status event to a pane. */
   applyStatus(pane: Pane, status: SessionStatus): void {
     // A pane that was removed meanwhile must not be updated by a late event.
@@ -626,6 +660,7 @@ export class SessionStore {
         target.awaitingReconnect = false;
         target.lastFailure = null;
         void this.rememberSecret(target);
+        void this.#rememberPassphrase(target.sessionId);
         break;
       case 'connecting':
       case 'authenticating':
@@ -637,6 +672,8 @@ export class SessionStore {
       case 'failed':
         target.lastFailure = { category: status.category, message: status.message };
         target.errorMessage = status.message;
+        // Nothing the user typed for this attempt is worth keeping.
+        if (target.sessionId) this.#pendingPassphrases.delete(target.sessionId);
         break;
       case 'closed':
         // A network death after `ready` is retried by the backend; a give-up

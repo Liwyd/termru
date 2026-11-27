@@ -39,7 +39,13 @@ pub enum SshError {
     #[error("authentication timed out")]
     AuthTimeout,
 
-    #[error("no SSH agent is available (SSH_AUTH_SOCK is not set)")]
+    #[error("authentication was cancelled")]
+    AuthCancelled,
+
+    #[error("the authentication question was not answered in time")]
+    AuthPromptTimeout,
+
+    #[error("no SSH agent is available (is one running and reachable?)")]
     AgentUnavailable,
 
     #[error("the SSH agent does not contain a usable key for this connection")]
@@ -126,6 +132,8 @@ impl SshError {
             self,
             Self::AuthFailed { .. }
                 | Self::AuthTimeout
+                | Self::AuthCancelled
+                | Self::AuthPromptTimeout
                 | Self::AgentUnavailable
                 | Self::AgentNoKey
                 | Self::KeyLoadFailed { .. }

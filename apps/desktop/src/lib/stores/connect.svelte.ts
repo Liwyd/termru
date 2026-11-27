@@ -23,17 +23,25 @@ export interface ConnectRequest {
  * one: a new tab, a host picked for an empty pane, or the reconnect of a pane
  * (a restored pane, or one that failed to authenticate).
  *
- * The dialog is shown only when the secret is neither supplied nor stored in
- * the credential store; with a stored secret the backend falls back to the
- * credential store on its own, so the secrets are left out.
+ * The dialog is shown only for a password host whose password is neither
+ * supplied nor stored in the credential store; with a stored secret the
+ * backend falls back to the credential store on its own, so the secrets are
+ * left out. A host with a key file or the agent never asks up front: whether
+ * the key needs a passphrase is only known once it is read, and the backend
+ * asks then (the authentication prompt), so an unencrypted key connects
+ * without a question.
  */
 class ConnectFlow {
   pending = $state.raw<ConnectRequest | null>(null);
 
   /** Opens a new tab for a host (asking for the secret when needed). */
   async request(host: Host): Promise<void> {
+    if (!needsSecretUpFront(host)) {
+      this.#openTab(host, {}, false);
+      return;
+    }
     const stored = await this.#hasStoredSecret(host);
-    if (host.auth.type === 'agent' || stored) {
+    if (stored) {
       this.#openTab(host, {}, false);
       return;
     }
@@ -42,8 +50,8 @@ class ConnectFlow {
 
   /** Connects a host in an empty pane (the pane picker). */
   async pick(pane: Pane, host: Host): Promise<void> {
-    const stored = await this.#hasStoredSecret(host);
-    if (host.auth.type === 'agent' || stored) {
+    const stored = needsSecretUpFront(host) && (await this.#hasStoredSecret(host));
+    if (!needsSecretUpFront(host) || stored) {
       await sessions.connectPane(pane, host, {}, false);
       return;
     }
@@ -58,7 +66,7 @@ class ConnectFlow {
     const host = pane.host;
     if (!host) return;
     const target = sessions.paneById(pane.id) ?? pane;
-    if (host.auth.type === 'agent') {
+    if (!needsSecretUpFront(host)) {
       sessions.retry(target);
       return;
     }
@@ -103,19 +111,18 @@ class ConnectFlow {
   }
 
   /**
-   * Whether the secret this host needs sits in the credential store (an
-   * agent host needs none). The hosts table shows the same fact.
+   * Whether the password of a host sits in the credential store (the other
+   * methods need no secret up front). The hosts table shows the same fact.
    */
   async #hasStoredSecret(host: Host): Promise<boolean> {
-    if (host.auth.type === 'agent') return false;
-    const kind = host.auth.type === 'password' ? 'password' : 'passphrase';
+    if (host.auth.type !== 'password') return false;
     let stored = false;
     try {
-      stored = (await api.secretHas(host.id, kind)) === true;
+      stored = (await api.secretHas(host.id, 'password')) === true;
     } catch {
       stored = false;
     }
-    if (host.auth.type === 'password') hosts.markPasswordStored(host.id, stored);
+    hosts.markPasswordStored(host.id, stored);
     return stored;
   }
 
@@ -127,6 +134,15 @@ class ConnectFlow {
       return false;
     }
   }
+}
+
+/**
+ * Whether the connect dialog has to collect a secret before connecting:
+ * only for a password. A key's passphrase and the questions of a
+ * keyboard-interactive server are asked by the backend when they come up.
+ */
+function needsSecretUpFront(host: Host): boolean {
+  return host.auth.type === 'password';
 }
 
 export const connectFlow = new ConnectFlow();

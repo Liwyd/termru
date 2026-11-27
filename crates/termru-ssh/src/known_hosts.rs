@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use russh::keys::ssh_key::HashAlg;
-use russh::keys::{PublicKey, ssh_key};
+use russh::keys::{Algorithm, PublicKey, ssh_key};
 
 use crate::error::SshError;
 
@@ -60,6 +60,29 @@ impl HostKeyEntry {
             fingerprint: fingerprint(key),
         }
     }
+}
+
+/// The host-key algorithms to offer in the handshake: russh's defaults, with
+/// the families this host is already known under (`known_types`, as in
+/// `known_hosts`: `ssh-ed25519`, `ssh-rsa`, ...) moved to the front. A server
+/// that owns several host keys signs with the first type both sides support,
+/// so this makes it present one we can verify instead of its own favourite.
+/// Nothing is removed: a server that lacks the known type still connects (and
+/// is then asked about, see `HostKeyPromptRequest::Unknown`).
+pub(crate) fn preferred_host_key_algorithms(known_types: &[String]) -> Vec<Algorithm> {
+    let family = |algorithm: &Algorithm| match algorithm {
+        // `rsa-sha2-256`, `rsa-sha2-512` and `ssh-rsa` sign with the same
+        // key, which known_hosts stores as `ssh-rsa`.
+        Algorithm::Rsa { .. } => "ssh-rsa".to_string(),
+        other => other.to_string(),
+    };
+    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) = russh::Preferred::DEFAULT
+        .key
+        .iter()
+        .cloned()
+        .partition(|algorithm| known_types.contains(&family(algorithm)));
+    first.extend(rest);
+    first
 }
 
 /// `SHA256:<base64>` fingerprint, identical to `ssh-keygen -lf` output.
@@ -427,6 +450,49 @@ impl KnownHosts {
         })
     }
 
+    /// The key types this host is already known under (`ssh-ed25519`, ...),
+    /// in file order and without duplicates. `@revoked` and
+    /// `@cert-authority` lines do not count: they do not vouch for a key.
+    ///
+    /// Used for two things: the trust prompt says so when the server presents
+    /// a type we have not seen (see `HostKeyPromptRequest::Unknown`), and the
+    /// handshake asks the server for these types first, so a server that has
+    /// several host keys presents one we can actually verify.
+    pub fn known_key_types(&self, host: &str, port: u16) -> Result<Vec<String>, SshError> {
+        let hp = host_port_string(host, port);
+        let contents = match std::fs::read_to_string(&self.path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(KnownHostsError::Io {
+                    path: self.path.clone(),
+                    source: e,
+                }
+                .into());
+            }
+        };
+        let mut types: Vec<String> = Vec::new();
+        for raw in contents.lines() {
+            let line = parse_line(raw);
+            let LineKind::Entry {
+                ref positive,
+                ref negated,
+            } = line.kind
+            else {
+                continue;
+            };
+            if !line_matches_host(positive, negated, &hp) {
+                continue;
+            }
+            if let Some(key_type) = line.key_type
+                && !types.contains(&key_type)
+            {
+                types.push(key_type);
+            }
+        }
+        Ok(types)
+    }
+
     /// Records trust for `key`. With `replace_existing` (the "accept changed
     /// key" flow — the user is always shown the warning first) the stale
     /// entries are removed **narrowly**: only lines that name exactly this
@@ -698,18 +764,18 @@ fn strip_host_from_line(raw: &str, host_port: &str, key_type: Option<&str>) -> L
 #[allow(unused_imports)]
 use ssh_key as _ssh_key_alias;
 
+/// Deterministic test keys, shared by the unit tests of this crate.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use russh::keys::PrivateKey;
+pub(crate) mod tests_support {
+    use russh::keys::{PrivateKey, PublicKey, ssh_key};
 
     /// Deterministic xorshift64* RNG implementing rand_core 0.10's
     /// `CryptoRng` (the bound `PrivateKey::random` requires). Test-only:
     /// keys are reproducible from the seed, which keeps failures debuggable.
-    struct TestRng(u64);
+    pub(crate) struct TestRng(pub(crate) u64);
 
     impl TestRng {
-        fn new(seed: u64) -> Self {
+        pub(crate) fn new(seed: u64) -> Self {
             Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
         }
 
@@ -746,10 +812,20 @@ mod tests {
         }
     }
 
-    fn ed25519_key(seed: u8) -> PrivateKey {
+    pub(crate) fn ed25519_key(seed: u8) -> PrivateKey {
         let mut rng = TestRng::new(u64::from(seed));
         PrivateKey::random(&mut rng, ssh_key::Algorithm::Ed25519).expect("test key generation")
     }
+
+    pub(crate) fn ed25519_public_key(seed: u8) -> PublicKey {
+        ed25519_key(seed).public_key().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::ed25519_key;
+    use super::*;
 
     /// Base64 blob column as OpenSSH stores it (second field of the line).
     fn openssh_b64(key: &PublicKey) -> String {
@@ -909,6 +985,70 @@ mod tests {
 
     fn read_file(kh: &KnownHosts) -> String {
         std::fs::read_to_string(kh.path()).unwrap()
+    }
+
+    #[test]
+    fn the_key_types_known_for_a_host_come_from_its_own_entries_only() {
+        let (_dir, kh) = setup();
+        write_file(
+            &kh,
+            "# a comment\n\
+             other.test ssh-rsa AAAAB3NzaC1yc2E\n\
+             host.test,alias.test ssh-rsa AAAAB3NzaC1yc2E\n\
+             [host.test]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNh\n\
+             *.wild.test ssh-dss AAAAB3NzaC1kc3M\n\
+             @revoked host.test ssh-dss AAAAB3NzaC1kc3M\n\
+             @cert-authority host.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\n",
+        );
+        assert_eq!(kh.known_key_types("host.test", 22).unwrap(), ["ssh-rsa"]);
+        assert_eq!(
+            kh.known_key_types("host.test", 2222).unwrap(),
+            ["ecdsa-sha2-nistp256"],
+            "the port is part of the identity"
+        );
+        assert_eq!(kh.known_key_types("x.wild.test", 22).unwrap(), ["ssh-dss"]);
+        assert!(kh.known_key_types("unknown.test", 22).unwrap().is_empty());
+
+        // A hashed entry written by `trust` counts too, once per type, in
+        // file order.
+        let key = ed25519_key(3).public_key().clone();
+        kh.trust("host.test", 22, &key, false).unwrap();
+        assert_eq!(
+            kh.known_key_types("host.test", 22).unwrap(),
+            ["ssh-rsa", "ssh-ed25519"]
+        );
+    }
+
+    #[test]
+    fn a_missing_file_knows_no_key_types() {
+        let (_dir, kh) = setup();
+        assert!(kh.known_key_types("host.test", 22).unwrap().is_empty());
+    }
+
+    #[test]
+    fn known_key_types_move_to_the_front_of_the_handshake_offer() {
+        let default: Vec<Algorithm> = russh::Preferred::DEFAULT.key.to_vec();
+        assert_eq!(preferred_host_key_algorithms(&[]), default);
+        assert_eq!(
+            preferred_host_key_algorithms(&["not-a-real-type".to_string()]),
+            default,
+            "an unknown type changes nothing"
+        );
+
+        let ecdsa = preferred_host_key_algorithms(&["ecdsa-sha2-nistp384".to_string()]);
+        assert_eq!(ecdsa.len(), default.len(), "nothing is removed");
+        assert_eq!(ecdsa[0].to_string(), "ecdsa-sha2-nistp384");
+        assert_eq!(ecdsa[1], Algorithm::Ed25519, "the rest keeps its order");
+
+        // `ssh-rsa` in known_hosts covers every RSA signature algorithm.
+        let rsa = preferred_host_key_algorithms(&["ssh-rsa".to_string()]);
+        assert!(
+            rsa[..3]
+                .iter()
+                .all(|algorithm| matches!(algorithm, Algorithm::Rsa { .. })),
+            "{rsa:?}"
+        );
+        assert_eq!(rsa[3], Algorithm::Ed25519);
     }
 
     #[test]

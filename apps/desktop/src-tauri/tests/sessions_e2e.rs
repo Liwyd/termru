@@ -61,19 +61,22 @@ async fn app_session_connects_streams_and_closes() {
         host: "127.0.0.1".into(),
         port: server.port,
         username: support::current_user(),
-        auth: AuthChoice::PrivateKey {
+        auth: vec![AuthChoice::PrivateKey {
             key_path: server.client_key.clone(),
             passphrase: None,
-        },
+            identity: None,
+        }],
         term: "xterm-256color".into(),
         keepalive_seconds: 0,
         timeouts: ConnectTimeouts {
             connect: Duration::from_secs(5),
             auth: Duration::from_secs(5),
             host_key_decision: Duration::from_secs(10),
+            ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+        auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -122,6 +125,55 @@ async fn app_session_connects_streams_and_closes() {
     assert!(manager.list().is_empty());
 }
 
+/// The server's login banner is plain terminal output at the start of the
+/// session: before `Ready`, line by line, with the colour codes of the
+/// server's text gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_session_prints_the_server_banner_before_the_shell() {
+    use base64::Engine;
+
+    let Some(server) = support::TestServer::start() else {
+        eprintln!("SKIPPED: OpenSSH tooling unavailable — app-layer E2E not exercised");
+        return;
+    };
+    assert!(
+        support::BANNER.contains('\x1b'),
+        "the fixture must have escapes"
+    );
+
+    let (_dir, store) = temp_store();
+    let manager = Arc::new(SessionManager::new());
+    let params = connect_params(&server, Arc::new(termru_ssh::config::RejectUnknownHostKeys));
+    let (channel, mut updates) = channel_to_sender();
+    let id = start_session(&manager, &store, params, channel);
+
+    let mut before_ready = Vec::new();
+    let deadline = tokio::time::Instant::now() + EVENT_TIMEOUT;
+    loop {
+        let update = tokio::time::timeout_at(deadline, updates.recv())
+            .await
+            .expect("the session never became ready")
+            .expect("the update channel closed");
+        match update {
+            SessionUpdate::Data { base64 } => before_ready.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(base64)
+                    .expect("valid base64"),
+            ),
+            SessionUpdate::Status {
+                status: SessionStatusDto::Ready,
+            } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&before_ready),
+        "Termru e2e banner\r\nsecond line\r\n"
+    );
+
+    manager.close(&id).await.expect("close session");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_session_reports_a_failed_authentication() {
     let Some(server) = support::TestServer::start() else {
@@ -138,19 +190,22 @@ async fn app_session_reports_a_failed_authentication() {
         host: "127.0.0.1".into(),
         port: server.port,
         username: support::current_user(),
-        auth: AuthChoice::PrivateKey {
+        auth: vec![AuthChoice::PrivateKey {
             key_path: server.unauthorized_key.clone(),
             passphrase: None,
-        },
+            identity: None,
+        }],
         term: "xterm-256color".into(),
         keepalive_seconds: 0,
         timeouts: ConnectTimeouts {
             connect: Duration::from_secs(5),
             auth: Duration::from_secs(5),
             host_key_decision: Duration::from_secs(5),
+            ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+        auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -199,19 +254,22 @@ async fn second_view_attaches_and_receives_replay_and_live_output() {
         host: "127.0.0.1".into(),
         port: server.port,
         username: support::current_user(),
-        auth: AuthChoice::PrivateKey {
+        auth: vec![AuthChoice::PrivateKey {
             key_path: server.client_key.clone(),
             passphrase: None,
-        },
+            identity: None,
+        }],
         term: "xterm-256color".into(),
         keepalive_seconds: 0,
         timeouts: ConnectTimeouts {
             connect: Duration::from_secs(5),
             auth: Duration::from_secs(5),
             host_key_decision: Duration::from_secs(10),
+            ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+        auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -297,19 +355,22 @@ fn connect_params(
         host: "127.0.0.1".into(),
         port: server.port,
         username: support::current_user(),
-        auth: AuthChoice::PrivateKey {
+        auth: vec![AuthChoice::PrivateKey {
             key_path: server.client_key.clone(),
             passphrase: None,
-        },
+            identity: None,
+        }],
         term: "xterm-256color".into(),
         keepalive_seconds: 0,
         timeouts: ConnectTimeouts {
             connect: Duration::from_secs(5),
             auth: Duration::from_secs(5),
             host_key_decision: Duration::from_secs(10),
+            ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
         host_key_prompt: prompt,
+        auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
     }
 }
 

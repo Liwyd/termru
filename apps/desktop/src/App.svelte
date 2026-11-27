@@ -21,6 +21,7 @@
   import AppShell from './lib/components/AppShell.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
+  import AuthPromptDialog from './lib/components/AuthPromptDialog.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
   import Toasts from './lib/components/Toasts.svelte';
   import FoldersPage from './lib/pages/FoldersPage.svelte';
@@ -287,6 +288,7 @@
 {/if}
 
 <HostKeyDialog />
+<AuthPromptDialog />
 <CommandPalette />
 <Toasts />
 

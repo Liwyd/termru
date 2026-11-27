@@ -69,6 +69,31 @@ security-relevant part of this list is also tracked in the
   stored, the key is never copied, but the file itself is not verified
   against a fingerprint in the UI.
 
+## Authentication
+
+See [ADR 0008](architecture/0008-authentication.md).
+
+* **Not supported:** GSSAPI/Kerberos, host-based authentication, FIDO security
+  keys (`sk-*`), SSH host certificates and the server-initiated password change
+  (`SSH_MSG_USERAUTH_PASSWD_CHANGEREQ`). A server that needs one of them is not
+  reachable.
+* **The Windows agent code was never run.** The OpenSSH agent's named pipe
+  (`\\.\pipe\openssh-ssh-agent`) and Pageant are supported by the engine, but
+  the machine the code was written on is Linux: the Windows branch compiles
+  there only conditionally and has no test. Treat agent authentication on
+  Windows as unverified until it was tried on a Windows host.
+* **At most 5 agent keys are offered** to a server (`MaxAuthTries` is 6 by
+  default and every rejected key counts). An agent with more keys needs the
+  right key among the first five; there is no per-host key choice yet (the host
+  data model has a single authentication method, the chain is derived from it).
+* **The method order is not configurable.** The chain is derived from the
+  host's method (password → keyboard-interactive, key → keyboard-interactive,
+  agent → keyboard-interactive); a user-defined order needs a synced field of
+  its own.
+* **A keyboard-interactive server's questions are shown as text it chose.** The
+  dialog renders them as plain text (never markup), but what they say is the
+  server's word.
+
 ## Protocol
 
 * **The sync protocol has no encryption of its own.** It relies on the

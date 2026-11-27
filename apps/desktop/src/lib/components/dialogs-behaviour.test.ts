@@ -12,7 +12,7 @@ import HostKeyDialog from './HostKeyDialog.svelte';
 import { toasts } from '../stores/toasts.svelte';
 import { click, findButton, newTarget, press, stubBrowserApis, type } from '../test-support/dom';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
-import type { Host, HostKeyPromptRequest, SessionSecrets } from '../types';
+import type { Host, HostKeyPromptMessage, SessionSecrets } from '../types';
 
 const bus = vi.hoisted(() => ({
   handlers: new Map<string, (event: { payload: unknown }) => void>(),
@@ -139,16 +139,15 @@ describe('ConnectDialog', () => {
 });
 
 describe('HostKeyDialog', () => {
-  const unknown = (
-    id: string,
-    hostName: string,
-  ): { id: string; request: HostKeyPromptRequest } => ({
+  const unknown = (id: string, hostName: string, others?: string[]): HostKeyPromptMessage => ({
     id,
+    session_id: 's1',
     request: {
       state: 'unknown',
       host: hostName,
       port: 22,
       key: { key_type: 'ssh-ed25519', fingerprint: `SHA256:${id}` },
+      ...(others ? { other_key_types: others } : {}),
     },
   });
 
@@ -180,6 +179,38 @@ describe('HostKeyDialog', () => {
       { id: 'p2', trust: true },
     ]);
     expect(target.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it('warns when the host is already known under other key types', async () => {
+    const emit = await openDialog();
+    emit(unknown('p1', 'first.test', ['ssh-rsa', 'ecdsa-sha2-nistp256']));
+    const warning = target.querySelector('[data-testid="other-key-types"]');
+    expect(warning).not.toBeNull();
+    expect(warning?.textContent).toContain('ssh-rsa, ecdsa-sha2-nistp256');
+    expect(warning?.textContent).toContain('ssh-ed25519');
+  });
+
+  it('shows the plain explanation for a host that was never seen', async () => {
+    const emit = await openDialog();
+    emit(unknown('p1', 'first.test'));
+    expect(target.querySelector('[data-testid="other-key-types"]')).toBeNull();
+    expect(target.textContent).toContain('The server key is not known yet');
+  });
+
+  it('drops a prompt the backend closed (timeout, closed tab, answered elsewhere)', async () => {
+    const emit = await openDialog();
+    emit(unknown('p1', 'first.test'));
+    emit(unknown('p2', 'second.test'));
+    const close = bus.handlers.get('host-key-prompt-closed');
+    expect(close).toBeDefined();
+    close?.({ payload: { id: 'p1' } });
+    flushSync();
+    expect(target.textContent).toContain('second.test');
+    expect(target.textContent).not.toContain('first.test');
+    close?.({ payload: { id: 'p2' } });
+    flushSync();
+    expect(target.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(callsOf('host_key_prompt_resolve')).toHaveLength(0);
   });
 
   it('ignores the same prompt delivered twice', async () => {

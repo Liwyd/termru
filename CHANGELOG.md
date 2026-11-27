@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* SSH authentication is an ordered chain driven by the server (ADR 0008):
+  a `none` probe lists the allowed methods, methods the server does not allow
+  are skipped, partial success is honoured (publickey, then
+  keyboard-interactive for two-factor logins), and a failed login lists what
+  was tried and what the server allows. Hosts get a sensible default chain
+  (password, key or agent, each followed by keyboard-interactive; a stored
+  password answers a lone "Password:" prompt).
+* Keyboard-interactive authentication with a dialog for the server's
+  questions (one-time codes, PAM prompts): queued, cancellable, answered with
+  Enter, password fields hidden, closed again when the connection ends.
+  The time a person takes is not charged to the connect or authentication
+  deadline.
+* An encrypted key whose passphrase is not stored asks for it ("Passphrase for
+  *identity*") and offers to remember it; it is stored only after the
+  connection worked. Key hosts no longer ask for a passphrase before
+  connecting.
+* RSA keys (file and agent) sign with the hash the server announces
+  (`rsa-sha2-512`/`-256`) instead of a fixed one; a certificate next to the key
+  (`<key>-cert.pub`) and agent certificates are used; keys the agent cannot sign
+  with are skipped and at most 5 agent keys are offered, so `MaxAuthTries` is
+  not exhausted; the OpenSSH named-pipe agent and Pageant on Windows (untested,
+  see `docs/limitations.md`).
+* The server's authentication banner is shown as plain text at the start of the
+  terminal (control characters and escape sequences removed).
+* The host-key question warns when the host is already known under other key
+  types, and the handshake asks for the known key types first.
+
 ### Security
 
 * Dependency updates for RustSec advisories: `russh` 0.64 -> 0.65
@@ -47,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* Key passphrases are stored per identity in the credential store (not per
+  host); an entry stored per host by an earlier version is still read.
+* Host-key and authentication questions carry the session they belong to and
+  go to the window that shows it (before: every window); they are removed when
+  the question times out or the session closes, and a full registry refuses the
+  new question instead of clearing the old ones.
+* known_hosts is read and written off the async workers.
 * The default terminal line height is 1.3.
 * Session output is merged into larger updates (up to 64 KiB / 8 ms);
   small chunks such as keystroke echo are still sent immediately.

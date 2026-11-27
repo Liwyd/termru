@@ -17,6 +17,9 @@
  *                    `&edit=new` opens it empty), because `#host-edit`
  *                    alone bounces back to the hosts page
  *   &hostkey         an unknown-host-key prompt appears shortly after start
+ *                    (`&hostkey=other`: the host is known under other key types)
+ *   &authprompt      a keyboard-interactive question appears shortly after
+ *                    start (`&authprompt=passphrase`: a key passphrase)
  *
  * Every command of `ipc.ts` is implemented here; `dev-harness.test.ts`
  * fails when one is missing. Return shapes follow `types.ts` and the Rust
@@ -32,9 +35,11 @@ import type {
   WindowHandle,
 } from '../ipc-backend';
 import type {
+  AuthPromptMessage,
   ConflictView,
   Group,
   Host,
+  HostKeyPromptMessage,
   HostKeyPromptRequest,
   Identity,
   IdentityBinding,
@@ -60,6 +65,10 @@ export interface MockFlags {
   /** The host name the editor opens on (`new` = an empty editor), or null. */
   edit: string | null;
   hostkey: boolean;
+  /** The host-key prompt says the host is known under other key types. */
+  hostkeyOtherTypes: boolean;
+  /** An authentication question appears on start (`kbd` or `passphrase`). */
+  authprompt: 'kbd' | 'passphrase' | null;
   theme: ThemePreference | null;
 }
 
@@ -72,6 +81,12 @@ function readFlags(): MockFlags {
     demo: params.has('demo'),
     edit: params.has('edit') ? params.get('edit') || 'staging-api' : null,
     hostkey: params.has('hostkey'),
+    hostkeyOtherTypes: params.get('hostkey') === 'other',
+    authprompt: params.has('authprompt')
+      ? params.get('authprompt') === 'passphrase'
+        ? 'passphrase'
+        : 'kbd'
+      : null,
     theme: theme === 'dark' || theme === 'light' || theme === 'system' ? theme : null,
   };
 }
@@ -409,8 +424,9 @@ export class Channel<T = unknown> {
 const listeners = new Map<string, Set<EventCallback<never>>>();
 let nextEventId = 1;
 let hostKeyPromptScheduled = false;
+let authPromptScheduled = false;
 
-/** Pending host-key prompts, by id. */
+/** Pending host-key and authentication prompts, by id. */
 const pendingPrompts = new Set<string>();
 
 /** The mock of `listen`. */
@@ -430,9 +446,45 @@ export function listen<T>(event: string, handler: EventCallback<T>): Promise<Unl
           key_type: 'ssh-ed25519',
           fingerprint: 'SHA256:Vq8m2nT0cYb5LhZr7WdEa1KsXo4GuPj9RfIt3NxMe6A',
         },
+        ...(flags.hostkeyOtherTypes ? { other_key_types: ['ssh-rsa', 'ecdsa-sha2-nistp256'] } : {}),
       };
       pendingPrompts.add(id);
-      emit('host-key-prompt', { id, request });
+      const message: HostKeyPromptMessage = { id, session_id: 'mock-session', request };
+      emit('host-key-prompt', message);
+    }, 600);
+  }
+  if (event === 'auth-prompt' && flags.authprompt && !authPromptScheduled) {
+    authPromptScheduled = true;
+    setTimeout(() => {
+      const id = `mock-auth-prompt-${nextEventId}`;
+      const message: AuthPromptMessage = {
+        id,
+        session_id: 'mock-session',
+        host_id: ID.atlas,
+        request:
+          flags.authprompt === 'passphrase'
+            ? {
+                kind: {
+                  type: 'passphrase',
+                  identity: { id: ID.work, name: 'work laptop' },
+                  retry: false,
+                },
+                name: '',
+                instructions: '',
+                prompts: [{ text: 'Passphrase for work laptop', echo: false }],
+              }
+            : {
+                kind: { type: 'keyboard_interactive' },
+                name: 'Two-factor authentication',
+                instructions: 'Enter the code from your authenticator app.',
+                prompts: [
+                  { text: 'Verification code: ', echo: true },
+                  { text: 'PIN: ', echo: false },
+                ],
+              },
+      };
+      pendingPrompts.add(id);
+      emit('auth-prompt', message);
     }, 600);
   }
   return Promise.resolve(() => {
@@ -1014,6 +1066,7 @@ const handlers: Record<string, Handler> = {
     return null;
   },
   host_key_prompt_resolve: (args) => pendingPrompts.delete(arg<string>(args, 'id')),
+  auth_prompt_resolve: (args) => pendingPrompts.delete(arg<string>(args, 'id')),
 
   // Windows
   window_open_session: (args) => {
@@ -1153,6 +1206,7 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
   listeners.clear();
   pendingPrompts.clear();
   hostKeyPromptScheduled = false;
+  authPromptScheduled = false;
   startupScheduled = false;
   flags = {
     empty: false,
@@ -1160,6 +1214,8 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     demo: false,
     edit: null,
     hostkey: false,
+    hostkeyOtherTypes: false,
+    authprompt: null,
     theme: null,
     ...next,
   };

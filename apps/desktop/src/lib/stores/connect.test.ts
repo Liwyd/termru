@@ -93,16 +93,14 @@ describe('a new connection', () => {
     expect(sessions.tabs[0].panes[0].rememberSecret).toBe(true);
   });
 
-  it('skips the dialog for a key host whose passphrase is stored, asks otherwise', async () => {
-    stored(['passphrase']);
-    await connectFlow.request(key);
-    expect(connectFlow.pending).toBeNull();
-    expect(sessions.tabs).toHaveLength(1);
-
-    stored([]);
-    await connectFlow.request(key);
-    expect(connectFlow.pending?.host.id).toBe(key.id);
-    expect(callsOf('secret_has').pop()?.args).toEqual({ hostId: key.id, kind: 'passphrase' });
+  it('never asks a key host for a passphrase up front (the backend asks when the key needs one)', async () => {
+    for (const kinds of [['passphrase'], []] as ('password' | 'passphrase')[][]) {
+      stored(kinds);
+      await connectFlow.request(key);
+      expect(connectFlow.pending).toBeNull();
+    }
+    expect(sessions.tabs).toHaveLength(2);
+    expect(callsOf('secret_has')).toHaveLength(0);
   });
 
   it('never asks an agent host for a secret', async () => {
@@ -220,6 +218,20 @@ describe('reconnecting a pane', () => {
   it('does not ask a key host for a passphrase it may not need', async () => {
     stored([]);
     const pane = restoredPane(key);
+    await connectFlow.reconnect(pane);
+    expect(connectFlow.pending).toBeNull();
+    expect(pane.generation).toBe(1);
+  });
+
+  /**
+   * The password dialog is what fixes a wrong password. For a key it would
+   * fix nothing: the backend asks for a (wrong) passphrase itself, and a
+   * rejected key is not helped by typing a passphrase into a dialog.
+   */
+  it('retries a key host after an authentication failure without a dialog', async () => {
+    stored([]);
+    const pane = restoredPane(key);
+    pane.lastFailure = { category: 'auth', message: 'the server rejected the key' };
     await connectFlow.reconnect(pane);
     expect(connectFlow.pending).toBeNull();
     expect(pane.generation).toBe(1);

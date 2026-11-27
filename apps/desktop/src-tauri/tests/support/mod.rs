@@ -29,6 +29,10 @@ pub struct TestServer {
     killed: bool,
 }
 
+/// What the server shows before the login (with colour codes: the app must
+/// show it as plain text).
+pub const BANNER: &str = "\x1b[31mTermru e2e banner\x1b[0m\nsecond line\n";
+
 fn which(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -118,11 +122,15 @@ impl TestServer {
             listener.local_addr().expect("local addr").port()
         };
 
+        let banner = dir.join("banner.txt");
+        std::fs::write(&banner, BANNER).expect("write banner");
+
         let config = dir.join("sshd_config");
         std::fs::write(
             &config,
             format!(
                 "Port {port}\n\
+                 Banner {banner}\n\
                  ListenAddress 127.0.0.1\n\
                  HostKey {host_key}\n\
                  PidFile {pid_file}\n\
@@ -137,6 +145,7 @@ impl TestServer {
                  PrintMotd no\n\
                  LogLevel INFO\n",
                 host_key = host_key.display(),
+                banner = banner.display(),
                 pid_file = dir.join("sshd.pid").display(),
                 authorized_keys = authorized_keys.display(),
             ),

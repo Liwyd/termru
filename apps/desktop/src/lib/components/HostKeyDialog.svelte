@@ -5,40 +5,44 @@
   import { listen, type UnlistenFn } from '../ipc-backend';
   import { errorMessage } from '../stores/hosts.svelte';
   import { toasts } from '../stores/toasts.svelte';
-  import type { HostKeyPromptRequest } from '../types';
-
-  interface PromptMessage {
-    id: string;
-    request: HostKeyPromptRequest;
-  }
+  import type { HostKeyPromptMessage } from '../types';
 
   /**
    * The prompts waiting for an answer, oldest first. A second prompt that
    * arrives while the first is open waits its turn: it must never replace
    * (and so silently drop) a question the user has not answered.
    */
-  let queue = $state<PromptMessage[]>([]);
+  let queue = $state<HostKeyPromptMessage[]>([]);
   const prompt = $derived(queue[0] ?? null);
 
   onMount(() => {
-    let unlisten: UnlistenFn | undefined;
+    const unlisteners: UnlistenFn[] = [];
     let cancelled = false;
 
-    void listen<PromptMessage>('host-key-prompt', (event) => {
-      const incoming = event.payload;
+    /** Subscribes, unless the dialog was torn down before the listener arrived. */
+    function subscribe<T>(event: string, handler: (payload: T) => void): void {
+      void listen<T>(event, (received) => handler(received.payload)).then((fn) => {
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisteners.push(fn);
+      });
+    }
+
+    subscribe<HostKeyPromptMessage>('host-key-prompt', (incoming) => {
       if (queue.some((entry) => entry.id === incoming.id)) return;
       queue = [...queue, incoming];
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
+    });
+    // The question ended without this dialog: it timed out, its connection
+    // was closed, or another window answered it.
+    subscribe<{ id: string }>('host-key-prompt-closed', ({ id }) => {
+      queue = queue.filter((entry) => entry.id !== id);
     });
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      for (const fn of unlisteners) fn();
     };
   });
 
@@ -75,10 +79,20 @@
           <dt>Fingerprint</dt>
           <dd class="mono">{prompt.request.key.fingerprint}</dd>
         </dl>
-        <p class="hint">
-          The server key is not known yet. Verify the fingerprint with the server administrator
-          before trusting it.
-        </p>
+        {#if prompt.request.other_key_types && prompt.request.other_key_types.length > 0}
+          <p class="hint danger" data-testid="other-key-types">
+            This host is already known under another key type ({prompt.request.other_key_types.join(
+              ', ',
+            )}), but the server now presents a {prompt.request.key.key_type} key that was never seen before.
+            That is normal after a server upgrade or reinstall, and it is also what an impostor without
+            the real key would do. Verify the fingerprint with the server administrator.
+          </p>
+        {:else}
+          <p class="hint">
+            The server key is not known yet. Verify the fingerprint with the server administrator
+            before trusting it.
+          </p>
+        {/if}
       {:else}
         <h2 class="danger">Host key changed</h2>
         <p class="target">{prompt.request.host}:{prompt.request.port}</p>

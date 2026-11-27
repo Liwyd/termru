@@ -46,16 +46,15 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use russh::client::{self, Config as ClientConfig, Handle, Handler, Msg};
-use russh::keys::agent::client::{AgentClient, AgentStream};
-use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::config::{AuthChoice, ConnectParams, HostKeyPromptRequest};
+use crate::auth::{AuthContext, MAX_BANNER_BYTES, authenticate, sanitize_banner};
+use crate::config::{ConnectParams, HostKeyPromptRequest};
 use crate::dial::{Budget, dial};
 use crate::error::SshError;
-use crate::known_hosts::{Evaluation, KnownHosts};
+use crate::known_hosts::{Evaluation, KnownHosts, preferred_host_key_algorithms};
 use crate::reconnect::ReconnectPolicy;
 use crate::replay::ReplayRing;
 
@@ -82,6 +81,12 @@ pub enum SessionEvent {
     Status(SessionStatus),
     /// Raw bytes from the remote shell (stdout and stderr merged by SSH).
     Data(Vec<u8>),
+    /// Text the server sent during authentication (the SSH "banner": legal
+    /// notices, "authorized use only"). Already stripped of everything a
+    /// terminal would interpret (see `sanitize_banner`), with `\n` line
+    /// endings; it arrives before `Ready` and before any shell output, also
+    /// when authentication then fails.
+    Banner(String),
     /// The remote process finished (before the channel closed).
     Exit {
         code: Option<i32>,
@@ -126,6 +131,8 @@ impl ErrorCategory {
         match error {
             SshError::AuthFailed { .. }
             | SshError::AuthTimeout
+            | SshError::AuthCancelled
+            | SshError::AuthPromptTimeout
             | SshError::AgentUnavailable
             | SshError::AgentNoKey
             | SshError::KeyLoadFailed { .. }
@@ -298,6 +305,7 @@ impl Session {
 
         let known_hosts = Arc::new(KnownHosts::with_path(params.known_hosts_path.clone()));
         let prompt_active = Arc::new(AtomicBool::new(false));
+        let (banner_tx, mut banner_rx) = mpsc::unbounded_channel::<String>();
         let recorded: Arc<std::sync::Mutex<Option<SshError>>> =
             Arc::new(std::sync::Mutex::new(None));
         let keepalive = params.effective_keepalive();
@@ -316,6 +324,16 @@ impl Session {
         let stream = dial(&params.host, params.port, &mut budget, cancel, keepalive).await?;
 
         // --- handshake (key exchange incl. host-key decision) ---
+        // Ask for the key types we already know this host under first: a
+        // server with several host keys then presents one we can verify,
+        // instead of its own favourite that would look like a new host.
+        let known_types = {
+            let known_hosts = known_hosts.clone();
+            let (host, port) = (params.host.clone(), params.port);
+            blocking(move || known_hosts.known_key_types(&host, port))
+                .await
+                .unwrap_or_default()
+        };
         let handler = ClientHandler {
             host: params.host.clone(),
             port: params.port,
@@ -324,6 +342,7 @@ impl Session {
             decision_budget: params.timeouts.host_key_decision,
             prompt_active: prompt_active.clone(),
             recorded: recorded.clone(),
+            banner: BannerSink::new(banner_tx.clone()),
         };
         let config = ClientConfig {
             // `SshId::Standard` writes the value verbatim and appends `\r\n`;
@@ -341,6 +360,10 @@ impl Session {
             // `connect_stream` does not tune the socket, `dial` already did;
             // this keeps russh's own view consistent.
             nodelay: true,
+            preferred: russh::Preferred {
+                key: std::borrow::Cow::Owned(preferred_host_key_algorithms(&known_types)),
+                ..russh::Preferred::default()
+            },
             ..ClientConfig::default()
         };
 
@@ -368,12 +391,37 @@ impl Session {
         let _ = events
             .send(SessionEvent::Status(SessionStatus::Authenticating))
             .await;
-        tokio::select! {
-            result = tokio::time::timeout(params.timeouts.auth, authenticate(&mut handle, &params)) => {
-                result.map_err(|_| SshError::AuthTimeout)??
+        let context = AuthContext {
+            username: &params.username,
+            methods: &params.auth,
+            prompt: params.auth_prompt.as_ref(),
+            prompt_active: &prompt_active,
+            prompt_timeout: params.timeouts.auth_prompt,
+            notices: &banner_tx,
+        };
+        // The deadline stands still while a human answers a question.
+        let mut auth_budget = Budget::new(params.timeouts.auth);
+        let outcome = {
+            let work = auth_budget.run(
+                authenticate(&mut handle, &context),
+                Some(&prompt_active),
+                cancel,
+                || SshError::AuthTimeout,
+            );
+            tokio::pin!(work);
+            loop {
+                tokio::select! {
+                    result = &mut work => break result,
+                    Some(text) = banner_rx.recv() => forward_banner(&events, text).await,
+                }
             }
-            () = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
+        };
+        // What the server said last still reaches the user, also when the
+        // authentication failed (that is when the text matters most).
+        while let Ok(text) = banner_rx.try_recv() {
+            forward_banner(&events, text).await;
         }
+        outcome?;
 
         // --- interactive shell (same budget, same cancellation) ---
         let channel = budget
@@ -547,170 +595,9 @@ fn map_connect_error(err: russh::Error, host: &str, port: u16, seconds: u64) -> 
     }
 }
 
-// ---------- authentication ----------
-
-async fn authenticate(
-    handle: &mut Handle<ClientHandler>,
-    params: &ConnectParams,
-) -> Result<(), SshError> {
-    let username = params.username.clone();
-    match &params.auth {
-        AuthChoice::Password { password } => {
-            let result = handle
-                .authenticate_password(username, password.expose())
-                .await
-                .map_err(|e| SshError::Protocol(format!("password auth failed: {e}")))?;
-            if result.success() {
-                return Ok(());
-            }
-            Err(auth_rejected("password", &result))
-        }
-        AuthChoice::PrivateKey {
-            key_path,
-            passphrase,
-        } => {
-            let key = load_key(key_path, passphrase.as_ref())?;
-            // SHA-256 for RSA (legacy SHA-1 is disabled by modern servers);
-            // russh ignores the hash algorithm for non-RSA keys.
-            let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), Some(HashAlg::Sha256));
-            let result = handle
-                .authenticate_publickey(username, key_with_alg)
-                .await
-                .map_err(|e| SshError::Protocol(format!("publickey auth failed: {e}")))?;
-            if result.success() {
-                return Ok(());
-            }
-            Err(auth_rejected("publickey", &result))
-        }
-        AuthChoice::Agent { socket } => {
-            let mut agent = connect_agent(socket.as_deref()).await?;
-            let identities = agent
-                .request_identities()
-                .await
-                .map_err(|e| SshError::Protocol(format!("agent query failed: {e}")))?;
-            if identities.is_empty() {
-                return Err(SshError::AgentNoKey);
-            }
-            let offered = identities.len();
-            for identity in identities {
-                let public = identity.public_key().into_owned();
-                let attempt = handle
-                    .authenticate_publickey_with(username.clone(), public, None, &mut agent)
-                    .await;
-                match attempt {
-                    Ok(result) if result.success() => return Ok(()),
-                    Ok(_) => continue,
-                    Err(err) => {
-                        return Err(SshError::Protocol(format!("agent signing failed: {err}")));
-                    }
-                }
-            }
-            Err(SshError::AuthFailed {
-                method: "publickey (agent)",
-                detail: format!("the server rejected all {offered} key(s) offered by the agent"),
-            })
-        }
-    }
-}
-
-fn auth_rejected(method: &'static str, result: &russh::client::AuthResult) -> SshError {
-    let detail = match result {
-        russh::client::AuthResult::Failure {
-            remaining_methods,
-            partial_success,
-        } => {
-            if *partial_success {
-                "the server accepted this step but requires additional authentication (multi-factor is not yet supported)"
-                    .to_string()
-            } else {
-                format!(
-                    "the server rejected the credentials (methods still offered: {remaining_methods:?})"
-                )
-            }
-        }
-        _ => "the server rejected the credentials".to_string(),
-    };
-    SshError::AuthFailed { method, detail }
-}
-
-fn load_key(
-    path: &std::path::Path,
-    passphrase: Option<&crate::config::SecretValue>,
-) -> Result<russh::keys::PrivateKey, SshError> {
-    let path_str = path.display().to_string();
-    let passphrase = passphrase.map(|p| p.expose().to_string());
-    match russh::keys::load_secret_key(path, passphrase.as_deref()) {
-        Ok(key) => Ok(key),
-        Err(err) => Err(classify_key_error(err, &path_str, passphrase.is_some())),
-    }
-}
-
-fn classify_key_error(err: russh::keys::Error, path: &str, passphrase_given: bool) -> SshError {
-    use russh::keys::Error as KeyError;
-    if matches!(err, KeyError::KeyIsEncrypted) {
-        return if passphrase_given {
-            SshError::WrongPassphrase {
-                path: path.to_string(),
-            }
-        } else {
-            SshError::PassphraseRequired
-        };
-    }
-    let detail = err.to_string();
-    let lower = detail.to_lowercase();
-    let looks_crypto = lower.contains("decrypt")
-        || lower.contains("passphrase")
-        || lower.contains("password")
-        || lower.contains("crypt");
-    if looks_crypto {
-        if passphrase_given {
-            SshError::WrongPassphrase {
-                path: path.to_string(),
-            }
-        } else {
-            SshError::PassphraseRequired
-        }
-    } else {
-        SshError::KeyLoadFailed {
-            path: path.to_string(),
-            detail,
-        }
-    }
-}
-
-async fn connect_agent(
-    socket: Option<&std::path::Path>,
-) -> Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, SshError> {
-    #[cfg(unix)]
-    {
-        let connected = match socket {
-            Some(path) => AgentClient::connect_uds(path).await,
-            None => AgentClient::connect_env().await,
-        };
-        match connected {
-            Ok(client) => Ok(client.dynamic()),
-            Err(_) => Err(SshError::AgentUnavailable),
-        }
-    }
-    #[cfg(windows)]
-    {
-        // Windows: pageant has no socket path; an explicit socket is ignored.
-        let _ = socket;
-        match AgentClient::connect_pageant().await {
-            Ok(client) => Ok(client.dynamic()),
-            Err(_) => Err(SshError::AgentUnavailable),
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = socket;
-        Err(SshError::AgentUnavailable)
-    }
-}
-
 // ---------- host-key verification handler ----------
 
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     host: String,
     port: u16,
     known_hosts: Arc<KnownHosts>,
@@ -719,6 +606,46 @@ struct ClientHandler {
     /// `true` while a human decision is pending; the connect budget pauses.
     prompt_active: Arc<AtomicBool>,
     recorded: Arc<std::sync::Mutex<Option<SshError>>>,
+    banner: BannerSink,
+}
+
+/// Hands the server's authentication banner to the session, bounded.
+struct BannerSink {
+    tx: mpsc::UnboundedSender<String>,
+    /// Bytes forwarded so far: a server may send banners forever.
+    forwarded: usize,
+}
+
+impl BannerSink {
+    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+        Self { tx, forwarded: 0 }
+    }
+
+    fn offer(&mut self, raw: &str) {
+        if self.forwarded >= MAX_BANNER_BYTES {
+            return;
+        }
+        let text = sanitize_banner(raw);
+        if text.trim().is_empty() {
+            return;
+        }
+        self.forwarded += text.len();
+        // The receiver is gone when the connect was abandoned: nothing to do.
+        let _ = self.tx.send(text);
+    }
+}
+
+async fn forward_banner(events: &mpsc::Sender<SessionEvent>, text: String) {
+    let _ = events.send(SessionEvent::Banner(text)).await;
+}
+
+/// Runs blocking file work (known_hosts) off the async workers.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, SshError> + Send + 'static,
+) -> Result<T, SshError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| SshError::Protocol(format!("known_hosts task failed: {error}")))?
 }
 
 impl ClientHandler {
@@ -734,6 +661,15 @@ impl ClientHandler {
 impl Handler for ClientHandler {
     type Error = russh::Error;
 
+    async fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        self.banner.offer(banner);
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         key: &russh::keys::PublicKeyOrCertificate,
@@ -748,7 +684,14 @@ impl Handler for ClientHandler {
             }
         };
 
-        let evaluation = match self.known_hosts.evaluate(&self.host, self.port, public_key) {
+        // The known_hosts file is read and written synchronously: not on an
+        // async worker.
+        let evaluation = {
+            let known_hosts = self.known_hosts.clone();
+            let (host, port, key) = (self.host.clone(), self.port, public_key.clone());
+            blocking(move || known_hosts.evaluate(&host, port, &key)).await
+        };
+        let evaluation = match evaluation {
             Ok(evaluation) => evaluation,
             Err(error) => {
                 self.record(error);
@@ -769,6 +712,16 @@ impl Handler for ClientHandler {
                 fingerprint,
                 key_type,
             } => {
+                // A host we know under other key types that now shows a
+                // type we have never seen is worth a louder question than
+                // a host we have never seen at all.
+                let other_key_types = {
+                    let known_hosts = self.known_hosts.clone();
+                    let (host, port) = (self.host.clone(), self.port);
+                    blocking(move || known_hosts.known_key_types(&host, port))
+                        .await
+                        .unwrap_or_default()
+                };
                 let request = HostKeyPromptRequest::Unknown {
                     host: self.host.clone(),
                     port: self.port,
@@ -776,22 +729,14 @@ impl Handler for ClientHandler {
                         key_type,
                         fingerprint: fingerprint.clone(),
                     },
+                    other_key_types,
                 };
                 let accepted = self.ask(request).await;
                 if !accepted {
                     self.record(SshError::HostKeyRejected);
                     return Ok(false);
                 }
-                match self
-                    .known_hosts
-                    .trust(&self.host, self.port, public_key, false)
-                {
-                    Ok(()) => Ok(true),
-                    Err(error) => {
-                        self.record(error);
-                        Ok(false)
-                    }
-                }
+                self.trust(public_key, false).await
             }
             Evaluation::Changed { old, new } => {
                 let request = HostKeyPromptRequest::Changed {
@@ -810,22 +755,30 @@ impl Handler for ClientHandler {
                     });
                     return Ok(false);
                 }
-                match self
-                    .known_hosts
-                    .trust(&self.host, self.port, public_key, true)
-                {
-                    Ok(()) => Ok(true),
-                    Err(error) => {
-                        self.record(error);
-                        Ok(false)
-                    }
-                }
+                self.trust(public_key, true).await
             }
         }
     }
 }
 
 impl ClientHandler {
+    /// Writes the trust decision to known_hosts (off the async workers).
+    async fn trust(
+        &self,
+        key: &russh::keys::PublicKey,
+        replace_existing: bool,
+    ) -> Result<bool, russh::Error> {
+        let known_hosts = self.known_hosts.clone();
+        let (host, port, key) = (self.host.clone(), self.port, key.clone());
+        match blocking(move || known_hosts.trust(&host, port, &key, replace_existing)).await {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                self.record(error);
+                Ok(false)
+            }
+        }
+    }
+
     async fn ask(&self, request: HostKeyPromptRequest) -> bool {
         // The connect deadline pauses while the user decides; the decision has
         // its own budget.
@@ -1281,18 +1234,20 @@ mod tests {
             // Nothing listens on port 1: connect refused.
             port: 1,
             username: "nobody".into(),
-            auth: crate::config::AuthChoice::Password {
+            auth: vec![crate::config::AuthChoice::Password {
                 password: crate::config::SecretValue::new("x".to_string()),
-            },
+            }],
             term: "xterm-256color".into(),
             keepalive_seconds: 0,
             timeouts: ConnectTimeouts {
                 connect: Duration::from_secs(5),
                 auth: Duration::from_secs(5),
                 host_key_decision: Duration::from_secs(5),
+                ..ConnectTimeouts::default()
             },
             known_hosts_path: std::path::PathBuf::from("/nonexistent/known_hosts"),
             host_key_prompt: Arc::new(crate::config::RejectUnknownHostKeys),
+            auth_prompt: Arc::new(crate::config::NoAuthPrompts),
         };
         let error = Session::open(params, SessionOptions::default(), tx)
             .await

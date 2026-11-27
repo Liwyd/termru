@@ -49,6 +49,7 @@ use termru_ssh::{
 use termru_store::Store;
 use tokio::sync::{Notify, mpsc, watch};
 
+use super::prompts::SessionDirectory;
 use crate::app_error::CommandError;
 
 /// Per-session event buffer between the SSH engine and the forwarder.
@@ -242,9 +243,14 @@ struct Managed {
     stream: Arc<Mutex<Stream>>,
 }
 
+/// Called (outside every lock) when a session is gone for good, so that what
+/// hangs on it — the questions it asked the user — can go too.
+type EndHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct SessionManager {
     entries: Mutex<HashMap<String, Managed>>,
     next_id: AtomicU64,
+    end_hook: Mutex<Option<EndHook>>,
 }
 
 impl SessionManager {
@@ -252,7 +258,36 @@ impl SessionManager {
         Self {
             entries: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            end_hook: Mutex::new(None),
         }
+    }
+
+    /// Installs the hook that learns about ended sessions.
+    pub fn set_end_hook(&self, hook: EndHook) {
+        *self
+            .end_hook
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+    }
+
+    /// Tells the hook that the session's connection is over. Never call this
+    /// while holding the entry map or a stream lock: the hook may emit events
+    /// and must be free to look at the manager.
+    fn ended(&self, id: &str) {
+        let hook = self
+            .end_hook
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(hook) = hook {
+            hook(id);
+        }
+    }
+
+    /// Reserves the id of a session that is about to be registered, so the
+    /// connection's questions can be bound to it before it exists.
+    pub fn reserve_id(&self) -> String {
+        format!("s{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Managed>> {
@@ -284,8 +319,22 @@ impl SessionManager {
         window: &str,
         view: Channel<SessionUpdate>,
     ) -> (String, watch::Receiver<bool>) {
-        let seq = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let id = format!("s{seq}");
+        let id = self.reserve_id();
+        let cancel_rx = self.register_with_id(&id, host_id, params, window, view);
+        (id, cancel_rx)
+    }
+
+    /// [`SessionManager::register`] for an id from
+    /// [`SessionManager::reserve_id`].
+    pub fn register_with_id(
+        &self,
+        id: &str,
+        host_id: HostId,
+        params: ConnectParams,
+        window: &str,
+        view: Channel<SessionUpdate>,
+    ) -> watch::Receiver<bool> {
+        let id = id.to_string();
         let (cancel, cancel_rx) = watch::channel(false);
         let stream = Stream {
             status: SessionStatusDto::Connecting,
@@ -294,7 +343,7 @@ impl SessionManager {
             views_changed: Arc::new(Notify::new()),
         };
         self.lock().insert(
-            id.clone(),
+            id,
             Managed {
                 host_id,
                 cancel,
@@ -305,7 +354,7 @@ impl SessionManager {
                 stream: Arc::new(Mutex::new(stream)),
             },
         );
-        (id, cancel_rx)
+        cancel_rx
     }
 
     /// Called by the connection task when it exits for any reason.
@@ -315,14 +364,18 @@ impl SessionManager {
     /// ended session the entry stays: the UI offers "Reconnect", which needs
     /// the parameters; closing the tab or the window releases it then.
     pub fn mark_task_dead(&self, id: &str) {
-        let mut guard = self.lock();
-        let Some(entry) = guard.get_mut(id) else {
-            return;
-        };
-        entry.task_alive = false;
-        if lock_stream(&entry.stream).views.is_empty() {
-            guard.remove(id);
+        {
+            let mut guard = self.lock();
+            let Some(entry) = guard.get_mut(id) else {
+                return;
+            };
+            entry.task_alive = false;
+            if lock_stream(&entry.stream).views.is_empty() {
+                guard.remove(id);
+            }
         }
+        // The connection task is over: no question can still be waiting.
+        self.ended(id);
     }
 
     /// Parameters + cancellation for re-running a stopped session's
@@ -407,16 +460,21 @@ impl SessionManager {
     /// shown nowhere are released right here.
     pub fn drop_window_views(&self, window: &str) {
         let mut finished = Vec::new();
-        let mut guard = self.lock();
-        for (id, entry) in guard.iter() {
-            let mut stream = lock_stream(&entry.stream);
-            stream.remove_window(window);
-            if stream.views.is_empty() && !entry.task_alive {
-                finished.push(id.clone());
+        {
+            let mut guard = self.lock();
+            for (id, entry) in guard.iter() {
+                let mut stream = lock_stream(&entry.stream);
+                stream.remove_window(window);
+                if stream.views.is_empty() && !entry.task_alive {
+                    finished.push(id.clone());
+                }
+            }
+            for id in &finished {
+                guard.remove(id);
             }
         }
-        for id in finished {
-            guard.remove(&id);
+        for id in &finished {
+            self.ended(id);
         }
     }
 
@@ -431,19 +489,41 @@ impl SessionManager {
     /// is before that window's webview has loaded and attached; closing the
     /// session at this point would kill the tab that is being moved.
     pub fn detach_window_views(&self, id: &str, window: &str) -> Result<(), CommandError> {
-        let mut guard = self.lock();
-        let entry = guard
-            .get(id)
-            .ok_or_else(|| CommandError::not_found("session", id))?;
         let finished = {
-            let mut stream = lock_stream(&entry.stream);
-            stream.remove_window(window);
-            stream.views.is_empty() && !entry.task_alive
+            let mut guard = self.lock();
+            let entry = guard
+                .get(id)
+                .ok_or_else(|| CommandError::not_found("session", id))?;
+            let finished = {
+                let mut stream = lock_stream(&entry.stream);
+                stream.remove_window(window);
+                stream.views.is_empty() && !entry.task_alive
+            };
+            if finished {
+                guard.remove(id);
+            }
+            finished
         };
         if finished {
-            guard.remove(id);
+            self.ended(id);
         }
         Ok(())
+    }
+
+    /// The labels of the windows that show a session (each once, in the
+    /// order the views were added).
+    pub fn view_windows(&self, id: &str) -> Vec<String> {
+        let Some(stream) = self.stream(id) else {
+            return Vec::new();
+        };
+        let guard = lock_stream(&stream);
+        let mut windows: Vec<String> = Vec::new();
+        for view in &guard.views {
+            if !windows.contains(&view.window) {
+                windows.push(view.window.clone());
+            }
+        }
+        windows
     }
 
     /// Number of views currently rendering a session.
@@ -527,6 +607,7 @@ impl SessionManager {
             .remove(id)
             .ok_or_else(|| CommandError::not_found("session", id))?;
         let _ = entry.cancel.send(true);
+        self.ended(id);
         if let Some(session) = entry.session {
             let _ = session.close().await;
         }
@@ -540,6 +621,7 @@ impl SessionManager {
         let entry = { self.lock().remove(id) };
         if let Some(entry) = entry {
             let _ = entry.cancel.send(true);
+            self.ended(id);
             if let Some(session) = entry.session {
                 let _ = session.close().await;
             }
@@ -600,12 +682,13 @@ impl SessionManager {
     /// Cancel + close every session; used on app exit so no session outlives
     /// the process's single owner.
     pub async fn shutdown(&self) {
-        let drained: Vec<Managed> = {
+        let drained: Vec<(String, Managed)> = {
             let mut guard = self.lock();
-            guard.drain().map(|(_, entry)| entry).collect()
+            guard.drain().collect()
         };
-        for entry in drained {
+        for (id, entry) in drained {
             let _ = entry.cancel.send(true);
+            self.ended(&id);
             if let Some(session) = entry.session {
                 let _ = tokio::time::timeout(Duration::from_secs(2), session.close()).await;
             }
@@ -616,6 +699,16 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl SessionDirectory for SessionManager {
+    fn view_windows(&self, session_id: &str) -> Vec<String> {
+        SessionManager::view_windows(self, session_id)
+    }
+
+    fn host_id(&self, session_id: &str) -> Option<String> {
+        SessionManager::host_id(self, session_id).map(|id| id.to_string())
     }
 }
 
@@ -850,6 +943,11 @@ async fn run_cycle(
                 deliver_data(&pump.stream, &merged);
                 deferred = next;
             }
+            SessionEvent::Banner(text) => {
+                // The server's pre-login text is plain output as far as the
+                // terminal is concerned: it also lands in the scrollback.
+                deliver_data(&pump.stream, &banner_to_terminal(&text));
+            }
             SessionEvent::Exit { code } => {
                 deliver_exit(&pump.stream, code);
             }
@@ -863,6 +961,18 @@ async fn run_cycle(
             }
         }
     }
+}
+
+/// The server's banner as terminal output: one line per line of text, with
+/// the carriage returns a terminal needs (the text is already stripped of
+/// everything a terminal would interpret, see `termru-ssh`).
+fn banner_to_terminal(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() + 4);
+    for line in text.trim_end_matches('\n').split('\n') {
+        out.extend_from_slice(line.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out
 }
 
 /// Merges consecutive output chunks into one update of at most
@@ -1066,13 +1176,96 @@ mod tests {
             host: "example.test".into(),
             port: 22,
             username: "u".into(),
-            auth: termru_ssh::AuthChoice::Agent { socket: None },
+            auth: vec![termru_ssh::AuthChoice::Agent {
+                socket: None,
+                prefer_fingerprint: None,
+            }],
             term: "xterm-256color".into(),
             keepalive_seconds: 0,
             timeouts: termru_ssh::ConnectTimeouts::default(),
             known_hosts_path: std::path::PathBuf::from("/dev/null"),
             host_key_prompt: std::sync::Arc::new(termru_ssh::config::RejectUnknownHostKeys),
+            auth_prompt: std::sync::Arc::new(termru_ssh::NoAuthPrompts),
         }
+    }
+
+    /// Records the sessions the manager reported as ended.
+    fn record_ends(manager: &SessionManager) -> Arc<Mutex<Vec<String>>> {
+        let ended = Arc::new(Mutex::new(Vec::new()));
+        let log = ended.clone();
+        manager.set_end_hook(Arc::new(move |id| log.lock().unwrap().push(id.to_string())));
+        ended
+    }
+
+    #[test]
+    fn the_windows_of_a_session_are_listed_once_each() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        manager.add_view(&id, "second", test_channel());
+        manager.add_view(&id, "main", test_channel());
+        assert_eq!(manager.view_windows(&id), ["main", "second"]);
+        assert!(manager.view_windows("nope").is_empty());
+        manager.drop_window_views("main");
+        assert_eq!(manager.view_windows(&id), ["second"]);
+    }
+
+    /// A reserved id is the one the session gets, so the connection's
+    /// questions can carry it before the session exists.
+    #[test]
+    fn a_reserved_id_is_the_sessions_id() {
+        let manager = SessionManager::new();
+        let id = manager.reserve_id();
+        let other = manager.reserve_id();
+        assert_ne!(id, other);
+        let _cancel =
+            manager.register_with_id(&id, HostId::new(), params(), "main", test_channel());
+        assert!(manager.info(&id).is_some());
+        assert!(manager.info(&other).is_none());
+    }
+
+    /// The questions a session asked go away with it, however it ends.
+    #[test]
+    fn every_way_a_session_ends_tells_the_end_hook() {
+        let manager = SessionManager::new();
+        let ended = record_ends(&manager);
+        let host = HostId::new();
+
+        // The user closes the tab.
+        let (closed, _a) = manager.register(host, params(), "main", test_channel());
+        futures_block(manager.close(&closed)).expect("close");
+
+        // The connection task ends with nobody looking at the session.
+        let (dead, _b) = manager.register(host, params(), "other", test_channel());
+        manager.drop_window_views("other");
+        manager.mark_task_dead(&dead);
+
+        // The task ends but the tab still shows the failure: the session
+        // stays for "Reconnect", and its questions are gone all the same.
+        let (shown, _c) = manager.register(host, params(), "main", test_channel());
+        manager.mark_task_dead(&shown);
+        assert!(manager.info(&shown).is_some());
+
+        // The app shuts down.
+        let (left, _d) = manager.register(host, params(), "main", test_channel());
+        futures_block(manager.shutdown());
+
+        // The hook may hear of a session more than once (idempotent).
+        let mut ended = ended.lock().unwrap().clone();
+        ended.sort();
+        ended.dedup();
+        let mut expected = vec![closed, dead, shown, left];
+        expected.sort();
+        assert_eq!(ended, expected);
+    }
+
+    #[test]
+    fn the_banner_is_printed_line_by_line_with_carriage_returns() {
+        assert_eq!(
+            banner_to_terminal("Welcome\nSecond"),
+            b"Welcome\r\nSecond\r\n"
+        );
+        assert_eq!(banner_to_terminal("One line\n\n"), b"One line\r\n");
+        assert_eq!(banner_to_terminal("A\n\nB"), b"A\r\n\r\nB\r\n");
     }
 
     #[test]

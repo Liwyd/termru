@@ -151,6 +151,7 @@ describe('mock backend: command coverage', () => {
     sessionResize: async () => api.sessionResize(await openProbeSession(), 100, 30),
     sessionList: () => api.sessionList(),
     hostKeyPromptResolve: () => api.hostKeyPromptResolve('none', true),
+    authPromptResolve: () => api.authPromptResolve('none', ['x']),
     layoutSave: () => api.layoutSave({ version: 1, windows: [] }),
     layoutLoad: () => api.layoutLoad(),
     sessionAttach: async () =>

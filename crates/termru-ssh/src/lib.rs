@@ -2,10 +2,13 @@
 //!
 //! Responsibilities:
 //! * connection lifecycle with timeouts, keepalives, and bounded reconnects
-//! * authentication (password, key file + passphrase, SSH agent)
+//! * authentication as an ordered chain (password, key file + passphrase and
+//!   certificate, SSH agent, keyboard-interactive), driven by what the server
+//!   allows; see the `auth` module
 //! * OpenSSH-compatible known-hosts verification (TOFU + changed-key refusal)
 //! * interactive PTY channel with resize and bounded replay buffering
 
+mod auth;
 pub mod config;
 mod dial;
 pub mod error;
@@ -15,7 +18,9 @@ pub mod replay;
 pub mod session;
 
 pub use config::{
-    AuthChoice, ConnectParams, ConnectTimeouts, HostKeyPrompt, HostKeyPromptRequest, SecretValue,
+    AuthChoice, AuthPrompt, AuthPromptField, AuthPromptKind, AuthPromptRequest, AuthPromptResponse,
+    ConnectParams, ConnectTimeouts, HostKeyPrompt, HostKeyPromptRequest, KeyIdentity,
+    MAX_AGENT_KEYS, NoAuthPrompts, SecretValue,
 };
 pub use error::SshError;
 pub use known_hosts::{Evaluation, HostKeyEntry, KnownHosts};

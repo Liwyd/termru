@@ -14,6 +14,13 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Visual UI walkthrough on a real desktop session (add host, connect, resize, split pane, move tab to new window, store password, palette, rebind key, sync login).
 - [ ] Tag `v0.1.0` (or subsequent production tag) using credentials on a push-enabled host with release permissions.
 
+### SSH authentication follow-ups (see ADR 0008)
+- [ ] Persist a per-host method order (`auth_order`, a synced field with a serde default); until then the chain is derived from the host's method.
+- [ ] Restyle `AuthPromptDialog` and `HostKeyDialog` with the redesigned dialogs (they are deliberately plain).
+- [ ] Windows: try the OpenSSH named-pipe agent and the Pageant fallback on a real Windows host (implemented, never run).
+- [ ] Try keyboard-interactive against a real PAM/2FA server (the tests use an in-process server; the private `sshd` of the tests runs without PAM).
+- [ ] Not supported yet: GSSAPI, FIDO security keys (`sk-*`), SSH host certificates, the server-initiated password change.
+
 ### Dependency maintenance
 - [ ] Evaluate migrating `chrono` (RUSTSEC-2026-0543, unmaintained, ignored in `deny.toml`) to `jiff` or `time` before 2027-03-01; keep the stored epoch-ms / RFC 3339 wire formats and the `tokio-postgres` mapping working (see `docs/security/dependency-review.md`).
 

@@ -13,6 +13,7 @@ exact paths.
 | [0005](0005-sync-protocol.md) | Sync protocol: per-user monotonic revisions, explicit conflicts | Accepted |
 | [0006](0006-multi-window-session-ownership.md) | Session ownership: single Rust-side `SessionManager` across windows | Accepted |
 | [0007](0007-licensing.md) | Licensing: Apache-2.0 code, permissive dependency policy | Accepted |
+| [0008](0008-authentication.md) | Authentication: ordered chain driven by the server, questions routed to the UI | Accepted |
 
 [The architecture overview](overview.md) ties the decisions together: the
 shape of the system, the crates, the data flow of a change and the

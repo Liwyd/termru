@@ -13,7 +13,8 @@ use tracing_subscriber::prelude::*;
 pub use app_error::CommandError;
 pub use state::sessions::spawn_connection;
 pub use state::{
-    AppState, HostKeyPrompts, SessionInfo, SessionManager, SessionStatusDto, SessionUpdate,
+    AppState, AuthPrompts, HostKeyPrompts, SessionInfo, SessionManager, SessionStatusDto,
+    SessionUpdate,
 };
 
 pub fn run() {
@@ -107,6 +108,7 @@ fn build() -> tauri::Result<tauri::App> {
             commands::sessions::session_attach,
             commands::sessions::session_detach,
             commands::sessions::host_key_prompt_resolve,
+            commands::sessions::auth_prompt_resolve,
             commands::layout::layout_save,
             commands::layout::layout_load,
             commands::windows::window_open_session,
@@ -236,6 +238,7 @@ mod tests {
         let auth = termru_ssh::AuthChoice::PrivateKey {
             key_path: std::path::PathBuf::from("/home/user/.ssh/id_ed25519"),
             passphrase: Some(passphrase),
+            identity: None,
         };
         tracing::info!("connecting with {auth:?} and password {password:?}");
         tracing::warn!("retrying the connection for the same host");
