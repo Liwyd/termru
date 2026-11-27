@@ -12,6 +12,7 @@ import {
   type TreeNode,
 } from '../pane-tree';
 import { disposeTerminal } from '../terminal/registry';
+import { clearWriteQueue } from '../terminal/write-queue';
 import { errorMessage, hosts } from './hosts.svelte';
 import { route } from './route.svelte';
 import { toasts } from './toasts.svelte';
@@ -305,6 +306,8 @@ export class SessionStore {
     if (!tab) return;
     const stored = tab.panes.find((entry) => entry.id === pane.id);
     if (stored?.sessionId) {
+      // Input that waits for the session must not outlive the pane.
+      clearWriteQueue(stored.sessionId);
       try {
         await api.sessionClose(stored.sessionId);
       } catch (err) {
@@ -337,6 +340,7 @@ export class SessionStore {
     const stored = this.tabs.find((entry) => entry.id === tab.id) ?? tab;
     for (const pane of stored.panes) {
       if (!pane.sessionId) continue;
+      clearWriteQueue(pane.sessionId);
       try {
         await api.sessionClose(pane.sessionId);
       } catch (err) {
@@ -567,7 +571,11 @@ export class SessionStore {
     // The views move: drop them here without closing the sessions. The
     // main window must stop receiving their output.
     for (const pane of moved) {
-      if (pane.sessionId) await this.#detachView(pane.sessionId);
+      // The window that takes the tab over types into it from now on.
+      if (pane.sessionId) {
+        clearWriteQueue(pane.sessionId);
+        await this.#detachView(pane.sessionId);
+      }
       this.#clearWatchdog(pane.id);
       disposeTerminal(pane.id);
     }

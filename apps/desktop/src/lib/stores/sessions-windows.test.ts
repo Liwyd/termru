@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionStore, type Pane, type Tab } from './sessions.svelte';
+import { writeToSession } from '../terminal/write-queue';
 import { answers, callsOf, failures, resetTauriMock } from '../test-support/tauri-core-mock';
 import type { Host } from '../types';
 
@@ -286,5 +287,46 @@ describe('saving the layout', () => {
     failures.set('layout_load', 'disk error');
     await store.restoreLayout();
     expect(store.layoutLoaded).toBe(true);
+  });
+});
+
+describe('input that waits for a session', () => {
+  const BACKLOG = 'the remote host is not accepting input (the input queue is full)';
+
+  /** A connected pane whose session does not accept input right now. */
+  async function stuckPane(store: SessionStore): Promise<Pane> {
+    const pane = paneOf(store, store.open(host(), {}));
+    pane.sessionId = 's-stuck';
+    store.applyStatus(pane, { state: 'ready' });
+    failures.set('session_write', BACKLOG);
+    writeToSession('s-stuck', 'x');
+    // The chunk is retried while the session is stuck.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(callsOf('session_write').length).toBeGreaterThan(1);
+    failures.delete('session_write');
+    return pane;
+  }
+
+  it('is dropped when its pane closes', async () => {
+    const store = new SessionStore();
+    const pane = await stuckPane(store);
+    const writes = callsOf('session_write').length;
+
+    await store.closePane(pane);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callsOf('session_write')).toHaveLength(writes);
+  });
+
+  it('is dropped when the tab moves to another window', async () => {
+    const store = new SessionStore();
+    const pane = await stuckPane(store);
+    const tab = store.tabs[0];
+    expect(tab.panes).toContain(pane);
+    const writes = callsOf('session_write').length;
+
+    await store.moveToNewWindow(tab);
+    await vi.advanceTimersByTimeAsync(10_000);
+    // The other window types into the session now; this one stays quiet.
+    expect(callsOf('session_write')).toHaveLength(writes);
   });
 });

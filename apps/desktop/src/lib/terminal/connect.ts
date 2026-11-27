@@ -14,18 +14,18 @@ import { Channel } from '../ipc-backend';
 import { errorMessage } from '../stores/hosts.svelte';
 import { sessions, type Pane } from '../stores/sessions.svelte';
 import type { SessionGeometry, SessionInfo, SessionUpdate } from '../types';
-import { decodeBase64, encodeUtf8 } from './codec';
+import { decodeBase64 } from './codec';
 import { fitTerminal, terminalSize, whenFontsReady } from './create';
 import type { TerminalHandle } from './registry';
+import { clearWriteQueue, writeToSession } from './write-queue';
 
 /** Sends what the user typed to the session of a pane. */
 export function sendInput(paneId: string, data: string): void {
   const sessionId = sessions.paneById(paneId)?.sessionId;
   if (!sessionId) return;
-  void api.sessionWrite(sessionId, encodeUtf8(data)).catch(() => {
-    // The session ended between the keystroke and the write; the status
-    // stream tells the user what happened.
-  });
+  // Not a bare `session_write` per keystroke: concurrent invokes may be
+  // delivered out of order, and a full input queue must not drop input.
+  writeToSession(sessionId, data);
 }
 
 /** Tells the backend the grid size of a terminal (best effort). */
@@ -200,6 +200,8 @@ async function reopen(
   // Start over. The old entry is dead (or replaced by new credentials):
   // release it so the backend never keeps an orphan.
   pane.sessionId = null;
+  // Input typed for the old session must not reach it (or the new one) late.
+  clearWriteQueue(previous);
   if (known) {
     try {
       await api.sessionClose(previous);

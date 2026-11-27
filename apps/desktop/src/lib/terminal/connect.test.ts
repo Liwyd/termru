@@ -17,9 +17,10 @@ import {
 import { resetXtermMock, terminals } from '../test-support/xterm-mock';
 import type { Host, SessionInfo, SessionUpdate, WorkspaceDoc } from '../types';
 import { appearanceFromPrefs } from './appearance';
-import { startConnection } from './connect';
+import { sendInput, startConnection } from './connect';
 import { createTerminal } from './create';
 import { pruneTerminals, type TerminalHandle } from './registry';
+import { clearWriteQueue } from './write-queue';
 
 vi.mock('@tauri-apps/api/core', () => import('../test-support/tauri-core-mock'));
 vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
@@ -151,6 +152,33 @@ describe('opening a session', () => {
     await startConnection(pane, terminalFor(pane), pane.generation);
     expect(pane.dead).toBe(true);
     expect(pane.errorMessage).toContain('requires a password');
+  });
+});
+
+describe('typing into a pane', () => {
+  it('writes in typing order, one write at a time, joining what is typed meanwhile', async () => {
+    const pane = openPane();
+    pane.sessionId = 'typed-session';
+    sendInput(pane.id, 'l');
+    sendInput(pane.id, 's');
+    sendInput(pane.id, '\r');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The first keystroke left at once; the others waited for its answer and
+    // went out as one write, instead of three invokes racing each other.
+    const writes = callsOf('session_write').map((call) => call.args);
+    expect(writes).toEqual([
+      { id: 'typed-session', data: [108] },
+      { id: 'typed-session', data: [115, 13] },
+    ]);
+    clearWriteQueue('typed-session');
+  });
+
+  it('sends nothing for a pane that has no session', async () => {
+    const pane = openPane();
+    sendInput(pane.id, 'x');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callsOf('session_write')).toHaveLength(0);
   });
 });
 
