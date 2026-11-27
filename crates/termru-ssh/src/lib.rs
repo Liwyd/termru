@@ -7,9 +7,11 @@
 //! * interactive PTY channel with resize and bounded replay buffering
 
 pub mod config;
+mod dial;
 pub mod error;
 pub mod known_hosts;
 pub mod reconnect;
+pub mod replay;
 pub mod session;
 
 pub use config::{
@@ -18,4 +20,5 @@ pub use config::{
 pub use error::SshError;
 pub use known_hosts::{Evaluation, HostKeyEntry, KnownHosts};
 pub use reconnect::{GiveUpReason, ReconnectDecision, ReconnectPolicy};
+pub use replay::ReplayRing;
 pub use session::{ErrorCategory, Session, SessionEvent, SessionOptions, SessionStatus};

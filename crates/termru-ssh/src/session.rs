@@ -3,47 +3,78 @@
 //!
 //! ## Concurrency model
 //!
-//! One tokio task (the *actor*) owns the russh handle and channel. All
-//! commands (write/resize/attach/close) and all SSH messages funnel through
-//! it, which makes ordering trivially correct: an attaching terminal always
-//! receives the replay buffer before any live bytes.
+//! One tokio task (the *actor*) owns the russh handle and the **read half** of
+//! the shell channel. Two small helper tasks own the **write half**:
 //!
-//! Output flows to at most one attached consumer (the pane currently showing
-//! this session) through a bounded channel with a send timeout. If the UI
-//! stalls beyond the timeout, the session **detaches** and keeps running —
-//! data continues into a bounded replay buffer instead of blocking the SSH
-//! transport (flow control remains intact because reads stop being polled and
-//! the TCP window fills naturally).
+//! * the *input pump* drains an ordered, bounded input queue into the channel
+//!   (`Session::write` / `Session::try_write` feed it). It may block for a
+//!   long time waiting for the remote's receive window — and that is fine,
+//!   because
+//! * the actor never awaits anything russh-side: it keeps draining
+//!   `ChannelReadHalf::wait`, which is what lets russh process the window
+//!   adjustments the input pump is waiting for. (Before the split, a large
+//!   paste made the actor block in `data_bytes` while the remote echoed the
+//!   data back; russh's bounded channel filled, its loop stalled, the window
+//!   adjust was never processed, and everything deadlocked.)
+//! * the *resize pump* forwards the latest requested size (a `watch`, so only
+//!   the newest value matters) and is independent of the input pump: a resize
+//!   never queues behind a blocked write.
+//!
+//! ## Output
+//!
+//! Output flows to one consumer through a bounded channel. The actor **never
+//! drops its consumer because it is slow**: events wait in a small pending
+//! queue (consecutive data chunks are merged), reading from the channel pauses
+//! when that queue is full — plain flow control, the TCP window fills — and
+//! commands such as `Close` stay responsive throughout. The consumer is only
+//! forgotten when it is really gone (its receiver was dropped); the session
+//! then keeps running and keeps filling the replay ring, so a view that
+//! attaches later still gets the scrollback.
 //!
 //! ## Dead-connection detection
 //!
-//! russh's built-in keepalive machinery is configured: if nothing is received
-//! for `keepalive_seconds`, a keepalive is sent; after
-//! [`DEFAULT_KEEPALIVE_MAX`] unanswered keepalives the connection is closed
-//! and the session reports a network failure (which the app may reconnect).
+//! russh's keepalive machinery is the single source of truth: if nothing is
+//! received for the keepalive interval a keepalive is sent, and after
+//! [`DEFAULT_KEEPALIVE_MAX`] unanswered ones the transport is torn down. The
+//! actor then sees the channel end **without** an EOF/close from the remote
+//! and reports a retriable network failure. A close or EOF *from the remote*
+//! (shell exited, killed by a signal, `logout`) is final and never retried.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use russh::client::{self, Config as ClientConfig, Handle, Handler, Msg};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
-use russh::{Channel, ChannelMsg};
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch};
-use tokio::time::Instant;
+use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
 
 use crate::config::{AuthChoice, ConnectParams, HostKeyPromptRequest};
+use crate::dial::{Budget, dial};
 use crate::error::SshError;
 use crate::known_hosts::{Evaluation, KnownHosts};
 use crate::reconnect::ReconnectPolicy;
+use crate::replay::ReplayRing;
 
 pub const DEFAULT_KEEPALIVE_MAX: usize = 3;
 const REPLAY_CHUNK: usize = 32 * 1024;
-const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROL_QUEUE: usize = 128;
 const MAX_REPLAY_DEFAULT: usize = 512 * 1024;
+/// Ordered input chunks that may wait for the remote to accept them.
+const INPUT_QUEUE: usize = 4096;
+/// Queued input chunks are merged up to this size before they hit the wire.
+const WRITE_COALESCE: usize = 32 * 1024;
+/// Events held back for a slow consumer before reading pauses.
+const MAX_PENDING_EVENTS: usize = 32;
+/// Consecutive data chunks are merged up to this size while queued.
+const COALESCE_LIMIT: usize = 64 * 1024;
+/// How long the final events (`Failed`/`Closed`) may wait for the consumer.
+const FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound for the polite part of tearing the connection down.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Events flowing from the session to its consumer.
 #[derive(Debug)]
@@ -113,6 +144,7 @@ impl ErrorCategory {
             SshError::Io(_)
             | SshError::NoPty
             | SshError::SessionClosing
+            | SshError::InputBacklog
             | SshError::ShellExited { .. } => Self::Local,
             SshError::Protocol(_) => Self::Protocol,
         }
@@ -139,15 +171,11 @@ impl Default for SessionOptions {
 
 #[derive(Debug)]
 enum SessionCommand {
-    Write(Vec<u8>),
-    Resize {
-        cols: u16,
-        rows: u16,
-    },
+    /// Binds a new consumer; it first receives the replay ring.
     Attach(mpsc::Sender<SessionEvent>),
-    /// Returns a snapshot of the replay buffer **without** replacing the
-    /// active consumer (used to show a second view the same scrollback).
-    Replay(mpsc::Sender<Vec<u8>>),
+    /// Snapshot of the replay ring **without** replacing the consumer (used
+    /// to show a second view the same scrollback).
+    Replay(oneshot::Sender<Vec<u8>>),
     Close,
 }
 
@@ -156,6 +184,10 @@ enum SessionCommand {
 #[derive(Debug, Clone)]
 pub struct Session {
     cmd: mpsc::Sender<SessionCommand>,
+    /// Ordered input queue drained by the input pump.
+    input: mpsc::Sender<Vec<u8>>,
+    /// Latest requested terminal size, applied by the resize pump.
+    size: Arc<watch::Sender<(u16, u16)>>,
 }
 
 impl Session {
@@ -177,8 +209,8 @@ impl Session {
     }
 
     /// Opens a connection that can be aborted mid-flight (dial, handshake,
-    /// host-key prompt, authentication) by setting `cancel` to `true`.
-    /// No auto-reconnect: one attempt, then the error surfaces.
+    /// host-key prompt, authentication, shell setup) by setting `cancel` to
+    /// `true`. No auto-reconnect: one attempt, then the error surfaces.
     pub async fn open_cancellable(
         params: ConnectParams,
         options: SessionOptions,
@@ -265,12 +297,23 @@ impl Session {
             .await;
 
         let known_hosts = Arc::new(KnownHosts::with_path(params.known_hosts_path.clone()));
-        let prompt_seen = Arc::new(AtomicBool::new(false));
+        let prompt_active = Arc::new(AtomicBool::new(false));
         let recorded: Arc<std::sync::Mutex<Option<SshError>>> =
             Arc::new(std::sync::Mutex::new(None));
+        let keepalive = params.effective_keepalive();
 
-        // --- resolve + dial (explicit timeouts, precise DNS errors) ---
-        let stream = dial(&params.host, params.port, params.timeouts.connect, cancel).await?;
+        // One deadline for DNS + TCP + key exchange + shell setup. Time spent
+        // on a host-key prompt is not charged (the budget pauses), and
+        // authentication has its own timeout below.
+        let mut budget = Budget::new(params.timeouts.connect);
+        let connect_timeout = || SshError::ConnectTimeout {
+            host: params.host.clone(),
+            port: params.port,
+            seconds: params.timeouts.connect.as_secs(),
+        };
+
+        // --- resolve + dial (staggered address race, precise DNS errors) ---
+        let stream = dial(&params.host, params.port, &mut budget, cancel, keepalive).await?;
 
         // --- handshake (key exchange incl. host-key decision) ---
         let handler = ClientHandler {
@@ -279,10 +322,10 @@ impl Session {
             known_hosts,
             prompt: params.host_key_prompt.clone(),
             decision_budget: params.timeouts.host_key_decision,
-            prompt_seen: prompt_seen.clone(),
+            prompt_active: prompt_active.clone(),
             recorded: recorded.clone(),
         };
-        let mut config = ClientConfig {
+        let config = ClientConfig {
             // `SshId::Standard` writes the value verbatim and appends `\r\n`;
             // it MUST include the `SSH-2.0-` prefix or OpenSSH desyncs the
             // banner exchange (caught by the sshd integration suite).
@@ -290,87 +333,161 @@ impl Session {
                 "SSH-2.0-Termru_{}",
                 env!("CARGO_PKG_VERSION")
             ))),
-            keepalive_interval: (params.keepalive_seconds > 0)
-                .then(|| Duration::from_secs(u64::from(params.keepalive_seconds))),
+            // russh's own keepalive is the only one: no second timer in the
+            // actor (two timers double the traffic and race each other).
+            keepalive_interval: Some(keepalive),
             keepalive_max: DEFAULT_KEEPALIVE_MAX,
+            inactivity_timeout: None,
+            // `connect_stream` does not tune the socket, `dial` already did;
+            // this keeps russh's own view consistent.
+            nodelay: true,
             ..ClientConfig::default()
         };
-        config.inactivity_timeout = None;
 
-        let handle = connect_with_deadline(
-            client::connect_stream(Arc::new(config), stream, handler),
-            &params,
-            prompt_seen,
-            recorded,
-            cancel,
-        )
-        .await?;
+        let handshake = async {
+            client::connect_stream(Arc::new(config), stream, handler)
+                .await
+                .map_err(|err| {
+                    take_recorded(&recorded).unwrap_or_else(|| {
+                        map_connect_error(
+                            err,
+                            &params.host,
+                            params.port,
+                            params.timeouts.connect.as_secs(),
+                        )
+                    })
+                })
+        };
+        let mut handle = budget
+            .run(handshake, Some(&prompt_active), cancel, || {
+                take_recorded(&recorded).unwrap_or_else(connect_timeout)
+            })
+            .await?;
 
         // --- authentication ---
         let _ = events
             .send(SessionEvent::Status(SessionStatus::Authenticating))
             .await;
-        let mut handle = handle;
         tokio::select! {
             result = tokio::time::timeout(params.timeouts.auth, authenticate(&mut handle, &params)) => {
                 result.map_err(|_| SshError::AuthTimeout)??
             }
-            _ = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
+            () = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
         }
 
-        // --- interactive shell ---
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::Protocol(format!("open session channel: {e}")))?;
-        channel
-            .request_pty(
-                true,
-                &params.term,
-                u32::from(options.cols),
-                u32::from(options.rows),
-                0,
-                0,
-                &[],
+        // --- interactive shell (same budget, same cancellation) ---
+        let channel = budget
+            .run(
+                async {
+                    handle
+                        .channel_open_session()
+                        .await
+                        .map_err(|e| SshError::Protocol(format!("open session channel: {e}")))
+                },
+                None,
+                cancel,
+                connect_timeout,
             )
-            .await
-            .map_err(|e| SshError::Protocol(format!("terminal allocation failed: {e}")))?;
-        channel
-            .request_shell(true)
-            .await
-            .map_err(|e| SshError::Protocol(format!("request shell: {e}")))?;
+            .await?;
+        budget
+            .run(
+                async {
+                    channel
+                        .request_pty(
+                            true,
+                            &params.term,
+                            u32::from(options.cols),
+                            u32::from(options.rows),
+                            0,
+                            0,
+                            &[],
+                        )
+                        .await
+                        .map_err(|e| SshError::Protocol(format!("terminal allocation failed: {e}")))
+                },
+                None,
+                cancel,
+                connect_timeout,
+            )
+            .await?;
+        budget
+            .run(
+                async {
+                    channel
+                        .request_shell(true)
+                        .await
+                        .map_err(|e| SshError::Protocol(format!("request shell: {e}")))
+                },
+                None,
+                cancel,
+                connect_timeout,
+            )
+            .await?;
 
+        // Reading and writing are separated from here on (see module docs).
+        let (reader, writer) = channel.split();
+        let writer = Arc::new(writer);
         let (cmd_tx, cmd_rx) = mpsc::channel(CONTROL_QUEUE);
+        let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
+        let (size_tx, size_rx) = watch::channel((options.cols, options.rows));
         let actor = Actor {
             handle,
-            channel,
+            reader,
+            writer: writer.clone(),
+            _pumps: [
+                AbortOnDrop(tokio::spawn(input_pump(writer.clone(), input_rx))),
+                AbortOnDrop(tokio::spawn(resize_pump(writer, size_rx))),
+            ],
             events: Some(events),
-            replay: std::collections::VecDeque::new(),
-            replay_limit: options.replay_limit,
+            pending: VecDeque::new(),
+            ring: ReplayRing::new(options.replay_limit),
             cmd_rx,
-            keepalive: (params.keepalive_seconds > 0).then(|| {
-                tokio::time::interval(Duration::from_secs(u64::from(params.keepalive_seconds)))
-            }),
             exit_code: None,
             exit_emitted: false,
+            eof_seen: false,
         };
         tokio::spawn(actor.run());
 
-        Ok(Session { cmd: cmd_tx })
+        Ok(Session {
+            cmd: cmd_tx,
+            input: input_tx,
+            size: Arc::new(size_tx),
+        })
     }
 
+    /// Queues `data` for the remote shell, waiting while the (large) input
+    /// queue is full. Chunks are delivered strictly in queue order.
     pub async fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
-        self.cmd
-            .send(SessionCommand::Write(data))
+        self.input
+            .send(data)
             .await
+            .map_err(|_| SshError::SessionClosing)
+    }
+
+    /// Non-blocking [`Session::write`]: the chunk is enqueued **now**, in the
+    /// caller's order, or rejected with [`SshError::InputBacklog`] when the
+    /// remote has stopped accepting input and the queue is full. Used by
+    /// synchronous callers (the desktop `session_write` command) that must
+    /// not reorder or block.
+    pub fn try_write(&self, data: Vec<u8>) -> Result<(), SshError> {
+        use mpsc::error::TrySendError;
+        match self.input.try_send(data) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(SshError::InputBacklog),
+            Err(TrySendError::Closed(_)) => Err(SshError::SessionClosing),
+        }
+    }
+
+    /// Requests a new terminal size. Only the latest request matters and it
+    /// never waits behind pending input.
+    pub fn try_resize(&self, cols: u16, rows: u16) -> Result<(), SshError> {
+        self.size
+            .send((cols, rows))
             .map_err(|_| SshError::SessionClosing)
     }
 
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), SshError> {
-        self.cmd
-            .send(SessionCommand::Resize { cols, rows })
-            .await
-            .map_err(|_| SshError::SessionClosing)
+        self.try_resize(cols, rows)
     }
 
     /// Binds the session's output to `consumer`. The previous consumer (if
@@ -386,18 +503,20 @@ impl Session {
     ///
     /// Unlike [`Session::attach`], this does **not** replace the active
     /// consumer: the session keeps streaming to whoever is attached while
-    /// another view receives the same scrollback. This is what makes a
-    /// window/tab move possible without dropping the SSH session.
+    /// another view receives the same scrollback. (A caller that must also
+    /// register a live view without a gap keeps its own [`ReplayRing`] next to
+    /// the view list, as the desktop session manager does.)
     pub async fn replay_snapshot(&self) -> Result<Vec<u8>, SshError> {
-        let (tx, mut rx) = mpsc::channel(1);
+        let (tx, rx) = oneshot::channel();
         self.cmd
             .send(SessionCommand::Replay(tx))
             .await
             .map_err(|_| SshError::SessionClosing)?;
-        rx.recv().await.ok_or(SshError::SessionClosing)
+        rx.await.map_err(|_| SshError::SessionClosing)
     }
 
-    /// Graceful local close: EOF + channel close + disconnect.
+    /// Graceful local close: EOF + channel close + disconnect. Does not wait
+    /// for queued input (a blocked write must not keep a closed tab alive).
     pub async fn close(&self) -> Result<(), SshError> {
         // The actor exits even if the command queue is full, so use a best
         // effort send: a closed queue already means the session is gone.
@@ -406,113 +525,7 @@ impl Session {
     }
 }
 
-// ---------- dial ----------
-
-async fn dial(
-    host: &str,
-    port: u16,
-    budget: Duration,
-    cancel: &mut watch::Receiver<bool>,
-) -> Result<TcpStream, SshError> {
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| SshError::DnsFailure {
-            host: host.to_string(),
-            detail: e.to_string(),
-        })?
-        .collect();
-    if addrs.is_empty() {
-        return Err(SshError::ConnectFailed {
-            host: host.to_string(),
-            port,
-            detail: "hostname resolved to no addresses".to_string(),
-        });
-    }
-    let deadline = Instant::now() + budget;
-    let mut last_io_error: Option<std::io::Error> = None;
-    let mut saw_timeout = false;
-    for addr in addrs {
-        tokio::select! {
-            result = tokio::time::timeout_at(deadline, TcpStream::connect(addr)) => {
-                match result {
-                    Ok(Ok(stream)) => return Ok(stream),
-                    Ok(Err(e)) => last_io_error = Some(e),
-                    Err(_) => saw_timeout = true,
-                }
-            }
-            _ = crate::reconnect::cancelled(cancel) => return Err(SshError::SessionClosing),
-        }
-    }
-    if let Some(err) = last_io_error {
-        Err(SshError::ConnectFailed {
-            host: host.to_string(),
-            port,
-            detail: err.to_string(),
-        })
-    } else if saw_timeout {
-        Err(SshError::ConnectTimeout {
-            host: host.to_string(),
-            port,
-            seconds: budget.as_secs(),
-        })
-    } else {
-        Err(SshError::ConnectFailed {
-            host: host.to_string(),
-            port,
-            detail: "no address accepted the connection".to_string(),
-        })
-    }
-}
-
-// ---------- handshake with adaptive deadline ----------
-
-#[allow(clippy::too_many_arguments)]
-async fn connect_with_deadline(
-    future: impl std::future::Future<Output = Result<Handle<ClientHandler>, russh::Error>>,
-    params: &ConnectParams,
-    prompt_seen: Arc<AtomicBool>,
-    recorded: Arc<std::sync::Mutex<Option<SshError>>>,
-    cancel: &mut watch::Receiver<bool>,
-) -> Result<Handle<ClientHandler>, SshError> {
-    let interactive = params.host_key_prompt.is_interactive();
-    let host = &params.host;
-    let port = params.port;
-    let timeouts = &params.timeouts;
-    tokio::pin!(future);
-    let mut deadline = Instant::now() + timeouts.connect;
-    let mut extended = false;
-    loop {
-        tokio::select! {
-            result = &mut future => {
-                    return match result {
-                    Ok(handle) => Ok(handle),
-                    Err(err) => Err(take_recorded(&recorded).unwrap_or_else(|| {
-                        map_connect_error(err, host, port, timeouts.connect.as_secs())
-                    })),
-                };
-            }
-            _ = crate::reconnect::cancelled(cancel) => {
-                return Err(SshError::SessionClosing);
-            }
-            _ = tokio::time::sleep_until(deadline) => {
-                if interactive && !extended && prompt_seen.load(Ordering::SeqCst) {
-                    // A human may be looking at a trust dialog; grant the
-                    // decision budget on top of the connect budget once.
-                    extended = true;
-                    deadline = Instant::now() + timeouts.host_key_decision;
-                    continue;
-                }
-                return Err(
-                    take_recorded(&recorded).unwrap_or(SshError::ConnectTimeout {
-                        host: host.to_string(),
-                        port,
-                        seconds: timeouts.connect.as_secs(),
-                    }),
-                );
-            }
-        }
-    }
-}
+// ---------- handshake helpers ----------
 
 fn take_recorded(recorded: &Arc<std::sync::Mutex<Option<SshError>>>) -> Option<SshError> {
     recorded.lock().ok().and_then(|mut g| g.take())
@@ -703,7 +716,8 @@ struct ClientHandler {
     known_hosts: Arc<KnownHosts>,
     prompt: Arc<dyn crate::config::HostKeyPrompt>,
     decision_budget: Duration,
-    prompt_seen: Arc<AtomicBool>,
+    /// `true` while a human decision is pending; the connect budget pauses.
+    prompt_active: Arc<AtomicBool>,
     recorded: Arc<std::sync::Mutex<Option<SshError>>>,
 }
 
@@ -755,7 +769,6 @@ impl Handler for ClientHandler {
                 fingerprint,
                 key_type,
             } => {
-                self.prompt_seen.store(true, Ordering::SeqCst);
                 let request = HostKeyPromptRequest::Unknown {
                     host: self.host.clone(),
                     port: self.port,
@@ -781,7 +794,6 @@ impl Handler for ClientHandler {
                 }
             }
             Evaluation::Changed { old, new } => {
-                self.prompt_seen.store(true, Ordering::SeqCst);
                 let request = HostKeyPromptRequest::Changed {
                     host: self.host.clone(),
                     port: self.port,
@@ -815,7 +827,14 @@ impl Handler for ClientHandler {
 
 impl ClientHandler {
     async fn ask(&self, request: HostKeyPromptRequest) -> bool {
-        match tokio::time::timeout(self.decision_budget, self.prompt.decide(request)).await {
+        // The connect deadline pauses while the user decides; the decision has
+        // its own budget.
+        self.prompt_active
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome = tokio::time::timeout(self.decision_budget, self.prompt.decide(request)).await;
+        self.prompt_active
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        match outcome {
             Ok(accepted) => accepted,
             Err(_) => {
                 self.record(SshError::HostKeyPromptTimeout);
@@ -825,253 +844,352 @@ impl ClientHandler {
     }
 }
 
+// ---------- write-side helper tasks ----------
+
+/// Aborts its task when dropped, so helper tasks never outlive the actor.
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Drains the ordered input queue into the channel.
+///
+/// Queued chunks are merged (up to [`WRITE_COALESCE`]) so a burst of small
+/// writes becomes few packets, without ever reordering them. This task may
+/// wait for the remote's window for as long as it takes; nothing else waits on
+/// it.
+async fn input_pump(writer: Arc<ChannelWriteHalf<Msg>>, mut input: mpsc::Receiver<Vec<u8>>) {
+    while let Some(mut batch) = input.recv().await {
+        while batch.len() < WRITE_COALESCE {
+            match input.try_recv() {
+                Ok(more) => batch.extend_from_slice(&more),
+                Err(_) => break,
+            }
+        }
+        if let Err(error) = writer.data_bytes(batch).await {
+            // The transport is gone; the actor sees the channel end too and
+            // reports it. Dropping `input` makes later writes fail fast.
+            tracing::warn!("ssh input pump stopped: {error}");
+            break;
+        }
+    }
+}
+
+/// Forwards the newest requested terminal size.
+async fn resize_pump(writer: Arc<ChannelWriteHalf<Msg>>, mut size: watch::Receiver<(u16, u16)>) {
+    while size.changed().await.is_ok() {
+        let (cols, rows) = *size.borrow_and_update();
+        if let Err(error) = writer
+            .window_change(u32::from(cols), u32::from(rows), 0, 0)
+            .await
+        {
+            tracing::warn!("resize request failed: {error}");
+            break;
+        }
+    }
+}
+
 // ---------- session actor ----------
 
 enum Tick {
     Command(Option<SessionCommand>),
     Message(Option<ChannelMsg>),
-    Keepalive,
+    /// A slot in the consumer's queue (`None`: the consumer is gone).
+    Slot(Option<mpsc::OwnedPermit<SessionEvent>>),
+}
+
+/// How the actor's serve loop ended.
+enum End {
+    /// Final, not retriable: user close, shell exit, exit signal, remote close.
+    Finished { reason: String },
+    /// Transport loss: reported as a failure the app may reconnect from.
+    Failed { error: SshError },
 }
 
 struct Actor {
     handle: Handle<ClientHandler>,
-    channel: Channel<Msg>,
+    reader: ChannelReadHalf,
+    writer: Arc<ChannelWriteHalf<Msg>>,
+    _pumps: [AbortOnDrop; 2],
+    /// `None` once the consumer's receiver was dropped.
     events: Option<mpsc::Sender<SessionEvent>>,
-    replay: std::collections::VecDeque<u8>,
-    replay_limit: usize,
+    /// Events the consumer has not accepted yet (bounded, see
+    /// [`MAX_PENDING_EVENTS`]).
+    pending: VecDeque<SessionEvent>,
+    ring: ReplayRing,
     cmd_rx: mpsc::Receiver<SessionCommand>,
-    keepalive: Option<tokio::time::Interval>,
     exit_code: Option<i32>,
     exit_emitted: bool,
+    /// The remote sent EOF on the channel.
+    eof_seen: bool,
 }
 
 impl Actor {
     async fn run(mut self) {
+        let end = self.serve().await;
+        self.conclude(end).await;
+    }
+
+    async fn serve(&mut self) -> End {
         loop {
-            let tick: Tick = tokio::select! {
+            let tick = tokio::select! {
                 command = self.cmd_rx.recv() => Tick::Command(command),
-                message = self.channel.wait() => Tick::Message(message),
-                _ = keepalive_tick(&mut self.keepalive) => Tick::Keepalive,
+                slot = reserve_slot(self.events.clone()),
+                    if self.events.is_some() && !self.pending.is_empty() => Tick::Slot(slot),
+                // Reading pauses only while the consumer is `MAX_PENDING_EVENTS`
+                // behind: that is flow control, not a dropped consumer.
+                message = self.reader.wait(), if self.pending.len() < MAX_PENDING_EVENTS => {
+                    Tick::Message(message)
+                }
             };
             match tick {
                 Tick::Command(None) => {
                     // All handles dropped: shut down.
-                    self.finish("session closed").await;
-                    break;
+                    return End::Finished {
+                        reason: "session closed".to_string(),
+                    };
                 }
-                Tick::Command(Some(command)) => match command {
-                    SessionCommand::Write(data) => {
-                        if let Err(error) = self.channel.data_bytes(data).await {
-                            self.fail(SshError::Protocol(format!("write failed: {error}")))
-                                .await;
-                            break;
-                        }
-                    }
-                    SessionCommand::Resize { cols, rows } => {
-                        if let Err(error) = self
-                            .channel
-                            .window_change(u32::from(cols), u32::from(rows), 0, 0)
-                            .await
-                        {
-                            tracing::warn!("resize request failed: {error}");
-                        }
-                    }
-                    SessionCommand::Attach(consumer) => {
-                        self.events = Some(consumer);
-                        self.flush_replay().await;
-                    }
-                    SessionCommand::Replay(tx) => {
-                        let snapshot: Vec<u8> = self.replay.iter().copied().collect();
-                        // `send` is async: it must be awaited, otherwise the
-                        // value is dropped and the caller only sees a closed
-                        // channel.
-                        let _ = tx.send(snapshot).await;
-                    }
-                    SessionCommand::Close => {
-                        self.finish("closed by user").await;
-                        break;
-                    }
-                },
-                Tick::Message(None) => {
-                    // No exit status: the transport or channel died under us.
-                    // Classified as a retriable network failure so the app can
-                    // auto-reconnect; a clean shell exit always arrives as
-                    // `ExitStatus` first.
-                    if self.exit_code.is_none() {
-                        self.fail(SshError::ConnectionClosed).await;
-                    } else {
-                        let reason = format!(
-                            "remote shell exited with status {}",
-                            self.exit_code.unwrap_or_default()
-                        );
-                        self.finish(&reason).await;
-                    }
-                    break;
+                Tick::Command(Some(SessionCommand::Close)) => {
+                    return End::Finished {
+                        reason: "closed by user".to_string(),
+                    };
                 }
-                Tick::Message(Some(message)) => {
-                    match message {
-                        ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                            self.remember(&data);
-                            self.emit(SessionEvent::Data(data.to_vec())).await;
-                        }
-                        ChannelMsg::ExitStatus { exit_status } => {
-                            let code = i32::try_from(exit_status).ok();
-                            self.exit_code = code;
-                            self.emit_exit(code).await;
-                        }
-                        ChannelMsg::ExitSignal {
-                            core_dumped,
-                            error_message,
-                            signal_name,
-                            lang_tag: _,
-                        } => {
-                            // `ExitSignal` is never followed by an
-                            // `ExitStatus`, so by the invariant above this is
-                            // an abrupt session death: reported as a retriable
-                            // network failure (so the reconnect policy can act
-                            // on e.g. an sshd restart) with the signal detail
-                            // as the user-facing message.
-                            self.exit_code = None;
-                            self.emit_exit(None).await;
-                            let note = format!(
-                                "remote process terminated by signal {signal_name:?}{}: {error_message}",
-                                if core_dumped { " (core dumped)" } else { "" }
-                            );
-                            self.fail_with(SshError::ConnectionClosed, note).await;
-                            break;
-                        }
-                        ChannelMsg::Eof => {
-                            // Remote closed its side's output; more messages
-                            // (e.g. exit status) may still arrive.
-                        }
-                        ChannelMsg::Close => {
-                            if self.exit_code.is_none() {
-                                self.fail(SshError::ConnectionClosed).await;
-                            } else {
-                                let reason = format!(
-                                    "remote shell exited with status {}",
-                                    self.exit_code.unwrap_or_default()
-                                );
-                                self.finish(&reason).await;
-                            }
-                            break;
-                        }
-                        _ => {}
+                Tick::Command(Some(SessionCommand::Attach(consumer))) => self.attach(consumer),
+                Tick::Command(Some(SessionCommand::Replay(tx))) => {
+                    let _ = tx.send(self.ring.snapshot());
+                }
+                Tick::Slot(Some(permit)) => {
+                    if let Some(event) = self.pending.pop_front() {
+                        permit.send(event);
                     }
                 }
-                Tick::Keepalive => {
-                    if let Err(error) = self.handle.send_keepalive(true).await {
-                        tracing::warn!("ssh keepalive failed: {error}");
-                        self.fail(SshError::Interrupted).await;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    fn remember(&mut self, data: &[u8]) {
-        self.replay.extend(data.iter().copied());
-        while self.replay.len() > self.replay_limit {
-            self.replay.pop_front();
-        }
-    }
-
-    async fn emit(&mut self, event: SessionEvent) {
-        let Some(consumer) = self.events.clone() else {
-            return;
-        };
-        match tokio::time::timeout(EVENT_SEND_TIMEOUT, consumer.send(event)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => {
-                self.events = None;
-            }
-            Err(_) => {
-                tracing::warn!("session output consumer stalled; detaching (session continues)");
-                self.events = None;
-            }
-        }
-    }
-
-    async fn flush_replay(&mut self) {
-        let Some(consumer) = self.events.clone() else {
-            return;
-        };
-        let snapshot: Vec<u8> = self.replay.iter().copied().collect();
-        for chunk in snapshot.chunks(REPLAY_CHUNK) {
-            match tokio::time::timeout(
-                EVENT_SEND_TIMEOUT,
-                consumer.send(SessionEvent::Data(chunk.to_vec())),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                _ => {
+                Tick::Slot(None) => {
+                    // The consumer's receiver is gone. The session keeps
+                    // running (the ring keeps the output for a later view);
+                    // whoever owns the session decides whether to close it.
+                    tracing::debug!("session output consumer went away");
                     self.events = None;
-                    return;
+                    self.pending.clear();
+                }
+                Tick::Message(None) => return self.channel_ended(),
+                Tick::Message(Some(message)) => {
+                    if let Some(end) = self.on_message(message) {
+                        return end;
+                    }
                 }
             }
         }
     }
 
-    async fn emit_exit(&mut self, code: Option<i32>) {
+    /// The channel's message stream ended without a `Close` message.
+    ///
+    /// Only a transport that disappeared under us (reset, keepalive timeout,
+    /// I/O error) looks like this *without* an EOF or exit status first; that
+    /// is the one retriable case. After the remote said it is done, the end of
+    /// the stream is just the end.
+    fn channel_ended(&self) -> End {
+        end_of_stream(self.exit_code, self.eof_seen)
+    }
+
+    fn remote_end_reason(&self) -> String {
+        remote_end_reason(self.exit_code)
+    }
+
+    fn on_message(&mut self, message: ChannelMsg) -> Option<End> {
+        match message {
+            ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                self.ring.push(&data);
+                self.queue_data(&data);
+            }
+            ChannelMsg::ExitStatus { exit_status } => {
+                let code = i32::try_from(exit_status).ok();
+                self.exit_code = code;
+                self.queue_exit(code);
+            }
+            ChannelMsg::ExitSignal {
+                core_dumped,
+                error_message,
+                signal_name,
+                lang_tag: _,
+            } => {
+                // The shell was killed by a signal (`kill -9 $$`, OOM killer,
+                // admin action). That is an answer from a healthy server, not
+                // a lost connection: final, never retried.
+                self.queue_exit(None);
+                let mut reason = format!(
+                    "the remote process was terminated by signal {}{}",
+                    signal_label(&signal_name),
+                    if core_dumped { " (core dumped)" } else { "" }
+                );
+                if !error_message.trim().is_empty() {
+                    reason.push_str(": ");
+                    reason.push_str(error_message.trim());
+                }
+                return Some(End::Finished { reason });
+            }
+            ChannelMsg::Eof => {
+                // The remote finished its output; an exit status may still
+                // follow. From here on the end of the stream is final.
+                self.eof_seen = true;
+            }
+            ChannelMsg::Close => {
+                return Some(End::Finished {
+                    reason: self.remote_end_reason(),
+                });
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Queues output for the consumer, merging with the previous chunk.
+    fn queue_data(&mut self, data: &[u8]) {
+        if self.events.is_none() {
+            return;
+        }
+        if let Some(SessionEvent::Data(tail)) = self.pending.back_mut()
+            && tail.len() + data.len() <= COALESCE_LIMIT
+        {
+            tail.extend_from_slice(data);
+            return;
+        }
+        self.pending.push_back(SessionEvent::Data(data.to_vec()));
+    }
+
+    fn queue_exit(&mut self, code: Option<i32>) {
         if self.exit_emitted {
             return;
         }
         self.exit_emitted = true;
-        self.emit(SessionEvent::Exit { code }).await;
+        self.queue(SessionEvent::Exit { code });
     }
 
-    async fn fail(&mut self, error: SshError) {
-        let message = error.to_string();
-        self.fail_with(error, message).await;
+    fn queue(&mut self, event: SessionEvent) {
+        if self.events.is_some() {
+            self.pending.push_back(event);
+        }
     }
 
-    /// Like [`Self::fail`], but with an explicit user-facing message (the
-    /// classification still comes from `error`).
-    async fn fail_with(&mut self, error: SshError, message: String) {
-        let category = ErrorCategory::of(&error);
-        self.emit(SessionEvent::Status(SessionStatus::Failed {
-            category,
-            message: message.clone(),
-        }))
-        .await;
+    /// Binds a new consumer: scrollback first, then everything that follows.
+    fn attach(&mut self, consumer: mpsc::Sender<SessionEvent>) {
+        // Undelivered output is already part of the ring; keeping it queued
+        // would show it twice. Statuses/exits stay queued.
+        self.pending
+            .retain(|event| !matches!(event, SessionEvent::Data(_)));
+        let snapshot = self.ring.snapshot();
+        for chunk in snapshot.chunks(REPLAY_CHUNK).rev() {
+            self.pending.push_front(SessionEvent::Data(chunk.to_vec()));
+        }
+        self.events = Some(consumer);
+    }
+
+    /// Tears the connection down, then delivers the final events.
+    async fn conclude(&mut self, end: End) {
         self.shutdown_connection().await;
-        self.emit(SessionEvent::Status(SessionStatus::Closed {
-            reason: message,
-        }))
-        .await;
+        match end {
+            End::Finished { reason } => {
+                self.queue_exit(self.exit_code);
+                self.queue(SessionEvent::Status(SessionStatus::Closed { reason }));
+            }
+            End::Failed { error } => {
+                let message = error.to_string();
+                self.queue(SessionEvent::Status(SessionStatus::Failed {
+                    category: ErrorCategory::of(&error),
+                    message: message.clone(),
+                }));
+                self.queue(SessionEvent::Status(SessionStatus::Closed {
+                    reason: message,
+                }));
+            }
+        }
+        self.flush_pending().await;
     }
 
-    async fn finish(&mut self, reason: &str) {
-        self.shutdown_connection().await;
-        self.emit_exit(self.exit_code).await;
-        self.emit(SessionEvent::Status(SessionStatus::Closed {
-            reason: reason.to_string(),
-        }))
-        .await;
+    /// Delivers what is still queued — the last events (`Failed`, `Closed`)
+    /// matter most. A consumer that never reads cannot keep the task alive
+    /// forever, hence the bound.
+    async fn flush_pending(&mut self) {
+        let Some(consumer) = self.events.clone() else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + FINAL_FLUSH_TIMEOUT;
+        while let Some(event) = self.pending.pop_front() {
+            match tokio::time::timeout_at(deadline, consumer.send(event)).await {
+                Ok(Ok(())) => {}
+                _ => {
+                    tracing::warn!("session consumer did not take the final events");
+                    break;
+                }
+            }
+        }
     }
 
     async fn shutdown_connection(&mut self) {
-        let _ = self.channel.eof().await;
-        let _ = self.channel.close().await;
-        let _ = self
-            .handle
-            .disconnect(
-                russh::Disconnect::ByApplication,
-                "Termru session closed",
-                "en",
-            )
-            .await;
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            let _ = self.writer.eof().await;
+            let _ = self.writer.close().await;
+            let _ = self
+                .handle
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "Termru session closed",
+                    "en",
+                )
+                .await;
+        })
+        .await;
     }
 }
 
-async fn keepalive_tick(keepalive: &mut Option<tokio::time::Interval>) {
-    match keepalive {
-        Some(interval) => {
-            interval.tick().await;
+/// Verdict for a channel message stream that ended without a `Close`.
+fn end_of_stream(exit_code: Option<i32>, eof_seen: bool) -> End {
+    if exit_code.is_some() || eof_seen {
+        End::Finished {
+            reason: remote_end_reason(exit_code),
         }
-        None => std::future::pending::<()>().await,
+    } else {
+        End::Failed {
+            error: SshError::ConnectionClosed,
+        }
+    }
+}
+
+fn remote_end_reason(exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => format!("remote shell exited with status {code}"),
+        None => "the remote host closed the session".to_string(),
+    }
+}
+
+/// A slot in the consumer's queue; never resolves when there is no consumer.
+async fn reserve_slot(
+    events: Option<mpsc::Sender<SessionEvent>>,
+) -> Option<mpsc::OwnedPermit<SessionEvent>> {
+    match events {
+        Some(sender) => sender.reserve_owned().await.ok(),
+        None => std::future::pending().await,
+    }
+}
+
+fn signal_label(signal: &russh::Sig) -> String {
+    use russh::Sig;
+    match signal {
+        Sig::ABRT => "ABRT".to_string(),
+        Sig::ALRM => "ALRM".to_string(),
+        Sig::FPE => "FPE".to_string(),
+        Sig::HUP => "HUP".to_string(),
+        Sig::ILL => "ILL".to_string(),
+        Sig::INT => "INT".to_string(),
+        Sig::KILL => "KILL".to_string(),
+        Sig::PIPE => "PIPE".to_string(),
+        Sig::QUIT => "QUIT".to_string(),
+        Sig::SEGV => "SEGV".to_string(),
+        Sig::TERM => "TERM".to_string(),
+        Sig::USR1 => "USR1".to_string(),
+        Sig::Custom(name) => name.clone(),
     }
 }
 
@@ -1105,6 +1223,10 @@ mod tests {
             ErrorCategory::of(&SshError::Interrupted),
             ErrorCategory::Network
         );
+        assert_eq!(
+            ErrorCategory::of(&SshError::InputBacklog),
+            ErrorCategory::Local
+        );
     }
 
     #[test]
@@ -1126,35 +1248,29 @@ mod tests {
         assert!(SshError::Interrupted.is_retriable());
     }
 
-    #[tokio::test]
-    async fn dial_reports_dns_failure_for_invalid_name() {
-        let (_tx, mut cancel) = watch::channel(false);
-        let error = dial(
-            "definitely.invalid.invalid",
-            22,
-            Duration::from_secs(3),
-            &mut cancel,
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(error, SshError::DnsFailure { .. }),
-            "got {error:?}"
-        );
+    /// Regression test: only a stream that vanished *without* the remote
+    /// saying it was done is a retriable failure; after EOF or an exit status
+    /// the end of the stream is final (it used to be retried in a loop).
+    #[test]
+    fn only_a_silent_stream_end_is_retriable() {
+        match end_of_stream(None, false) {
+            End::Failed { error } => assert!(error.is_retriable()),
+            End::Finished { .. } => panic!("a vanished transport must be a failure"),
+        }
+        match end_of_stream(None, true) {
+            End::Finished { reason } => assert!(reason.contains("closed the session")),
+            End::Failed { .. } => panic!("EOF from the remote is final"),
+        }
+        match end_of_stream(Some(3), false) {
+            End::Finished { reason } => assert!(reason.contains("status 3")),
+            End::Failed { .. } => panic!("an exit status is final"),
+        }
     }
 
-    #[tokio::test]
-    async fn dial_aborts_immediately_when_cancelled() {
-        let (_cancel_tx, mut cancel) = watch::channel(true);
-        let started = Instant::now();
-        // Unroutable test address: black-holes SYNs in most environments, so
-        // only cancellation can end this quickly.
-        let result = dial("10.255.255.1", 22, Duration::from_secs(60), &mut cancel).await;
-        assert!(matches!(result, Err(SshError::SessionClosing)));
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "cancel must beat the 60s budget"
-        );
+    #[test]
+    fn signal_names_are_readable() {
+        assert_eq!(signal_label(&russh::Sig::KILL), "KILL");
+        assert_eq!(signal_label(&russh::Sig::Custom("XCPU".into())), "XCPU");
     }
 
     #[tokio::test]
@@ -1162,7 +1278,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(16);
         let params = ConnectParams {
             host: "127.0.0.1".into(),
-            // RFC 5737 TEST-NET-1 port 1: nothing listens; connect refused/timeout.
+            // Nothing listens on port 1: connect refused.
             port: 1,
             username: "nobody".into(),
             auth: crate::config::AuthChoice::Password {

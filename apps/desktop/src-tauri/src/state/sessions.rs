@@ -4,15 +4,38 @@
 //! * the manager is the **single owner** of every session (one map, shared by
 //!   all windows); a session id exists iff the map has an entry;
 //! * each session runs its connect/serve/forward loop in one background task;
-//!   the task exits when the session ends, the user closes it, or the
-//!   frontend channel disappears (orphan prevention);
-//! * `Closed` is the terminal status of any connection; a network-flavoured
-//!   death after a successful `Ready` gets a **bounded** number of automatic
-//!   reconnect cycles, so a pathological server cannot cause a hot loop.
+//!   the task exits when the session ends, the user closes it, or no view has
+//!   been attached for [`VIEW_GRACE`] (orphan prevention). A view that
+//!   disappears never ends the session by itself: output keeps flowing into
+//!   the replay ring, and a view that attaches within the grace period gets
+//!   the scrollback. This holds for every way a view can go: a tab detached
+//!   because it moved to another window (which attaches only after its
+//!   webview has loaded), a destroyed window, a view whose channel died.
+//!   Nothing closes a still-running session just because its last view is
+//!   gone; removing views wakes the session task, so the grace period also
+//!   starts for a session that produces no output at all;
+//! * `Closed` is the terminal status of any connection and is delivered to
+//!   every live view; a network-flavoured death after a successful `Ready`
+//!   gets a **bounded** number of automatic reconnect cycles (per streak and
+//!   over the whole session lifetime), so a pathological server cannot cause a
+//!   hot loop;
+//! * the replay ring, the status and the view list of a session live behind
+//!   **one lock** ([`Stream`]): output delivery and view registration are
+//!   mutually atomic, so an attaching view gets exactly the ring and then
+//!   every later byte — no gap, no duplicate.
+//!
+//! ## Write ordering
+//!
+//! `session_write` is a synchronous command that enqueues into the session's
+//! ordered input queue before it returns. Synchronous commands run in the
+//! order the IPC messages arrive, so arrival order equals enqueue order. The
+//! webview, however, may deliver *concurrent* `invoke` calls out of order:
+//! the frontend must serialize its writes (await the previous one, or batch
+//! keystrokes into one chunk).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -20,11 +43,11 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use termru_core::ids::HostId;
 use termru_ssh::{
-    ConnectParams, ErrorCategory, ReconnectPolicy, Session, SessionEvent, SessionOptions,
-    SessionStatus,
+    ConnectParams, ErrorCategory, ReconnectPolicy, ReplayRing, Session, SessionEvent,
+    SessionOptions, SessionStatus,
 };
 use termru_store::Store;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use crate::app_error::CommandError;
 
@@ -32,11 +55,24 @@ use crate::app_error::CommandError;
 const EVENT_BUFFER: usize = 256;
 /// Consecutive auto-reconnect cycles allowed without a stable `Ready`.
 const MAX_RECONNECT_CYCLES: u32 = 5;
+/// Auto-reconnect cycles allowed over the whole life of a session, however
+/// stable the connections in between were: a server that accepts and then
+/// drops us every 31 seconds must not be retried forever.
+const MAX_TOTAL_RECONNECTS: u32 = 20;
 /// A `Ready` lasting this long earns a fresh reconnect-cycle budget.
 const STABLE_READY: Duration = Duration::from_secs(30);
 /// Grace period for a view to (re-)attach before a session counts as
 /// orphaned — a tab moved to another window briefly has no view.
 const VIEW_GRACE: Duration = Duration::from_secs(10);
+/// Scrollback kept per session for views that attach later.
+const REPLAY_LIMIT: usize = 512 * 1024;
+/// Output that arrives within this window is forwarded as one update.
+const COALESCE_WINDOW: Duration = Duration::from_millis(8);
+/// A forwarded output update never exceeds this many bytes (before base64).
+const COALESCE_LIMIT: usize = 64 * 1024;
+/// A first chunk smaller than this is an interactive echo: it is forwarded
+/// at once instead of waiting for company.
+const COALESCE_MIN_WAIT: usize = 1024;
 
 /// What the frontend receives on the per-session channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,31 +168,83 @@ pub struct SessionInfo {
     pub status: SessionStatusDto,
 }
 
+/// One view (a terminal pane in some window) rendering a session. It carries
+/// the label of the window it lives in, so a closed window can release its
+/// views. (Dead views are removed under the [`Stream`] lock that also guards
+/// registration, so a view attached meanwhile can never be dropped by mistake.)
+struct View {
+    window: String,
+    channel: Channel<SessionUpdate>,
+}
+
+/// What must change atomically with the set of views: the status shown to a
+/// new view, the scrollback, and the views themselves. Output delivery
+/// (ring push + send to every view) and view registration (ring snapshot +
+/// send + push) both hold this lock for their whole duration.
+struct Stream {
+    status: SessionStatusDto,
+    ring: ReplayRing,
+    views: Vec<View>,
+    /// Wakes the session's pump when views were removed from outside it. The
+    /// pump only looks at the views when an event wakes it, and an idle
+    /// session (no output) has no events: without this signal it would never
+    /// notice that its last view is gone and the orphan grace period
+    /// ([`VIEW_GRACE`]) would never start.
+    views_changed: Arc<Notify>,
+}
+
+impl Stream {
+    /// Registers a view and wakes the pump, so that a grace period that is
+    /// running is cancelled right now and cannot expire on a view that was
+    /// attached and released again while the pump slept.
+    fn add_view(&mut self, view: View) {
+        self.views.push(view);
+        self.views_changed.notify_one();
+    }
+
+    /// Releases the views `window` holds and wakes the pump so that it
+    /// re-evaluates whether the session is still shown. (The pump removes dead
+    /// views itself while delivering output, and re-checks right after, so
+    /// that path needs no wake-up.)
+    fn remove_window(&mut self, window: &str) {
+        let before = self.views.len();
+        self.views.retain(|view| view.window.as_str() != window);
+        if self.views.len() != before {
+            // `notify_one` keeps a permit when the pump is not waiting right
+            // now, so the wake-up cannot be lost.
+            self.views_changed.notify_one();
+        }
+    }
+}
+
+fn lock_stream(stream: &Mutex<Stream>) -> MutexGuard<'_, Stream> {
+    stream
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 struct Managed {
     host_id: HostId,
-    status: SessionStatusDto,
     cancel: watch::Sender<bool>,
     session: Option<Session>,
     params: ConnectParams,
     /// `true` while the background connection task for this entry runs; a
     /// retry may never start a second task on the same entry.
     task_alive: bool,
-    /// All views currently rendering this session. The first one is the
-    /// owner that opened it; additional ones are attached later (a tab
-    /// moved to another window). The session itself lives in the manager —
-    /// views come and go without dropping the SSH connection.
-    ///
-    /// Each view carries an id so that a view attached *while* an event is
-    /// being forwarded is never dropped by the cleanup of dead views, and
-    /// the label of the window it lives in, so a closed window can release
-    /// its views.
-    views: Vec<(u64, String, Channel<SessionUpdate>)>,
+    /// The newest terminal size the UI asked for. It is applied when the
+    /// session becomes ready and used for the PTY request of every
+    /// (re)connect, so a resize that happens while connecting is not lost.
+    geometry: (u16, u16),
+    /// Status, scrollback and views. The views come and go without dropping
+    /// the SSH connection; the first one is the owner that opened the
+    /// session, additional ones are attached later (a tab moved to another
+    /// window).
+    stream: Arc<Mutex<Stream>>,
 }
 
 pub struct SessionManager {
     entries: Mutex<HashMap<String, Managed>>,
     next_id: AtomicU64,
-    next_view_id: AtomicU64,
 }
 
 impl SessionManager {
@@ -164,14 +252,27 @@ impl SessionManager {
         Self {
             entries: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            next_view_id: AtomicU64::new(1),
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Managed>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Managed>> {
         self.entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Lock order: the entry map first, then at most one [`Stream`]. Every
+    /// method that needs both takes the map lock, clones the stream `Arc`,
+    /// releases the map and only then locks the stream.
+    fn stream(&self, id: &str) -> Option<Arc<Mutex<Stream>>> {
+        self.lock().get(id).map(|entry| entry.stream.clone())
+    }
+
+    fn new_view(window: &str, channel: Channel<SessionUpdate>) -> View {
+        View {
+            window: window.to_string(),
+            channel,
+        }
     }
 
     /// Registers a connecting session; returns its id and the cancellation
@@ -186,29 +287,41 @@ impl SessionManager {
         let seq = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("s{seq}");
         let (cancel, cancel_rx) = watch::channel(false);
+        let stream = Stream {
+            status: SessionStatusDto::Connecting,
+            ring: ReplayRing::new(REPLAY_LIMIT),
+            views: vec![Self::new_view(window, view)],
+            views_changed: Arc::new(Notify::new()),
+        };
         self.lock().insert(
             id.clone(),
             Managed {
                 host_id,
-                status: SessionStatusDto::Connecting,
                 cancel,
                 session: None,
                 params,
                 task_alive: true,
-                views: vec![(
-                    self.next_view_id.fetch_add(1, Ordering::Relaxed),
-                    window.to_string(),
-                    view,
-                )],
+                geometry: (80, 24),
+                stream: Arc::new(Mutex::new(stream)),
             },
         );
         (id, cancel_rx)
     }
 
     /// Called by the connection task when it exits for any reason.
+    ///
+    /// An entry that nobody shows any more is released with its
+    /// `ConnectParams` (and the secrets inside). While a view still shows the
+    /// ended session the entry stays: the UI offers "Reconnect", which needs
+    /// the parameters; closing the tab or the window releases it then.
     pub fn mark_task_dead(&self, id: &str) {
-        if let Some(entry) = self.lock().get_mut(id) {
-            entry.task_alive = false;
+        let mut guard = self.lock();
+        let Some(entry) = guard.get_mut(id) else {
+            return;
+        };
+        entry.task_alive = false;
+        if lock_stream(&entry.stream).views.is_empty() {
+            guard.remove(id);
         }
     }
 
@@ -218,9 +331,9 @@ impl SessionManager {
         &self,
         id: &str,
     ) -> Result<(ConnectParams, watch::Receiver<bool>), CommandError> {
-        let guard = self.lock();
+        let mut guard = self.lock();
         let entry = guard
-            .get(id)
+            .get_mut(id)
             .ok_or_else(|| CommandError::not_found("session", id))?;
         if entry.task_alive {
             return Err(CommandError::new(
@@ -235,99 +348,109 @@ impl SessionManager {
                 "session was cancelled; open a new connection instead",
             ));
         }
+        // The caller starts the new connection task right away: claiming the
+        // entry here (under the lock) keeps a second retry out, and keeps the
+        // entry from being treated as finished while the task runs.
+        entry.task_alive = true;
         Ok((entry.params.clone(), entry.cancel.subscribe()))
     }
 
     /// Adds a view to a session without touching its transport (used when a
-    /// view (re)connects to an existing session).
+    /// view (re)connects to an existing session, e.g. on retry).
     pub fn add_view(&self, id: &str, window: &str, view: Channel<SessionUpdate>) {
-        let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.lock();
-        if let Some(entry) = guard.get_mut(id) {
-            entry.views.push((view_id, window.to_string(), view));
+        if let Some(stream) = self.stream(id) {
+            let view = Self::new_view(window, view);
+            lock_stream(&stream).add_view(view);
         }
     }
 
-    /// Attaches an additional view to a live session. The session keeps
-    /// running: the new view receives the replay buffer and then the live
-    /// stream. Used when a tab is moved to another window.
+    /// Attaches an additional view to a session. The session keeps running:
+    /// the new view receives the scrollback, the current status and then the
+    /// live stream. Used when a tab is moved to another window.
+    ///
+    /// Snapshot and registration happen under the stream lock that output
+    /// delivery also holds, so output produced meanwhile is either in the
+    /// snapshot or delivered after the registration — never lost, never
+    /// duplicated.
     pub async fn attach_view(
         &self,
         id: &str,
         window: &str,
         view: Channel<SessionUpdate>,
     ) -> Result<(), CommandError> {
-        let (session, status) = {
-            let guard = self.lock();
-            let entry = guard
-                .get(id)
-                .ok_or_else(|| CommandError::not_found("session", id))?;
-            let session = entry
-                .session
-                .clone()
-                .ok_or_else(|| CommandError::new("session is not connected yet"))?;
-            (session, entry.status.clone())
-        };
-
-        // Replay first, so the new view shows the same scrollback, then live
-        // events follow.
-        let replay = session.replay_snapshot().await?;
-        if !replay.is_empty() {
-            let _ = view.send(SessionUpdate::Data {
-                base64: base64::engine::general_purpose::STANDARD.encode(replay),
+        let stream = self
+            .stream(id)
+            .ok_or_else(|| CommandError::not_found("session", id))?;
+        let view = Self::new_view(window, view);
+        let mut guard = lock_stream(&stream);
+        let snapshot = guard.ring.snapshot();
+        if !snapshot.is_empty() {
+            let _ = view.channel.send(SessionUpdate::Data {
+                base64: encode(&snapshot),
             });
         }
-        let _ = view.send(SessionUpdate::Status { status });
-
-        let view_id = self.next_view_id.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.lock();
-        if let Some(entry) = guard.get_mut(id) {
-            entry.views.push((view_id, window.to_string(), view));
-        }
+        let _ = view.channel.send(SessionUpdate::Status {
+            status: guard.status.clone(),
+        });
+        guard.add_view(view);
         Ok(())
     }
 
     /// Releases the views of a window that was closed.
     ///
-    /// Returns the sessions that nobody shows any more: their SSH
-    /// connection would stay open for nothing, so the caller closes them.
-    /// A session that another window still shows keeps running.
-    pub fn drop_window_views(&self, window: &str) -> Vec<String> {
-        let mut orphaned = Vec::new();
+    /// A session that nobody shows any more is **not** closed here: its tab
+    /// may be on its way to another window that has not attached yet (the
+    /// window was closed right after "move to new window"). The session's
+    /// pump closes it when no view attached within [`VIEW_GRACE`]; this call
+    /// only wakes the pump so that the grace period starts at once, also for
+    /// a session that produces no output. Sessions that already ended and are
+    /// shown nowhere are released right here.
+    pub fn drop_window_views(&self, window: &str) {
+        let mut finished = Vec::new();
         let mut guard = self.lock();
-        for (id, entry) in guard.iter_mut() {
-            entry.views.retain(|(_, label, _)| label.as_str() != window);
-            if entry.views.is_empty() && entry.task_alive {
-                orphaned.push(id.clone());
+        for (id, entry) in guard.iter() {
+            let mut stream = lock_stream(&entry.stream);
+            stream.remove_window(window);
+            if stream.views.is_empty() && !entry.task_alive {
+                finished.push(id.clone());
             }
         }
-        orphaned
+        for id in finished {
+            guard.remove(&id);
+        }
+    }
+
+    /// Releases the views that `window` holds on one session, without closing
+    /// it (a tab that moved to another window). Same rule as for a destroyed
+    /// window ([`SessionManager::drop_window_views`]): a session left without
+    /// any view keeps running for [`VIEW_GRACE`], so a view that attaches in
+    /// time keeps it alive, and is closed by its pump after that. A session
+    /// that already ended and is shown nowhere is released here.
+    ///
+    /// The frontend detaches right after the new window was *created*, which
+    /// is before that window's webview has loaded and attached; closing the
+    /// session at this point would kill the tab that is being moved.
+    pub fn detach_window_views(&self, id: &str, window: &str) -> Result<(), CommandError> {
+        let mut guard = self.lock();
+        let entry = guard
+            .get(id)
+            .ok_or_else(|| CommandError::not_found("session", id))?;
+        let finished = {
+            let mut stream = lock_stream(&entry.stream);
+            stream.remove_window(window);
+            stream.views.is_empty() && !entry.task_alive
+        };
+        if finished {
+            guard.remove(id);
+        }
+        Ok(())
     }
 
     /// Number of views currently rendering a session.
     pub fn view_count(&self, id: &str) -> usize {
-        self.lock()
-            .get(id)
-            .map(|entry| entry.views.len())
+        self.stream(id)
+            .map(|stream| lock_stream(&stream).views.len())
             .unwrap_or(0)
-    }
-
-    /// Snapshot of the views rendering a session.
-    fn views(&self, id: &str) -> Vec<(u64, String, Channel<SessionUpdate>)> {
-        self.lock()
-            .get(id)
-            .map(|entry| entry.views.clone())
-            .unwrap_or_default()
-    }
-
-    /// Removes the views whose window disappeared. Views attached in the
-    /// meantime are kept (they are not part of `dead`).
-    fn remove_views(&self, id: &str, dead: &[u64]) {
-        if let Some(entry) = self.lock().get_mut(id) {
-            entry
-                .views
-                .retain(|(view_id, _, _)| !dead.contains(view_id));
-        }
     }
 
     pub fn set_session(&self, id: &str, session: Option<Session>) {
@@ -337,20 +460,22 @@ impl SessionManager {
     }
 
     pub fn set_status(&self, id: &str, status: SessionStatusDto) {
-        if let Some(entry) = self.lock().get_mut(id) {
-            entry.status = status;
+        if let Some(stream) = self.stream(id) {
+            lock_stream(&stream).status = status;
         }
     }
 
     pub fn status(&self, id: &str) -> Option<SessionStatusDto> {
-        self.lock().get(id).map(|entry| entry.status.clone())
+        self.stream(id)
+            .map(|stream| lock_stream(&stream).status.clone())
     }
 
     pub fn info(&self, id: &str) -> Option<SessionInfo> {
-        self.lock().get(id).map(|entry| SessionInfo {
+        let guard = self.lock();
+        guard.get(id).map(|entry| SessionInfo {
             id: id.to_string(),
             host_id: entry.host_id,
-            status: entry.status.clone(),
+            status: lock_stream(&entry.stream).status.clone(),
         })
     }
 
@@ -361,7 +486,7 @@ impl SessionManager {
             .map(|(id, entry)| SessionInfo {
                 id: id.clone(),
                 host_id: entry.host_id,
-                status: entry.status.clone(),
+                status: lock_stream(&entry.stream).status.clone(),
             })
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -382,6 +507,17 @@ impl SessionManager {
             .is_some_and(|entry| *entry.cancel.borrow())
     }
 
+    /// The terminal size the session should have (see [`Managed::geometry`]).
+    pub fn geometry(&self, id: &str) -> Option<(u16, u16)> {
+        self.lock().get(id).map(|entry| entry.geometry)
+    }
+
+    pub fn set_geometry(&self, id: &str, cols: u16, rows: u16) {
+        if let Some(entry) = self.lock().get_mut(id) {
+            entry.geometry = (cols, rows);
+        }
+    }
+
     /// User-facing close: take the entry, signal cancellation, close the
     /// transport. A second close reports not-found (the UI has already
     /// removed the tab).
@@ -397,8 +533,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Internal cleanup (frontend channel gone): tolerates a missing entry
-    /// so races with `close` never error.
+    /// Internal cleanup (no view left): tolerates a missing entry so races
+    /// with `close` never error.
     async fn close_now(&self, id: &str) {
         // The lock guard must be released before awaiting.
         let entry = { self.lock().remove(id) };
@@ -410,15 +546,43 @@ impl SessionManager {
         }
     }
 
+    /// Queues `data` for the session's shell **now**, in call order, without
+    /// blocking: this is what the synchronous `session_write` command uses.
+    /// A full queue (the remote stopped reading input) is reported as an
+    /// error instead of waiting.
+    pub fn try_write(&self, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
+        self.live_session(id)?.try_write(data)?;
+        Ok(())
+    }
+
+    /// Like [`SessionManager::try_write`], but waits while the input queue is
+    /// full.
     pub async fn write(&self, id: &str, data: Vec<u8>) -> Result<(), CommandError> {
         let session = self.live_session(id)?;
         session.write(data).await?;
         Ok(())
     }
 
-    pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), CommandError> {
-        let session = self.live_session(id)?;
-        session.resize(cols, rows).await?;
+    /// Records the terminal size and applies it when the session is up.
+    ///
+    /// While the session is still connecting (or reconnecting) the size is
+    /// only stored — and returns `Ok`, because nothing went wrong: it is
+    /// applied the moment the session becomes ready and is used for the PTY
+    /// request of every later reconnect.
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), CommandError> {
+        let session = {
+            let mut guard = self.lock();
+            let entry = guard
+                .get_mut(id)
+                .ok_or_else(|| CommandError::not_found("session", id))?;
+            entry.geometry = (cols, rows);
+            entry.session.clone()
+        };
+        if let Some(session) = session {
+            // A session that is just going away needs no resize; the size is
+            // stored for the reconnect.
+            let _ = session.try_resize(cols, rows);
+        }
         Ok(())
     }
 
@@ -455,41 +619,52 @@ impl Default for SessionManager {
     }
 }
 
-/// Waits (up to `grace`) for a view to attach to the session.
-async fn wait_for_view(manager: &SessionManager, id: &str, grace: Duration) -> bool {
-    let deadline = std::time::Instant::now() + grace;
-    loop {
-        if manager.view_count(id) > 0 {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+// ---------- delivery to the views ----------
+
+fn encode(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Sends an update to every view of a session.
-///
-/// Returns `false` when no view accepted it (all views are gone) — the
-/// caller then treats the session as orphaned.
-fn forward(manager: &SessionManager, id: &str, update: SessionUpdate) -> bool {
-    let views = manager.views(id);
-    if views.is_empty() {
-        return false;
-    }
-    let mut dead: Vec<u64> = Vec::new();
-    let mut any_alive = false;
-    for (view_id, _, view) in views {
-        if view.send(update.clone()).is_ok() {
-            any_alive = true;
-        } else {
-            dead.push(view_id);
+/// Sends `update` to every view and drops the views that are gone. Returns
+/// how many views are left. The common single-view case sends by move.
+fn broadcast(views: &mut Vec<View>, update: SessionUpdate) -> usize {
+    if let [only] = views.as_slice() {
+        if only.channel.send(update).is_err() {
+            views.clear();
         }
+        return views.len();
     }
-    manager.remove_views(id, &dead);
-    any_alive
+    views.retain(|view| view.channel.send(update.clone()).is_ok());
+    views.len()
 }
+
+/// Appends output to the scrollback **and** sends it to every view, under
+/// one lock (see [`Stream`]). Returns the number of views left.
+fn deliver_data(stream: &Mutex<Stream>, bytes: &[u8]) -> usize {
+    let mut guard = lock_stream(stream);
+    guard.ring.push(bytes);
+    broadcast(
+        &mut guard.views,
+        SessionUpdate::Data {
+            base64: encode(bytes),
+        },
+    )
+}
+
+/// Records the status (for views that attach later) and sends it to every
+/// view.
+fn deliver_status(stream: &Mutex<Stream>, status: SessionStatusDto) -> usize {
+    let mut guard = lock_stream(stream);
+    guard.status = status.clone();
+    broadcast(&mut guard.views, SessionUpdate::Status { status })
+}
+
+fn deliver_exit(stream: &Mutex<Stream>, code: Option<i32>) -> usize {
+    let mut guard = lock_stream(stream);
+    broadcast(&mut guard.views, SessionUpdate::Exit { code })
+}
+
+// ---------- the connection task ----------
 
 /// Outcome of one connect+serve cycle.
 enum CycleEnd {
@@ -497,18 +672,31 @@ enum CycleEnd {
     AutoReconnect,
     /// Done: user close, non-retriable failure, budget exhausted, cancel.
     Stop,
-    /// The frontend channel receiver is gone: tab/window disappeared.
+    /// No view showed the session for the whole grace period.
     ChannelGone,
+}
+
+/// Auto-reconnect accounting of one session.
+#[derive(Default)]
+struct ReconnectBudget {
+    /// Cycles since the last stable `Ready`.
+    streak: u32,
+    /// Cycles over the whole session lifetime (never reset).
+    total: u32,
 }
 
 /// Pure reconnect verdict — unit-testable without time or sockets.
 fn should_auto_reconnect(
     ever_ready: bool,
     failed: Option<ErrorCategory>,
-    cycles: u32,
+    budget: &ReconnectBudget,
     cancelled: bool,
 ) -> bool {
-    if cancelled || !ever_ready || cycles >= MAX_RECONNECT_CYCLES {
+    if cancelled
+        || !ever_ready
+        || budget.streak >= MAX_RECONNECT_CYCLES
+        || budget.total >= MAX_TOTAL_RECONNECTS
+    {
         return false;
     }
     matches!(
@@ -529,49 +717,41 @@ pub fn spawn_connection(
     options: SessionOptions,
     cancel: watch::Receiver<bool>,
 ) {
+    // The requested size is the session's geometry from here on; resizes
+    // update it, and every cycle reads it back.
+    manager.set_geometry(&id, options.cols, options.rows);
     tauri::async_runtime::spawn(async move {
         let mut ever_ready = false;
-        let mut cycles: u32 = 0;
+        let mut budget = ReconnectBudget::default();
         let mut ready_since: Option<Instant> = None;
 
-        loop {
-            if *cancel.borrow() {
+        while !*cancel.borrow() {
+            let Some(stream) = manager.stream(&id) else {
                 break;
-            }
-            let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(EVENT_BUFFER);
-            let opened = Session::open_with_reconnect(
+            };
+            let (cols, rows) = manager
+                .geometry(&id)
+                .unwrap_or((options.cols, options.rows));
+            let cycle_options = SessionOptions {
+                cols,
+                rows,
+                // The manager keeps its own ring next to the view list (see
+                // `Stream`); a second copy inside the engine would only cost
+                // memory.
+                replay_limit: 0,
+            };
+            let end = run_cycle(
+                &manager,
+                &store,
+                &id,
+                stream,
                 params.clone(),
-                options.clone(),
-                ev_tx,
-                ReconnectPolicy::default(),
+                cycle_options,
                 cancel.clone(),
+                (&mut ever_ready, &mut ready_since, &mut budget),
             )
             .await;
-
-            let end = match opened {
-                Ok(session) => {
-                    manager.set_session(&id, Some(session));
-                    let end = pump(
-                        &id,
-                        &manager,
-                        &store,
-                        &mut ev_rx,
-                        &mut ever_ready,
-                        &mut ready_since,
-                        &mut cycles,
-                    )
-                    .await;
-                    manager.set_session(&id, None);
-                    end
-                }
-                Err(_) => {
-                    // Failure/cancellation statuses were already emitted on
-                    // the events channel; forward whatever is buffered.
-                    drain(&id, &manager, &mut ev_rx, &mut ever_ready).await;
-                    manager.set_session(&id, None);
-                    CycleEnd::Stop
-                }
-            };
+            manager.set_session(&id, None);
 
             match end {
                 CycleEnd::Stop => break,
@@ -579,137 +759,300 @@ pub fn spawn_connection(
                     manager.close_now(&id).await;
                     break;
                 }
-                CycleEnd::AutoReconnect => cycles = cycles.saturating_add(1),
+                CycleEnd::AutoReconnect => {
+                    budget.streak = budget.streak.saturating_add(1);
+                    budget.total = budget.total.saturating_add(1);
+                }
             }
         }
         manager.mark_task_dead(&id);
     });
 }
 
+/// One connect + serve cycle: opens the session and forwards its events to
+/// the views until it ends.
+///
+/// Opening and forwarding run in one loop, so the progress statuses
+/// (`Connecting`, `Reconnecting`, ...) reach the UI while the connect is
+/// still in flight instead of in one burst afterwards.
 #[allow(clippy::too_many_arguments)]
-async fn pump(
-    id: &str,
+async fn run_cycle(
     manager: &SessionManager,
-    store: &Store,
-    ev_rx: &mut mpsc::Receiver<SessionEvent>,
-    ever_ready: &mut bool,
-    ready_since: &mut Option<Instant>,
-    cycles: &mut u32,
+    store: &Arc<Store>,
+    id: &str,
+    stream: Arc<Mutex<Stream>>,
+    params: ConnectParams,
+    options: SessionOptions,
+    cancel: watch::Receiver<bool>,
+    (ever_ready, ready_since, budget): (&mut bool, &mut Option<Instant>, &mut ReconnectBudget),
 ) -> CycleEnd {
-    let mut failed: Option<ErrorCategory> = None;
+    let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(EVENT_BUFFER);
+    let opened_size = (options.cols, options.rows);
+    let mut open = Box::pin(Session::open_with_reconnect(
+        params,
+        options,
+        ev_tx,
+        ReconnectPolicy::default(),
+        cancel,
+    ));
+    let mut opening = true;
+    // `Ready` is held back until the session is registered with the manager,
+    // so a UI that reacts to it by writing never hits "not ready yet".
+    let mut held_ready: Option<SessionEvent> = None;
+    let mut pump = Pump {
+        id,
+        manager,
+        store,
+        views: ViewWatch::new(stream.clone()),
+        stream,
+        session: None,
+        opened_size,
+        ever_ready,
+        ready_since,
+        budget,
+        failed: None,
+    };
+    let mut deferred: Option<SessionEvent> = None;
+
     loop {
-        let Some(event) = ev_rx.recv().await else {
-            // All senders gone without a `Closed`: abrupt end (actor panic or
-            // drop). Same verdict logic with no observed failure category.
-            return verdict(*ever_ready, failed, ready_since, cycles, false);
+        let event = if let Some(event) = deferred.take() {
+            event
+        } else {
+            tokio::select! {
+                // Polled first so that an expired grace period wins over a
+                // steady flow of events. It also reacts to views that were
+                // removed while no event arrives (see `ViewWatch`).
+                biased;
+                () = pump.views.orphaned() => return CycleEnd::ChannelGone,
+                opened = &mut open, if opening => {
+                    opening = false;
+                    if let Ok(session) = opened {
+                        manager.set_session(id, Some(session.clone()));
+                        pump.session = Some(session);
+                        if let Some(ready) = held_ready.take() {
+                            deferred = Some(ready);
+                        }
+                    }
+                    // On failure the final statuses are already queued in
+                    // `ev_rx`; they are forwarded below.
+                    continue;
+                }
+                received = ev_rx.recv() => match received {
+                    Some(event) => event,
+                    None => return pump.ended_without_close(),
+                },
+            }
         };
 
-        let (update, terminal_closed) = match &event {
+        match event {
+            SessionEvent::Data(bytes) => {
+                let (merged, next) = coalesce(bytes, &mut ev_rx).await;
+                deliver_data(&pump.stream, &merged);
+                deferred = next;
+            }
+            SessionEvent::Exit { code } => {
+                deliver_exit(&pump.stream, code);
+            }
+            SessionEvent::Status(SessionStatus::Ready) if opening => {
+                held_ready = Some(SessionEvent::Status(SessionStatus::Ready));
+            }
             SessionEvent::Status(status) => {
-                let dto = SessionStatusDto::from(status);
-                if let SessionStatus::Failed { category, .. } = status {
-                    failed = Some(*category);
+                if let Some(end) = pump.on_status(&status) {
+                    return end;
                 }
-                if matches!(status, SessionStatus::Ready) {
-                    failed = None;
-                    *ever_ready = true;
-                    *ready_since = Some(Instant::now());
-                    if let Some(host_id) = manager.host_id(id) {
-                        let _ = store.repos().hosts().touch_recent(host_id);
+            }
+        }
+    }
+}
+
+/// Merges consecutive output chunks into one update of at most
+/// [`COALESCE_LIMIT`] bytes.
+///
+/// Chunks that are already queued are always merged. When the first chunk is
+/// big enough to suggest streaming output, the producer gets up to
+/// [`COALESCE_WINDOW`] to add more; a small chunk (a keystroke echo) is
+/// forwarded immediately. Returns the merged bytes and the first event that
+/// is not output (it must be handled next, in order).
+async fn coalesce(
+    first: Vec<u8>,
+    ev_rx: &mut mpsc::Receiver<SessionEvent>,
+) -> (Vec<u8>, Option<SessionEvent>) {
+    let mut merged = first;
+    let deadline = tokio::time::Instant::now() + COALESCE_WINDOW;
+    while merged.len() < COALESCE_LIMIT {
+        let next = match ev_rx.try_recv() {
+            Ok(event) => event,
+            Err(mpsc::error::TryRecvError::Disconnected) => break,
+            Err(mpsc::error::TryRecvError::Empty) => {
+                if merged.len() < COALESCE_MIN_WAIT {
+                    break;
+                }
+                match tokio::time::timeout_at(deadline, ev_rx.recv()).await {
+                    Ok(Some(event)) => event,
+                    Ok(None) | Err(_) => break,
+                }
+            }
+        };
+        match next {
+            SessionEvent::Data(more) if merged.len() + more.len() <= COALESCE_LIMIT => {
+                merged.extend_from_slice(&more);
+            }
+            // Over the limit, or not output at all: handled next, in order.
+            other => return (merged, Some(other)),
+        }
+    }
+    (merged, None)
+}
+
+/// Tracks how long a session has been shown nowhere.
+///
+/// All of its state lives in the struct, so the future of
+/// [`ViewWatch::orphaned`] can be dropped and recreated at will (the pump
+/// does that on every loop iteration).
+struct ViewWatch {
+    stream: Arc<Mutex<Stream>>,
+    views_changed: Arc<Notify>,
+    /// Since when no view shows the session. Tokio's clock, so that the
+    /// grace period follows the paused clock of the tests.
+    orphan_since: Option<tokio::time::Instant>,
+}
+
+impl ViewWatch {
+    fn new(stream: Arc<Mutex<Stream>>) -> Self {
+        let views_changed = lock_stream(&stream).views_changed.clone();
+        Self {
+            stream,
+            views_changed,
+            orphan_since: None,
+        }
+    }
+
+    /// Starts the grace period when the last view is gone, cancels it when a
+    /// view is there again.
+    fn refresh(&mut self) {
+        let shown = !lock_stream(&self.stream).views.is_empty();
+        if shown {
+            self.orphan_since = None;
+        } else if self.orphan_since.is_none() {
+            self.orphan_since = Some(tokio::time::Instant::now());
+        }
+    }
+
+    /// Resolves when no view has shown the session for [`VIEW_GRACE`].
+    ///
+    /// A view that attaches within the grace period cancels it. The future
+    /// is woken whenever views come or go (`Stream::add_view`,
+    /// `Stream::remove_window`), so a session that receives no events still
+    /// starts the grace period when it loses its last view.
+    async fn orphaned(&mut self) {
+        loop {
+            self.refresh();
+            let Some(since) = self.orphan_since else {
+                self.views_changed.notified().await;
+                continue;
+            };
+            tokio::select! {
+                () = self.views_changed.notified() => {}
+                () = tokio::time::sleep_until(since + VIEW_GRACE) => {
+                    // A view may have attached while the timer fired.
+                    self.refresh();
+                    if self.orphan_since.is_some() {
+                        return;
                     }
                 }
-                let closed = matches!(status, SessionStatus::Closed { .. });
-                (
-                    SessionUpdate::Status {
-                        status: dto.clone(),
-                    },
-                    closed,
-                )
             }
-            SessionEvent::Data(bytes) => (
-                SessionUpdate::Data {
-                    base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                },
-                false,
-            ),
-            SessionEvent::Exit { code } => (SessionUpdate::Exit { code: *code }, false),
-        };
-
-        if let SessionUpdate::Status { status } = &update {
-            manager.set_status(id, status.clone());
-        }
-        if !forward(manager, id, update) {
-            // No view accepted the event. The frontend window/tab may be
-            // gone (orphaned) or just moving to another window (a new view
-            // attaches within the grace period).
-            if !wait_for_view(manager, id, VIEW_GRACE).await {
-                return CycleEnd::ChannelGone;
-            }
-            // The new view gets the replay buffer on attach.
-            continue;
-        }
-        if terminal_closed {
-            let cancelled = manager.is_cancelled(id);
-            return verdict(*ever_ready, failed, ready_since, cycles, cancelled);
         }
     }
 }
 
-fn verdict(
-    ever_ready: bool,
+/// The forwarding state of one cycle.
+struct Pump<'a> {
+    id: &'a str,
+    manager: &'a SessionManager,
+    store: &'a Arc<Store>,
+    stream: Arc<Mutex<Stream>>,
+    views: ViewWatch,
+    /// The live session, once the open completed.
+    session: Option<Session>,
+    /// Size the session was opened with.
+    opened_size: (u16, u16),
+    ever_ready: &'a mut bool,
+    ready_since: &'a mut Option<Instant>,
+    budget: &'a mut ReconnectBudget,
     failed: Option<ErrorCategory>,
-    ready_since: &mut Option<Instant>,
-    cycles: &mut u32,
-    cancelled: bool,
-) -> CycleEnd {
-    if ready_since
-        .take()
-        .is_some_and(|at| at.elapsed() >= STABLE_READY)
-    {
-        *cycles = 0;
-    }
-    if should_auto_reconnect(ever_ready, failed, *cycles, cancelled) {
-        CycleEnd::AutoReconnect
-    } else {
-        CycleEnd::Stop
-    }
 }
 
-/// Drain events buffered during a failed connect attempt, forwarding each.
-async fn drain(
-    id: &str,
-    manager: &SessionManager,
-    ev_rx: &mut mpsc::Receiver<SessionEvent>,
-    ever_ready: &mut bool,
-) {
-    loop {
-        match ev_rx.try_recv() {
-            Ok(SessionEvent::Status(status)) => {
-                let dto = SessionStatusDto::from(&status);
-                if matches!(status, SessionStatus::Ready) {
-                    *ever_ready = true;
-                }
-                manager.set_status(id, dto.clone());
-                if !forward(manager, id, SessionUpdate::Status { status: dto }) {
-                    return;
-                }
+impl Pump<'_> {
+    /// Handles a status event; returns the end of the cycle when it was the
+    /// terminal `Closed`.
+    fn on_status(&mut self, status: &SessionStatus) -> Option<CycleEnd> {
+        match status {
+            SessionStatus::Failed { category, .. } => self.failed = Some(*category),
+            SessionStatus::Ready => {
+                self.failed = None;
+                *self.ever_ready = true;
+                *self.ready_since = Some(Instant::now());
+                self.touch_recent();
+                self.apply_latest_geometry();
             }
-            Ok(SessionEvent::Data(bytes)) => {
-                let update = SessionUpdate::Data {
-                    base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                };
-                if !forward(manager, id, update) {
-                    return;
+            _ => {}
+        }
+        deliver_status(&self.stream, SessionStatusDto::from(status));
+        if matches!(status, SessionStatus::Closed { .. }) {
+            return Some(self.verdict());
+        }
+        None
+    }
+
+    /// The engine has no `Closed` for us (its task died or was dropped): tell
+    /// the views anyway, so no tab is left showing a connection that is gone.
+    fn ended_without_close(&mut self) -> CycleEnd {
+        deliver_status(
+            &self.stream,
+            SessionStatusDto::Closed {
+                reason: "the connection ended unexpectedly".to_string(),
+            },
+        );
+        self.verdict()
+    }
+
+    /// Records the host as recently used. SQLite must not run on an async
+    /// worker, and the pump must not wait for it.
+    fn touch_recent(&self) {
+        if let Some(host_id) = self.manager.host_id(self.id) {
+            let store = self.store.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = store.repos().hosts().touch_recent(host_id) {
+                    tracing::warn!(%error, "could not record the recent host");
                 }
-            }
-            Ok(SessionEvent::Exit { code }) => {
-                if !forward(manager, id, SessionUpdate::Exit { code }) {
-                    return;
-                }
-            }
-            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
-                return;
-            }
+            });
+        }
+    }
+
+    /// A resize that arrived while connecting is applied now.
+    fn apply_latest_geometry(&self) {
+        let (Some(session), Some((cols, rows))) = (&self.session, self.manager.geometry(self.id))
+        else {
+            return;
+        };
+        if (cols, rows) != self.opened_size {
+            let _ = session.try_resize(cols, rows);
+        }
+    }
+
+    fn verdict(&mut self) -> CycleEnd {
+        if self
+            .ready_since
+            .take()
+            .is_some_and(|at| at.elapsed() >= STABLE_READY)
+        {
+            self.budget.streak = 0;
+        }
+        let cancelled = self.manager.is_cancelled(self.id);
+        if should_auto_reconnect(*self.ever_ready, self.failed, self.budget, cancelled) {
+            CycleEnd::AutoReconnect
+        } else {
+            CycleEnd::Stop
         }
     }
 }
@@ -747,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_window_orphans_only_the_sessions_it_showed() {
+    fn closing_a_window_releases_only_its_views() {
         let manager = SessionManager::new();
         let host = HostId::new();
         let (mine, _a) = manager.register(host, params(), "main", test_channel());
@@ -757,19 +1100,74 @@ mod tests {
         assert_eq!(manager.view_count(&shared), 2);
 
         // Closing the first window releases its views.
-        let orphaned = manager.drop_window_views("main");
-        assert_eq!(orphaned, vec![mine.clone()]);
+        manager.drop_window_views("main");
         // The session the other window still shows keeps running.
         assert_eq!(manager.view_count(&shared), 1);
         assert!(manager.info(&shared).is_some());
+        // Regression test (a tab moved to a window that has not attached yet
+        // died with the window it left): a session nobody shows any more is
+        // not closed here, its pump closes it after the grace period.
+        assert_eq!(manager.view_count(&mine), 0);
+        assert!(manager.info(&mine).is_some(), "left to the grace period");
+    }
+
+    /// `session_detach`: only the calling window's views go.
+    ///
+    /// Regression test (moving a tab to a new window killed the session): the
+    /// frontend detaches as soon as the new window is *created*, before that
+    /// window's webview attached. A session left without a view must survive
+    /// the detach and accept a view that attaches afterwards.
+    #[test]
+    fn detaching_a_window_keeps_sessions_other_windows_show() {
+        let manager = SessionManager::new();
+        let host = HostId::new();
+        let (id, _cancel) = manager.register(host, params(), "main", test_channel());
+        // The tab moved: the new window attached first.
+        manager.add_view(&id, "other", test_channel());
+        manager.add_view(&id, "other", test_channel());
+        assert_eq!(manager.view_count(&id), 3);
+
+        // The old window lets go: the session stays, with the new window's views.
+        manager.detach_window_views(&id, "main").unwrap();
+        assert_eq!(manager.view_count(&id), 2);
+        // Detaching a window that holds no view is a harmless no-op.
+        manager.detach_window_views(&id, "main").unwrap();
+        assert_eq!(manager.view_count(&id), 2);
+        assert!(manager.info(&id).is_some(), "still running");
+
+        // The last window lets go: the session is *not* closed (its view may
+        // be on the way), it is left to the grace period of its pump.
+        manager.detach_window_views(&id, "other").unwrap();
+        assert_eq!(manager.view_count(&id), 0);
+        assert!(manager.info(&id).is_some(), "not closed by the detach");
+        // A view that attaches afterwards (the new window's webview loaded).
+        futures_block(manager.attach_view(&id, "new", test_channel())).unwrap();
+        assert_eq!(manager.view_count(&id), 1);
+        assert!(manager.info(&id).is_some());
+        futures_block(manager.close(&id)).unwrap();
+        assert!(manager.info(&id).is_none());
+    }
+
+    #[test]
+    fn detaching_from_an_unknown_or_ended_session() {
+        let manager = SessionManager::new();
+        let error = manager.detach_window_views("s999", "main").unwrap_err();
+        assert!(error.message.contains("no session"));
+
+        // An ended session that nobody shows after the detach is released.
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        manager.mark_task_dead(&id);
+        assert!(manager.info(&id).is_some(), "shown, so it stays");
+        manager.detach_window_views(&id, "main").unwrap();
+        assert!(manager.info(&id).is_none(), "released with its last view");
     }
 
     /// The interleavings of a user who opens, closes, moves and quits fast.
     ///
     /// The invariants: a session that was closed is gone (and closing it
     /// again reports "no session"), a session that is still shown keeps its
-    /// views, and a session nobody shows any more is reported as orphaned
-    /// exactly once.
+    /// views, and a session nobody shows any more is kept for the grace
+    /// period instead of being closed on the spot.
     #[test]
     fn rapid_open_close_and_move_keep_the_invariants() {
         let manager = SessionManager::new();
@@ -795,9 +1193,8 @@ mod tests {
         assert_eq!(alive, 20 - 7);
 
         // The first window goes away: every session is still shown in the
-        // second window, so none of them is orphaned.
-        let orphaned = manager.drop_window_views("main");
-        assert!(orphaned.is_empty());
+        // second window.
+        manager.drop_window_views("main");
         for id in &ids {
             if manager.info(id).is_none() {
                 continue; // closed above
@@ -806,12 +1203,18 @@ mod tests {
             assert_eq!(manager.view_count(id), 1);
         }
 
-        // The second window goes away too: now nobody shows them.
-        let orphaned = manager.drop_window_views("other");
-        assert_eq!(orphaned.len(), alive);
+        // The second window goes away too: nobody shows them, but they are
+        // not closed — each pump closes its session after the grace period.
+        manager.drop_window_views("other");
+        let left: Vec<&String> = ids
+            .iter()
+            .filter(|id| manager.info(id.as_str()).is_some())
+            .collect();
+        assert_eq!(left.len(), alive);
+        assert!(left.iter().all(|id| manager.view_count(id) == 0));
 
         // Closing them releases everything.
-        for id in &orphaned {
+        for id in left {
             futures_block(manager.close(id)).expect("the close");
         }
         assert!(manager.list().is_empty());
@@ -847,7 +1250,9 @@ mod tests {
         assert!(error.unwrap_err().message.contains("no session"));
         let error = futures_block(async { manager.write("s999", vec![1]).await });
         assert!(error.unwrap_err().message.contains("no session"));
-        let error = futures_block(async { manager.resize("s999", 80, 24).await });
+        let error = manager.resize("s999", 80, 24);
+        assert!(error.unwrap_err().message.contains("no session"));
+        let error = manager.try_write("s999", vec![1]);
         assert!(error.unwrap_err().message.contains("no session"));
     }
 
@@ -856,6 +1261,8 @@ mod tests {
         let manager = SessionManager::new();
         let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
         let error = futures_block(async { manager.write(&id, b"x".to_vec()).await });
+        assert!(error.unwrap_err().message.contains("not ready"));
+        let error = manager.try_write(&id, b"x".to_vec());
         assert!(error.unwrap_err().message.contains("not ready"));
     }
 
@@ -874,23 +1281,338 @@ mod tests {
         let network = Some(ErrorCategory::Network);
         let timeout = Some(ErrorCategory::Timeout);
         let auth = Some(ErrorCategory::Auth);
+        let fresh = ReconnectBudget::default();
+        let streak = |streak| ReconnectBudget {
+            streak,
+            total: streak,
+        };
         // ready before, network death, budget left, not cancelled → retry
-        assert!(should_auto_reconnect(true, network, 0, false));
-        assert!(should_auto_reconnect(true, timeout, 4, false));
+        assert!(should_auto_reconnect(true, network, &fresh, false));
+        assert!(should_auto_reconnect(true, timeout, &streak(4), false));
         // never ready (initial connect) → the connect policy already retried
-        assert!(!should_auto_reconnect(false, network, 0, false));
+        assert!(!should_auto_reconnect(false, network, &fresh, false));
         // non-retriable categories are never auto-retried
-        assert!(!should_auto_reconnect(true, auth, 0, false));
-        assert!(!should_auto_reconnect(true, None, 0, false));
-        // budget exhausted
+        assert!(!should_auto_reconnect(true, auth, &fresh, false));
+        assert!(!should_auto_reconnect(true, None, &fresh, false));
+        // streak budget exhausted
         assert!(!should_auto_reconnect(
             true,
             network,
-            MAX_RECONNECT_CYCLES,
+            &streak(MAX_RECONNECT_CYCLES),
             false
         ));
         // user closed
-        assert!(!should_auto_reconnect(true, network, 0, true));
+        assert!(!should_auto_reconnect(true, network, &fresh, true));
+    }
+
+    /// Regression test: the streak counter resets after every stable
+    /// connection, so a server that drops us every 31 seconds used to be
+    /// retried forever. The lifetime total is never reset.
+    #[test]
+    fn total_reconnects_are_capped_over_the_session_lifetime() {
+        let worn_out = ReconnectBudget {
+            streak: 0,
+            total: MAX_TOTAL_RECONNECTS,
+        };
+        assert!(!should_auto_reconnect(
+            true,
+            Some(ErrorCategory::Network),
+            &worn_out,
+            false
+        ));
+        let almost = ReconnectBudget {
+            streak: 0,
+            total: MAX_TOTAL_RECONNECTS - 1,
+        };
+        assert!(should_auto_reconnect(
+            true,
+            Some(ErrorCategory::Network),
+            &almost,
+            false
+        ));
+    }
+
+    #[test]
+    fn resize_while_connecting_is_stored_and_not_an_error() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        // No session yet: this used to fail with "not ready" and drop the size.
+        manager.resize(&id, 132, 43).expect("stored, not an error");
+        assert_eq!(manager.geometry(&id), Some((132, 43)));
+        manager.resize(&id, 100, 30).expect("newest wins");
+        assert_eq!(manager.geometry(&id), Some((100, 30)));
+    }
+
+    /// Regression test (attach while streaming): a view that registers while
+    /// output is being delivered used to lose the bytes between its snapshot
+    /// and its registration. Every view must see exactly the stream.
+    #[test]
+    fn a_view_attached_while_output_streams_sees_every_byte_exactly_once() {
+        let manager = Arc::new(SessionManager::new());
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let stream = manager.stream(&id).expect("stream");
+        let total: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+
+        let producer = {
+            let stream = stream.clone();
+            let total = total.clone();
+            std::thread::spawn(move || {
+                for chunk in total.chunks(997) {
+                    deliver_data(&stream, chunk);
+                    std::thread::yield_now();
+                }
+            })
+        };
+        let mut views = Vec::new();
+        for _ in 0..25 {
+            let (channel, log) = capturing_channel();
+            futures_block(manager.attach_view(&id, "other", channel)).expect("attach");
+            views.push(log);
+            std::thread::sleep(Duration::from_micros(300));
+        }
+        producer.join().expect("producer");
+
+        for (index, log) in views.iter().enumerate() {
+            let seen = captured_bytes(log);
+            assert_eq!(
+                seen.len(),
+                total.len(),
+                "view {index}: gap or duplicate ({} of {} bytes)",
+                seen.len(),
+                total.len()
+            );
+            assert!(seen == total, "view {index}: bytes differ from the stream");
+        }
+    }
+
+    /// Same property once the ring wrapped: what a late view sees is a
+    /// contiguous suffix of the stream.
+    #[test]
+    fn a_late_view_sees_a_contiguous_suffix_after_the_ring_wrapped() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let stream = manager.stream(&id).expect("stream");
+        let total: Vec<u8> = (0..(REPLAY_LIMIT as u32 * 2 + 12_345))
+            .map(|i| (i % 253) as u8)
+            .collect();
+        let mut late = None;
+        for (index, chunk) in total.chunks(4093).enumerate() {
+            if index == 200 {
+                let (channel, log) = capturing_channel();
+                futures_block(manager.attach_view(&id, "other", channel)).expect("attach");
+                late = Some(log);
+            }
+            deliver_data(&stream, chunk);
+        }
+        let seen = captured_bytes(&late.expect("attached"));
+        assert!(!seen.is_empty());
+        assert!(total.ends_with(&seen), "not a suffix of the stream");
+    }
+
+    #[test]
+    fn a_dead_view_is_dropped_but_delivery_continues_for_the_others() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", dead_channel());
+        let (channel, log) = capturing_channel();
+        manager.add_view(&id, "other", channel);
+        let stream = manager.stream(&id).expect("stream");
+        assert_eq!(deliver_data(&stream, b"abc"), 1);
+        assert_eq!(manager.view_count(&id), 1);
+        assert_eq!(captured_bytes(&log), b"abc");
+    }
+
+    /// Regression test (hygiene): ended sessions that nobody shows used to
+    /// stay in the map forever, with their credentials in `ConnectParams`.
+    #[test]
+    fn an_ended_session_is_released_once_nobody_shows_it() {
+        let manager = SessionManager::new();
+        let host = HostId::new();
+
+        // Still shown: kept, so the UI can offer "Reconnect".
+        let (shown, _c1) = manager.register(host, params(), "main", test_channel());
+        manager.mark_task_dead(&shown);
+        assert!(manager.info(&shown).is_some());
+        // The window goes away: the ended session is released with it.
+        manager.drop_window_views("main");
+        assert!(manager.info(&shown).is_none());
+
+        // Orphaned while running, then the task ends: released right away.
+        let (orphan, _c2) = manager.register(host, params(), "gone", test_channel());
+        manager.drop_window_views("gone");
+        assert!(
+            manager.info(&orphan).is_some(),
+            "still running: not released"
+        );
+        manager.mark_task_dead(&orphan);
+        assert!(manager.info(&orphan).is_none());
+    }
+
+    /// Starts the watcher a session's pump runs, on a session that is shown
+    /// by one view of window `main`.
+    fn spawn_watch(manager: &SessionManager, id: &str) -> tokio::task::JoinHandle<()> {
+        let mut watch = ViewWatch::new(manager.stream(id).expect("stream"));
+        tokio::spawn(async move { watch.orphaned().await })
+    }
+
+    /// Regression test (an idle session whose last view went away was never
+    /// closed): the pump only looked at the views when an event woke it, so a
+    /// session without output never started its grace period. Removing the
+    /// last view must wake the watcher, and the session is orphaned exactly
+    /// [`VIEW_GRACE`] later — not earlier.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_session_that_loses_its_last_view_is_orphaned_after_the_grace() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let watcher = spawn_watch(&manager, &id);
+        // The watcher runs and parks: a view shows the session, nothing else
+        // will ever wake it (no output).
+        tokio::task::yield_now().await;
+        assert!(!watcher.is_finished());
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert!(!watcher.is_finished(), "a shown session is never orphaned");
+
+        manager.detach_window_views(&id, "main").unwrap();
+        let detached = tokio::time::Instant::now();
+        tokio::time::sleep(VIEW_GRACE - Duration::from_millis(1)).await;
+        assert!(!watcher.is_finished(), "inside the grace period");
+        tokio::time::timeout(Duration::from_secs(1), watcher)
+            .await
+            .expect("orphaned once the grace period is over")
+            .expect("the watcher did not panic");
+        assert_eq!(detached.elapsed(), VIEW_GRACE);
+    }
+
+    /// The same for a destroyed window, which releases its views through
+    /// another path.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_session_of_a_destroyed_window_is_orphaned_after_the_grace() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let watcher = spawn_watch(&manager, &id);
+        tokio::task::yield_now().await;
+
+        manager.drop_window_views("main");
+        let dropped = tokio::time::Instant::now();
+        tokio::time::timeout(VIEW_GRACE * 2, watcher)
+            .await
+            .expect("orphaned once the grace period is over")
+            .expect("the watcher did not panic");
+        assert_eq!(dropped.elapsed(), VIEW_GRACE);
+        // The watcher only reports; the pump closes the session.
+        assert!(manager.info(&id).is_some());
+    }
+
+    /// A view that attaches within the grace period keeps the session alive,
+    /// and the grace period starts anew when it goes away again.
+    #[tokio::test(start_paused = true)]
+    async fn a_view_that_attaches_within_the_grace_keeps_the_session() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let watcher = spawn_watch(&manager, &id);
+        tokio::task::yield_now().await;
+
+        // The tab moves: the old window detaches first, the new one attaches
+        // a few seconds later, when its webview has loaded.
+        manager.detach_window_views(&id, "main").unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        manager
+            .attach_view(&id, "new", test_channel())
+            .await
+            .unwrap();
+        // Far beyond the first grace period: the session is shown, so alive.
+        tokio::time::sleep(VIEW_GRACE * 6).await;
+        assert!(!watcher.is_finished(), "attached in time: not orphaned");
+        assert!(manager.info(&id).is_some());
+
+        // The new window goes away for good: the grace period counts from now,
+        // not from the first detach.
+        manager.detach_window_views(&id, "new").unwrap();
+        let detached = tokio::time::Instant::now();
+        tokio::time::timeout(VIEW_GRACE * 2, watcher)
+            .await
+            .expect("orphaned after the second grace period")
+            .expect("the watcher did not panic");
+        assert_eq!(detached.elapsed(), VIEW_GRACE);
+    }
+
+    /// A view that was attached and released again while the watcher was
+    /// waiting for the old deadline restarts the grace period; the session is
+    /// not closed on the strength of the first detach.
+    #[tokio::test(start_paused = true)]
+    async fn the_grace_period_restarts_when_a_view_came_and_went() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let watcher = spawn_watch(&manager, &id);
+        tokio::task::yield_now().await;
+
+        manager.detach_window_views(&id, "main").unwrap();
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        manager
+            .attach_view(&id, "new", test_channel())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        manager.detach_window_views(&id, "new").unwrap();
+        let detached = tokio::time::Instant::now();
+
+        // The first deadline (10 s after the first detach) passes: too early
+        // to close, the last view left only 2 s ago.
+        tokio::time::sleep(Duration::from_secs(4) + Duration::from_millis(500)).await;
+        assert!(!watcher.is_finished(), "counted from the last detach");
+        tokio::time::timeout(VIEW_GRACE, watcher)
+            .await
+            .expect("orphaned after the full grace period")
+            .expect("the watcher did not panic");
+        assert_eq!(detached.elapsed(), VIEW_GRACE);
+    }
+
+    #[tokio::test]
+    async fn output_chunks_merge_up_to_the_first_other_event() {
+        let (tx, mut rx) = mpsc::channel(16);
+        tx.send(SessionEvent::Data(b"bc".to_vec())).await.unwrap();
+        tx.send(SessionEvent::Data(b"d".to_vec())).await.unwrap();
+        tx.send(SessionEvent::Status(SessionStatus::Ready))
+            .await
+            .unwrap();
+        tx.send(SessionEvent::Data(b"later".to_vec()))
+            .await
+            .unwrap();
+        let (merged, next) = coalesce(b"a".to_vec(), &mut rx).await;
+        assert_eq!(merged, b"abcd");
+        assert!(matches!(
+            next,
+            Some(SessionEvent::Status(SessionStatus::Ready))
+        ));
+    }
+
+    #[tokio::test]
+    async fn merged_output_never_exceeds_the_update_limit() {
+        let (tx, mut rx) = mpsc::channel(16);
+        tx.send(SessionEvent::Data(vec![1; 40 * 1024]))
+            .await
+            .unwrap();
+        let (merged, next) = coalesce(vec![0; 40 * 1024], &mut rx).await;
+        assert_eq!(merged.len(), 40 * 1024);
+        assert!(matches!(next, Some(SessionEvent::Data(rest)) if rest.len() == 40 * 1024));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_keystroke_echo_is_forwarded_without_waiting() {
+        let (_tx, mut rx) = mpsc::channel::<SessionEvent>(16);
+        let started = tokio::time::Instant::now();
+        let (merged, next) = coalesce(b"x".to_vec(), &mut rx).await;
+        assert_eq!(merged, b"x");
+        assert!(next.is_none());
+        assert_eq!(started.elapsed(), Duration::ZERO, "no coalescing delay");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn streaming_output_waits_at_most_the_coalesce_window() {
+        let (_tx, mut rx) = mpsc::channel::<SessionEvent>(16);
+        let started = tokio::time::Instant::now();
+        let (merged, _) = coalesce(vec![7; COALESCE_MIN_WAIT], &mut rx).await;
+        assert_eq!(merged.len(), COALESCE_MIN_WAIT);
+        assert_eq!(started.elapsed(), COALESCE_WINDOW);
     }
 
     #[test]
@@ -943,6 +1665,41 @@ mod tests {
                 last_error: "refused".into(),
             }
         );
+    }
+
+    /// A channel that records every update it receives.
+    fn capturing_channel() -> (Channel<SessionUpdate>, Arc<Mutex<Vec<SessionUpdate>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = log.clone();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                if let Ok(update) = serde_json::from_str::<SessionUpdate>(&json) {
+                    sink.lock().unwrap().push(update);
+                }
+            }
+            Ok(())
+        });
+        (channel, log)
+    }
+
+    /// The output bytes a channel received, in order.
+    fn captured_bytes(log: &Mutex<Vec<SessionUpdate>>) -> Vec<u8> {
+        let mut out = Vec::new();
+        for update in log.lock().unwrap().iter() {
+            if let SessionUpdate::Data { base64 } = update {
+                out.extend(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(base64)
+                        .unwrap(),
+                );
+            }
+        }
+        out
+    }
+
+    /// A channel whose window is gone: every send fails.
+    fn dead_channel() -> Channel<SessionUpdate> {
+        Channel::new(|_body| Err(tauri::Error::WebviewNotFound))
     }
 
     /// A channel that accepts (and drops) every update.

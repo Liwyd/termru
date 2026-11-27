@@ -54,22 +54,15 @@ fn build() -> tauri::Result<tauri::App> {
         // instead of typing its path.
         .plugin(tauri_plugin_dialog::init())
         // A window that is closed releases its views. A session that no
-        // window shows any more is closed as well — its SSH connection
-        // would stay open for nothing. A session that another window still
-        // shows keeps running.
+        // window shows any more is not closed at once (its tab may be moving
+        // to a window that has not attached yet): its connection task closes
+        // it when no view attached within the grace period.
         .on_window_event(|window, event| {
             if !matches!(event, tauri::WindowEvent::Destroyed) {
                 return;
             }
             let state = window.app_handle().state::<AppState>();
-            let label = window.label().to_string();
-            let orphaned = state.sessions.drop_window_views(&label);
-            for id in orphaned {
-                let manager = state.sessions.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = manager.close(&id).await;
-                });
-            }
+            state.sessions.drop_window_views(window.label());
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -112,6 +105,7 @@ fn build() -> tauri::Result<tauri::App> {
             commands::sessions::session_resize,
             commands::sessions::session_list,
             commands::sessions::session_attach,
+            commands::sessions::session_detach,
             commands::sessions::host_key_prompt_resolve,
             commands::layout::layout_save,
             commands::layout::layout_load,

@@ -427,9 +427,13 @@ impl KnownHosts {
         })
     }
 
-    /// Records trust for `key`. With `replace_existing`, removes all existing
-    /// entries for this host first (the "accept changed key" flow) — the user
-    /// is always shown the warning before this is called with `true`.
+    /// Records trust for `key`. With `replace_existing` (the "accept changed
+    /// key" flow — the user is always shown the warning first) the stale
+    /// entries are removed **narrowly**: only lines that name exactly this
+    /// host and carry the *same key type* as `key`. Other key types of the
+    /// host, `@revoked`/`@cert-authority` lines, and wildcard or negated
+    /// lines (which cover other hosts too) are never touched; a line listing
+    /// several hosts only loses this host.
     pub fn trust(
         &self,
         host: &str,
@@ -439,7 +443,7 @@ impl KnownHosts {
     ) -> Result<(), SshError> {
         let hp = host_port_string(host, port);
         if replace_existing {
-            self.remove_entries(&hp)?;
+            self.rewrite_without_host(&hp, Some(&algorithm_name(key)))?;
         } else {
             // Refuse to silently add a second same-type key (would mask a
             // changed-key situation for future evaluations).
@@ -475,12 +479,17 @@ impl KnownHosts {
             .split_whitespace()
             .nth(1)
             .ok_or_else(|| SshError::Protocol("public key encoding is malformed".to_string()))?;
-        let line = format!(
+        let mut line = format!(
             "{} {} {}\n",
             hashed_pattern(&hp),
             algorithm_name(key),
             key_b64,
         );
+        if self.lacks_trailing_newline() {
+            // A hand-edited file may end without a newline; appending would
+            // glue the new entry onto the last line and corrupt both.
+            line.insert(0, '\n');
+        }
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -509,8 +518,24 @@ impl KnownHosts {
         Ok(())
     }
 
-    /// Number of entries removed for this host (used for logging/UX).
+    /// Removes every entry that names exactly this host (any key type) and
+    /// returns how many lines were removed or rewritten.
+    ///
+    /// Like `ssh-keygen -R`, this never touches `@revoked` or
+    /// `@cert-authority` lines, nor wildcard/negated patterns (they cover
+    /// other hosts); a multi-host line only loses this host.
     pub fn remove_entries(&self, host_port: &str) -> Result<usize, SshError> {
+        self.rewrite_without_host(host_port, None)
+    }
+
+    /// Rewrites the file without the entries that name exactly `host_port`
+    /// (restricted to `key_type` when given). Returns the number of lines
+    /// removed or rewritten.
+    fn rewrite_without_host(
+        &self,
+        host_port: &str,
+        key_type: Option<&str>,
+    ) -> Result<usize, SshError> {
         let contents = match std::fs::read_to_string(&self.path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -522,48 +547,151 @@ impl KnownHosts {
                 .into());
             }
         };
-        let mut kept = String::new();
-        let mut removed = 0usize;
-        for raw in contents.lines() {
-            let line = parse_line(raw);
-            let matches = match line.kind {
-                LineKind::CommentOrBlank | LineKind::IgnoredMarker => false,
-                LineKind::Revoked { ref positive } => line_matches_host(positive, &[], host_port),
-                LineKind::Entry {
-                    ref positive,
-                    ref negated,
-                } => line_matches_host(positive, negated, host_port),
-            };
-            if matches {
-                removed += 1;
-            } else {
-                kept.push_str(raw);
-                kept.push('\n');
+        let mut out = String::with_capacity(contents.len());
+        let mut changed = 0usize;
+        // `split_inclusive` keeps every untouched line byte-for-byte,
+        // including its line ending and a missing final newline.
+        for raw in contents.split_inclusive('\n') {
+            match strip_host_from_line(raw, host_port, key_type) {
+                LineEdit::Keep => out.push_str(raw),
+                LineEdit::Drop => changed += 1,
+                LineEdit::Rewrite(line) => {
+                    out.push_str(&line);
+                    changed += 1;
+                }
             }
         }
-        if removed > 0 {
-            self.atomic_write(&kept)?;
+        if changed > 0 {
+            self.atomic_write(&out)?;
         }
-        Ok(removed)
+        Ok(changed)
     }
 
+    /// `true` when the file exists, is non-empty and does not end in `\n`.
+    fn lacks_trailing_newline(&self) -> bool {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return false;
+        };
+        let Ok(len) = file.seek(SeekFrom::End(0)) else {
+            return false;
+        };
+        if len == 0 || file.seek(SeekFrom::Start(len - 1)).is_err() {
+            return false;
+        }
+        let mut last = [0u8; 1];
+        file.read_exact(&mut last).is_ok() && last[0] != b'\n'
+    }
+
+    /// Replaces the file atomically (write a sibling temp file, then rename).
+    ///
+    /// * the temp name is unique per call (process id + counter, created with
+    ///   `create_new`), so concurrent writers — threads of one process or two
+    ///   Termru instances — never clobber each other's temp file;
+    /// * the permissions of the file being replaced are preserved (a user who
+    ///   made it group-readable keeps it so); a new file starts at `0600`.
     fn atomic_write(&self, contents: &str) -> Result<(), SshError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        let tmp = parent.join(format!(".known_hosts.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, contents).map_err(|e| KnownHostsError::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
+        let tmp = parent.join(format!(
+            ".known_hosts.{}.{}.tmp",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let original_permissions = std::fs::metadata(&self.path).ok().map(|m| m.permissions());
+
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        std::fs::rename(&tmp, &self.path).map_err(|e| KnownHostsError::Io {
-            path: self.path.clone(),
-            source: e,
-        })?;
+        let written = options.open(&tmp).and_then(|mut file| {
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()
+        });
+        if let Err(source) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(KnownHostsError::Io { path: tmp, source }.into());
+        }
+        if let Some(permissions) = original_permissions {
+            let _ = std::fs::set_permissions(&tmp, permissions);
+        }
+        if let Err(source) = std::fs::rename(&tmp, &self.path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(KnownHostsError::Io {
+                path: self.path.clone(),
+                source,
+            }
+            .into());
+        }
         Ok(())
+    }
+}
+
+/// What to do with one line of the file when forgetting a host.
+enum LineEdit {
+    Keep,
+    Drop,
+    Rewrite(String),
+}
+
+/// Decides what forgetting `host_port` (optionally only for `key_type`) means
+/// for one raw line. Conservative on purpose: anything that is not an
+/// unambiguous plain entry for exactly this host is kept.
+fn strip_host_from_line(raw: &str, host_port: &str, key_type: Option<&str>) -> LineEdit {
+    let body = raw.trim_end_matches(['\n', '\r']);
+    let eol = &raw[body.len()..];
+    let trimmed = body.trim_start();
+    // Comments, blanks, and `@revoked` / `@cert-authority` markers.
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('@') {
+        return LineEdit::Keep;
+    }
+    let indent = &body[..body.len() - trimmed.len()];
+    let Some(split_at) = trimmed.find(char::is_whitespace) else {
+        return LineEdit::Keep;
+    };
+    let (patterns, rest) = trimmed.split_at(split_at);
+    let mut fields = rest.split_whitespace();
+    let (Some(line_type), Some(_key)) = (fields.next(), fields.next()) else {
+        return LineEdit::Keep;
+    };
+    if key_type.is_some_and(|wanted| wanted != line_type) {
+        return LineEdit::Keep;
+    }
+
+    let tokens: Vec<&str> = patterns.split(',').collect();
+    if tokens.iter().any(|token| token.starts_with('!')) {
+        return LineEdit::Keep;
+    }
+    let mut remaining: Vec<&str> = Vec::with_capacity(tokens.len());
+    let mut named_here = false;
+    for token in tokens {
+        if token.is_empty() {
+            continue;
+        }
+        let wildcard = !token.starts_with("|1|") && token.contains(['*', '?']);
+        if pattern_matches(token, host_port) {
+            if wildcard {
+                // Covers other hosts as well: not ours to delete.
+                return LineEdit::Keep;
+            }
+            // Plain or hashed pattern that identifies exactly this host.
+            named_here = true;
+        } else {
+            remaining.push(token);
+        }
+    }
+    if !named_here {
+        return LineEdit::Keep;
+    }
+    if remaining.is_empty() {
+        LineEdit::Drop
+    } else {
+        LineEdit::Rewrite(format!("{indent}{}{rest}{eol}", remaining.join(",")))
     }
 }
 
@@ -771,5 +899,265 @@ mod tests {
             kh.evaluate("one.example.com", 22, &key).unwrap(),
             Evaluation::Unknown { .. }
         ));
+    }
+
+    // ---- replacement scope (regression tests for the over-eager removal) ----
+
+    fn write_file(kh: &KnownHosts, contents: &str) {
+        std::fs::write(kh.path(), contents).unwrap();
+    }
+
+    fn read_file(kh: &KnownHosts) -> String {
+        std::fs::read_to_string(kh.path()).unwrap()
+    }
+
+    #[test]
+    fn replacing_a_key_keeps_the_hosts_other_key_types() {
+        let (_dir, kh) = setup();
+        let old = ed25519_key(10).public_key().clone();
+        let new = ed25519_key(11).public_key().clone();
+        // The host also has an RSA entry; only the ed25519 one may go.
+        let rsa_line = "host.example.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDfake rsa-comment\n";
+        write_file(
+            &kh,
+            &format!(
+                "{rsa_line}host.example.com ssh-ed25519 {}\n",
+                openssh_b64(&old)
+            ),
+        );
+        kh.trust("host.example.com", 22, &new, true).unwrap();
+        let contents = read_file(&kh);
+        assert!(contents.contains(rsa_line), "RSA entry lost: {contents}");
+        assert!(
+            !contents.contains(&openssh_b64(&old)),
+            "stale ed25519 entry survived: {contents}"
+        );
+        assert!(matches!(
+            kh.evaluate("host.example.com", 22, &new).unwrap(),
+            Evaluation::Known { .. }
+        ));
+    }
+
+    #[test]
+    fn replacing_a_key_never_touches_revoked_or_cert_authority_lines() {
+        let (_dir, kh) = setup();
+        let old = ed25519_key(12).public_key().clone();
+        let revoked = ed25519_key(13).public_key().clone();
+        let new = ed25519_key(14).public_key().clone();
+        let revoked_line = format!(
+            "@revoked host.example.com ssh-ed25519 {}\n",
+            openssh_b64(&revoked)
+        );
+        let ca_line =
+            "@cert-authority host.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfake\n";
+        write_file(
+            &kh,
+            &format!(
+                "{revoked_line}{ca_line}host.example.com ssh-ed25519 {}\n",
+                openssh_b64(&old)
+            ),
+        );
+        kh.trust("host.example.com", 22, &new, true).unwrap();
+        let contents = read_file(&kh);
+        assert!(
+            contents.contains(&revoked_line),
+            "@revoked line lost: {contents}"
+        );
+        assert!(
+            contents.contains(ca_line),
+            "@cert-authority line lost: {contents}"
+        );
+        assert!(
+            matches!(
+                kh.evaluate("host.example.com", 22, &revoked).unwrap(),
+                Evaluation::Revoked { .. }
+            ),
+            "the revoked key must stay refused"
+        );
+    }
+
+    #[test]
+    fn replacing_a_key_leaves_wildcard_and_negated_lines_alone() {
+        let (_dir, kh) = setup();
+        let shared = ed25519_key(15).public_key().clone();
+        let new = ed25519_key(16).public_key().clone();
+        let wildcard = format!("*.example.com ssh-ed25519 {}\n", openssh_b64(&shared));
+        let negated = format!(
+            "www.example.com,!staging.example.com ssh-ed25519 {}\n",
+            openssh_b64(&shared)
+        );
+        write_file(&kh, &format!("{wildcard}{negated}"));
+        kh.trust("www.example.com", 22, &new, true).unwrap();
+        let contents = read_file(&kh);
+        assert!(
+            contents.contains(&wildcard),
+            "wildcard line lost: {contents}"
+        );
+        assert!(contents.contains(&negated), "negated line lost: {contents}");
+        // Other hosts under the wildcard are unaffected.
+        assert!(matches!(
+            kh.evaluate("db.example.com", 22, &shared).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        // The new key is trusted for this host, whatever the wildcard says.
+        assert!(matches!(
+            kh.evaluate("www.example.com", 22, &new).unwrap(),
+            Evaluation::Known { .. }
+        ));
+    }
+
+    #[test]
+    fn replacing_a_key_only_removes_this_host_from_a_multi_host_line() {
+        let (_dir, kh) = setup();
+        let old = ed25519_key(17).public_key().clone();
+        let new = ed25519_key(18).public_key().clone();
+        write_file(
+            &kh,
+            &format!(
+                "  a.example.com,b.example.com,[a.example.com]:2222 ssh-ed25519 {} my comment\n",
+                openssh_b64(&old)
+            ),
+        );
+        kh.trust("a.example.com", 22, &new, true).unwrap();
+        let contents = read_file(&kh);
+        assert!(
+            contents.starts_with(&format!(
+                "  b.example.com,[a.example.com]:2222 ssh-ed25519 {} my comment\n",
+                openssh_b64(&old)
+            )),
+            "only the host itself leaves the list (indent/comment kept): {contents}"
+        );
+        // The sibling host keeps its old key; this host has the new one.
+        assert!(matches!(
+            kh.evaluate("b.example.com", 22, &old).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        assert!(matches!(
+            kh.evaluate("a.example.com", 22, &new).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        // The same host on another port is a different entry and survives.
+        assert!(matches!(
+            kh.evaluate("a.example.com", 2222, &old).unwrap(),
+            Evaluation::Known { .. }
+        ));
+    }
+
+    #[test]
+    fn replacing_a_key_removes_matching_hashed_lines_of_the_same_type_only() {
+        let (_dir, kh) = setup();
+        let old = ed25519_key(19).public_key().clone();
+        let other_host_key = ed25519_key(20).public_key().clone();
+        let new = ed25519_key(21).public_key().clone();
+        kh.trust("target.example.com", 22, &old, false).unwrap();
+        kh.trust("bystander.example.com", 22, &other_host_key, false)
+            .unwrap();
+        kh.trust("target.example.com", 22, &new, true).unwrap();
+        assert!(matches!(
+            kh.evaluate("target.example.com", 22, &new).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        assert!(
+            matches!(
+                kh.evaluate("target.example.com", 22, &old).unwrap(),
+                Evaluation::Changed { .. }
+            ),
+            "the stale hashed entry must be gone"
+        );
+        assert!(matches!(
+            kh.evaluate("bystander.example.com", 22, &other_host_key)
+                .unwrap(),
+            Evaluation::Known { .. }
+        ));
+        assert_eq!(read_file(&kh).lines().count(), 2);
+    }
+
+    #[test]
+    fn comments_blank_lines_and_crlf_survive_a_replacement() {
+        let (_dir, kh) = setup();
+        let old = ed25519_key(22).public_key().clone();
+        let other = ed25519_key(23).public_key().clone();
+        let new = ed25519_key(24).public_key().clone();
+        let keep = format!(
+            "# my hosts\r\n\r\nkeep.example.com ssh-ed25519 {}\r\n",
+            openssh_b64(&other)
+        );
+        write_file(
+            &kh,
+            &format!("{keep}gone.example.com ssh-ed25519 {}", openssh_b64(&old)),
+        );
+        kh.trust("gone.example.com", 22, &new, true).unwrap();
+        assert!(read_file(&kh).starts_with(&keep));
+    }
+
+    /// Regression test: appending to a file without a final newline used to
+    /// glue the new entry onto the last line.
+    #[test]
+    fn appending_to_a_file_without_trailing_newline_starts_a_new_line() {
+        let (_dir, kh) = setup();
+        let first = ed25519_key(25).public_key().clone();
+        let second = ed25519_key(26).public_key().clone();
+        write_file(
+            &kh,
+            &format!("one.example.com ssh-ed25519 {}", openssh_b64(&first)),
+        );
+        kh.trust("two.example.com", 22, &second, false).unwrap();
+        assert!(matches!(
+            kh.evaluate("one.example.com", 22, &first).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        assert!(matches!(
+            kh.evaluate("two.example.com", 22, &second).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        assert_eq!(read_file(&kh).lines().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_preserves_the_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, kh) = setup();
+        let old = ed25519_key(27).public_key().clone();
+        let new = ed25519_key(28).public_key().clone();
+        kh.trust("perm.example.com", 22, &old, false).unwrap();
+        std::fs::set_permissions(kh.path(), std::fs::Permissions::from_mode(0o640)).unwrap();
+        // Rewriting via the temp file must not reset the mode to 0600.
+        kh.remove_entries("perm.example.com").unwrap();
+        let mode = std::fs::metadata(kh.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "mode after rewrite: {mode:o}");
+        kh.trust("perm.example.com", 22, &new, false).unwrap();
+    }
+
+    /// Regression test: the temp file used to be named after the process id
+    /// only, so two concurrent rewrites raced on the same path.
+    #[test]
+    fn concurrent_rewrites_use_distinct_temp_files() {
+        let (dir, kh) = setup();
+        let kh = std::sync::Arc::new(kh);
+        write_file(&kh, "seed ssh-ed25519 AAAA\n");
+        let mut workers = Vec::new();
+        for worker in 0..8 {
+            let kh = kh.clone();
+            workers.push(std::thread::spawn(move || {
+                for round in 0..25 {
+                    kh.atomic_write(&format!("w{worker}-{round} ssh-ed25519 AAAA\n"))
+                        .expect("atomic write");
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().expect("worker finished");
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        assert!(read_file(&kh).starts_with('w'));
     }
 }

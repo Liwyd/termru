@@ -198,8 +198,11 @@ pub async fn session_open(
     channel: Channel<SessionUpdate>,
 ) -> Result<String, CommandError> {
     validate_geometry(options.cols, options.rows)?;
-    let (host, auth) = {
-        let store = &*state.store;
+    // SQLite and the OS credential store (D-Bus / Keychain / Credential
+    // Manager) can block for a long time; neither may run on an async worker.
+    let store = state.store.clone();
+    let secrets = options.secrets.clone();
+    let (host, auth) = tauri::async_runtime::spawn_blocking(move || {
         let host = store
             .repos()
             .hosts()
@@ -208,9 +211,11 @@ pub async fn session_open(
         if host.deleted {
             return Err(CommandError::new("host has been deleted"));
         }
-        let auth = build_auth(&host, store, &options.secrets)?;
-        (host, auth)
-    };
+        let auth = build_auth(&host, &store, &secrets)?;
+        Ok::<_, CommandError>((host, auth))
+    })
+    .await
+    .map_err(|error| CommandError::new(format!("the session could not be prepared: {error}")))??;
     let params = build_params(&state, &host, auth);
     Ok(start_session(
         &state,
@@ -288,24 +293,53 @@ pub async fn session_close(state: State<'_, AppState>, id: String) -> Result<(),
     state.sessions.close(&id).await
 }
 
+/// Sends input to the session's shell.
+///
+/// Deliberately a **synchronous** command: synchronous commands run in the
+/// order their IPC messages arrive, and the data is enqueued into the
+/// session's ordered input queue before the command returns, so arrival order
+/// is write order. (An async command would be spawned per call, and parallel
+/// calls could enqueue in any order — keystrokes would arrive shuffled.)
+/// Nothing here blocks: a full queue is reported as an error.
+///
+/// The webview may still deliver *concurrent* `invoke` calls out of order, so
+/// the frontend has to serialize its writes (await the previous call, or
+/// batch keystrokes into one chunk).
 #[tauri::command]
-pub async fn session_write(
+pub fn session_write(
     state: State<'_, AppState>,
     id: String,
     data: Vec<u8>,
 ) -> Result<(), CommandError> {
-    state.sessions.write(&id, data).await
+    state.sessions.try_write(&id, data)
 }
 
+/// Records and applies the terminal size. Synchronous for the same ordering
+/// reason as [`session_write`]: the newest size must win. While the session
+/// is still connecting the size is stored and applied when it becomes ready.
 #[tauri::command]
-pub async fn session_resize(
+pub fn session_resize(
     state: State<'_, AppState>,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), CommandError> {
     validate_geometry(cols, rows)?;
-    state.sessions.resize(&id, cols, rows).await
+    state.sessions.resize(&id, cols, rows)
+}
+
+/// Releases the views the calling window holds on a session **without**
+/// closing it (the tab moved to another window). The new window attaches only
+/// after its webview has loaded, which is later than this call, so a session
+/// that is left without a view is not closed here: it stays for the orphan
+/// grace period and is closed by its connection task when nothing attached.
+#[tauri::command]
+pub fn session_detach(
+    state: State<'_, AppState>,
+    webview: tauri::Webview,
+    id: String,
+) -> Result<(), CommandError> {
+    state.sessions.detach_window_views(&id, webview.label())
 }
 
 /// Attaches another view to a live session (a tab moved to a new window).

@@ -289,11 +289,15 @@ impl TestServer {
     }
 
     /// Kills the listener and every server-side process of live connections.
+    ///
+    /// The connection processes die **before** the shell they serve: killing
+    /// the shell first makes sshd report an exit signal to the client (a
+    /// clean, final close) before it is killed itself, which is a different
+    /// scenario from a vanished transport.
     fn interrupt(&mut self) {
-        let mut pids = Vec::new();
+        let mut pids = vec![self.child.id()];
         collect_descendants(self.child.id(), &mut pids);
-        pids.push(self.child.id());
-        for pid in pids.into_iter().rev() {
+        for pid in pids {
             kill_pid(pid);
         }
         self.killed = true;
@@ -1328,4 +1332,281 @@ async fn bounded_reconnect_gives_up_with_actionable_error() {
         closed.contains("gave up after 3 attempts"),
         "give-up is explicit: {closed}"
     );
+}
+
+// ------------------------------------------------- engine robustness tests --
+
+/// Regression test (large paste deadlock): the actor used to await the write
+/// of a pasted chunk itself. While the remote echoed the data back, nobody
+/// drained the channel, russh stalled on its bounded queue, the window adjust
+/// was never processed, and both directions froze. Reading and writing are
+/// separate tasks now; a 2 MiB paste into `cat` (echoed by the tty *and*
+/// copied by `cat`: well over 4 MiB of output) must complete.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_paste_while_the_remote_echoes_does_not_deadlock() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let (tx, mut rx) = mpsc::channel(64);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    session.write(b"cat\n".to_vec()).await.expect("write");
+
+    // Short lines: a canonical-mode tty discards lines longer than 4 KiB.
+    let line = format!("{}\n", "0123456789abcdef".repeat(4));
+    let chunk = line.repeat(1000).into_bytes();
+    let chunks = (2 * 1024 * 1024) / chunk.len() + 1;
+    let pasted = chunk.len() * chunks;
+    let writer = {
+        let session = session.clone();
+        tokio::spawn(async move {
+            for _ in 0..chunks {
+                session.write(chunk.clone()).await?;
+            }
+            // End of input for `cat` (Ctrl-D at a line start), then a marker
+            // that only the shell's *output* contains.
+            session
+                .write(b"\x04echo PASTE_DONE_$((1+1))\n".to_vec())
+                .await
+        })
+    };
+
+    let started = tokio::time::Instant::now();
+    let result = tokio::time::timeout(FLOOD_TIMEOUT, async {
+        loop {
+            if count(&col.data, b"PASTE_DONE_2") >= 1 {
+                return;
+            }
+            let event = rx.recv().await.expect("event channel closed");
+            col.push(event);
+        }
+    })
+    .await;
+    result.unwrap_or_else(|_| {
+        panic!(
+            "paste deadlocked after {} output bytes of {pasted} pasted",
+            col.data.len()
+        )
+    });
+    eprintln!(
+        "paste: {pasted} bytes in, {} bytes out, {:?}",
+        col.data.len(),
+        started.elapsed()
+    );
+    assert!(
+        col.data.len() >= pasted,
+        "every pasted byte comes back at least once"
+    );
+    writer.await.expect("writer joined").expect("paste queued");
+    session.close().await.expect("close");
+}
+
+/// Regression test: `close` used to queue behind a blocked write in the
+/// actor's single command loop, so a tab whose remote had stopped reading
+/// input could not be closed. The remote here never reads its input (the
+/// shell is busy in a loop) while megabytes of it are queued; the close must
+/// still go through and end with `Closed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_is_not_stuck_behind_blocked_input() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let (tx, mut rx) = mpsc::channel(64);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    session
+        .write(b"echo BUSY_$((1+1)); while true; do sleep 0.2; done\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "busy loop running", |d| count(d, b"BUSY_2") >= 1)
+        .await;
+
+    // Input nobody reads: far more than the receive window.
+    let flood = "0123456789abcdef".repeat(4).into_bytes();
+    let mut block = Vec::new();
+    for _ in 0..1000 {
+        block.extend_from_slice(&flood);
+        block.push(b'\n');
+    }
+    for _ in 0..80 {
+        session.write(block.clone()).await.expect("queue flood");
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    session.close().await.expect("close");
+    col.until_status(&mut rx, "Closed", |s| {
+        matches!(s, SessionStatus::Closed { .. })
+    })
+    .await;
+}
+
+/// Regression test: 1000 small writes, half through `write`, half through
+/// the synchronous `try_write`, reach the remote in call order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ordered_small_writes_arrive_in_order() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let (tx, mut rx) = mpsc::channel(256);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    // Echo off first, so the output is `cat`'s clean line-by-line copy and
+    // not interleaved with the tty's character echo.
+    session
+        .write(b"stty -echo; echo ECHO_OFF_$((1+1)); cat\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "echo disabled", |d| count(d, b"ECHO_OFF_2") >= 1)
+        .await;
+    let before = col.data.len();
+    for i in 1..=1000u32 {
+        let line = format!("ORD{i:04}\n").into_bytes();
+        if i % 2 == 0 {
+            session.try_write(line).expect("try_write");
+        } else {
+            session.write(line).await.expect("write");
+        }
+    }
+    col.until_data(&mut rx, "last token copied", |d| count(d, b"ORD1000") >= 1)
+        .await;
+
+    let mut seen: Vec<u32> = Vec::new();
+    for window in col.data[before..].windows(7) {
+        if &window[..3] == b"ORD" && window[3..].iter().all(u8::is_ascii_digit) {
+            seen.push(
+                std::str::from_utf8(&window[3..])
+                    .expect("digits")
+                    .parse()
+                    .expect("number"),
+            );
+        }
+    }
+    assert_eq!(
+        seen,
+        (1..=1000).collect::<Vec<u32>>(),
+        "writes were lost, duplicated or reordered"
+    );
+    session.close().await.expect("close");
+}
+
+/// Regression test: a shell killed by a signal used to be reported as a
+/// retriable network failure (so the app reconnected in a loop). It is a
+/// final close with a readable reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn killed_shell_is_a_final_close_not_a_network_failure() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let (tx, mut rx) = mpsc::channel(256);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    session
+        .write(b"kill -9 $$\n".to_vec())
+        .await
+        .expect("write");
+    let closed = col
+        .until_status(&mut rx, "Closed", |s| {
+            matches!(s, SessionStatus::Closed { .. })
+        })
+        .await;
+    let SessionStatus::Closed { reason } = closed else {
+        unreachable!("until_status returned the matching status");
+    };
+    assert!(
+        reason.contains("signal") && reason.contains("KILL"),
+        "the reason names the signal: {reason}"
+    );
+    assert!(
+        !col.statuses.iter().any(|s| matches!(
+            s,
+            SessionStatus::Failed { .. } | SessionStatus::Reconnecting { .. }
+        )),
+        "a killed shell is not a connection failure: {:?}",
+        col.statuses
+    );
+}
+
+/// Regression test: the actor used to drop its consumer when a send took
+/// longer than 5 s (a stalled UI), silently losing all later output and the
+/// final status. A consumer that stalls for longer must still get every
+/// byte, in order, afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_consumer_is_never_dropped() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    // Room for the connect statuses only; once those are read, nobody reads
+    // and every further send would block.
+    let (tx, mut rx) = mpsc::channel(4);
+    let mut col = Collector::default();
+
+    let params = server.params(prompt, server.client_auth());
+    let session = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect("connect");
+    col.until_status(&mut rx, "Ready", |s| matches!(s, SessionStatus::Ready))
+        .await;
+
+    session
+        .write(
+            b"i=0; while [ $i -lt 20000 ]; do echo line-$i; i=$((i+1)); done; \
+              echo STALL_DONE_$((1+1))\n"
+                .to_vec(),
+        )
+        .await
+        .expect("write");
+    // Longer than the old 5 s send timeout.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    col.until_data(&mut rx, "output after the stall", |d| {
+        count(d, b"STALL_DONE_2") >= 1
+    })
+    .await;
+    assert!(
+        count(&col.data, b"line-19999\r\n") >= 1,
+        "output produced during the stall was lost"
+    );
+    // The session is still alive and answers.
+    session
+        .write(b"echo AFTER_STALL_$((1+1))\n".to_vec())
+        .await
+        .expect("write after the stall");
+    col.until_data(&mut rx, "responsive after the stall", |d| {
+        count(d, b"AFTER_STALL_2") >= 1
+    })
+    .await;
+    session.close().await.expect("close");
 }

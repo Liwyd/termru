@@ -85,6 +85,9 @@ pub enum SshError {
     #[error("session is closing")]
     SessionClosing,
 
+    #[error("the remote host is not accepting input (the input queue is full)")]
+    InputBacklog,
+
     #[error("failed to load key “{path}”: {detail}")]
     KeyLoadFailed { path: String, detail: String },
 

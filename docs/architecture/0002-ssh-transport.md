@@ -33,16 +33,31 @@ Concrete design choices that follow:
   action — never auto-accepted, never downgraded to a warning-only path.
 * **Auth secrets** are supplied per connection by the caller via
   `SecretValue` (zeroizing wrapper); the SSH crate never persists them.
-* **Concurrency**: one tokio actor task owns the russh handle and channel;
-  commands (`Write`/`Resize`/`Attach`/`Close`) and SSH messages funnel
-  through it, so ordering (replay buffer before live bytes) is trivially
-  correct.
-* **Dead-connection detection**: russh keepalives (default 3 unanswered →
-  connection closed and reported as a network failure).
-* **Bounded output path**: at most one attached consumer through a bounded
-  channel with send timeout; a stalled UI causes a *detach*, with data
-  continuing into a bounded replay buffer (default 512 KiB) — the SSH
-  transport is never blocked by UI slowness.
+* **Concurrency**: one tokio actor task owns the russh handle and the
+  *read half* of the shell channel; the *write half* belongs to two small
+  tasks — an input pump draining an ordered, bounded input queue, and a
+  resize pump (latest size wins). The actor never awaits anything on the
+  russh side, so it keeps draining output (which is what lets russh process
+  the window adjusts a large paste is waiting for), and resize/close never
+  queue behind a blocked write.
+* **Dead-connection detection**: russh's own keepalive is the single source
+  (default 30 s, 3 unanswered → transport closed), plus TCP keepalive and
+  `TCP_NODELAY` on the socket. A host that stores `0` uses the default:
+  keepalives cannot be switched off entirely.
+* **Exit semantics**: only a transport that vanished *without* an EOF, exit
+  status or channel close from the remote is a retriable network failure.
+  Shell exit, exit-signal (`kill -9 $$`), remote EOF/close are final
+  (`Closed` with a readable reason, never reconnected).
+* **Connect deadline**: one budget covers DNS, TCP (addresses raced with a
+  250 ms stagger, first success wins), key exchange and shell setup; it is
+  paused while a host-key prompt waits for the user, and everything honors
+  the cancel token. Authentication has its own timeout.
+* **Bounded output path**: one consumer through a bounded channel; the actor
+  never drops it because it is slow — events wait in a small pending queue
+  (reading pauses when it is full, i.e. ordinary flow control) while output
+  also fills a bounded, offset-counting replay ring (default 512 KiB). The
+  desktop manager keeps its own ring next to the view list so snapshot and
+  view registration are atomic (no gap, no duplicate).
 * **Error taxonomy**: `SshError` with user-actionable messages and
   classification helpers (`is_retriable`, `is_auth_failure`,
   `ErrorCategory`) used to gate automatic reconnects.

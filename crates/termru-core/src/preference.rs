@@ -14,8 +14,9 @@ use crate::error::CoreError;
 
 pub const DEFAULT_SCROLLBACK: u32 = 10_000;
 pub const MAX_SCROLLBACK: u32 = 1_000_000;
-/// Terminal line box as a multiple of the font size (14 px / 23.1 px).
-pub const DEFAULT_LINE_HEIGHT: f64 = 1.65;
+/// Terminal line box as a multiple of the font size (a 14 px font gets an
+/// 18.2 px line).
+pub const DEFAULT_LINE_HEIGHT: f64 = 1.3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +43,8 @@ pub struct TerminalPreferences {
     #[serde(default)]
     pub copy_on_select: bool,
     /// Multiplier of the font size, the line box of the terminal
-    /// (`1.65` = the design's 14 px / 23.1 px). Additive: an older record
-    /// without the field loads with the default.
+    /// ([`DEFAULT_LINE_HEIGHT`] = `1.3`). Additive: an older record without
+    /// the field loads with the default.
     #[serde(default = "default_line_height")]
     pub line_height: f64,
 }
@@ -215,12 +216,25 @@ mod tests {
         }
         let ok = Preferences {
             terminal: TerminalPreferences {
-                line_height: 1.65,
+                line_height: 1.65, // the previous default stays valid
                 ..TerminalPreferences::default()
             },
             ..Preferences::default()
         };
         ok.validate().unwrap();
+    }
+
+    #[test]
+    fn default_line_height_is_tight_and_consistent() {
+        assert_eq!(DEFAULT_LINE_HEIGHT, 1.3);
+        assert_eq!(default_line_height(), DEFAULT_LINE_HEIGHT);
+        assert_eq!(
+            Preferences::default().terminal.line_height,
+            DEFAULT_LINE_HEIGHT
+        );
+        // A record that omits the field gets the same value through serde.
+        let parsed: TerminalPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.line_height, DEFAULT_LINE_HEIGHT);
     }
 
     /// A record written before the redesign phase exists in every install

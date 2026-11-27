@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+* Desktop UI: switching routes or splitting panes no longer kills SSH
+  sessions (terminals live in a registry outside the route tree); app
+  shortcuts work inside the terminal; "+ New host" and other dead buttons
+  work again.
+* SSH engine: a large paste can no longer deadlock a connection (separate
+  reader and writer tasks); keystrokes keep their order (synchronous write
+  command plus an ordered, batching write queue per session in the UI);
+  `TCP_NODELAY` and TCP keepalive are set; new hosts default to a 30 s SSH
+  keepalive and a stored `0` now means "automatic (30 s)".
+* A killed remote shell or a server-side close ends the session instead of
+  reconnecting in a loop; only transport loss is retried, with a lifetime
+  cap of 20 reconnects.
+* One overall connect deadline covers DNS, TCP, key exchange and shell
+  setup; addresses are raced (Happy Eyeballs) and cancel works in every
+  phase.
+* Trusting a changed host key only replaces this host's key of the same
+  type in `known_hosts`; wildcard, `@revoked`, `@cert-authority` and other
+  hosts' lines are kept, as are the file's permissions.
+* A view that attaches while output streams sees every byte exactly once;
+  the terminal size set while connecting is applied on every connect.
+* A tab moved to a new window keeps its session: a session without a view
+  now lives for a 10 s grace period instead of being closed at once.
+* Hosts and preferences reload after a sync pull (`sync-applied` event).
+
+### Changed
+
+* The default terminal line height is 1.3.
+* Session output is merged into larger updates (up to 64 KiB / 8 ms);
+  small chunks such as keystroke echo are still sent immediately.
+
 ## [0.2.0] — 2026-10-25
 
 The first release of the UI/UX redesign (Phase 19, R1–R3 of the plan in

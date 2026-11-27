@@ -113,7 +113,13 @@ pub struct SyncEngine {
     /// The transport for the currently configured server URL (`None` until
     /// the first cycle).
     transport: Mutex<Option<TransportSource>>,
+    /// Called with the number of remote changes a cycle applied locally, so
+    /// the UI can reload what it shows. Set once at startup.
+    on_applied: Mutex<Option<AppliedHook>>,
 }
+
+/// Callback invoked after a cycle that applied remote changes.
+pub type AppliedHook = Arc<dyn Fn(usize) + Send + Sync>;
 
 impl SyncEngine {
     /// Creates an engine for the given store.
@@ -122,6 +128,7 @@ impl SyncEngine {
             store,
             tokens: Arc::new(KeyringTokens),
             transport: Mutex::new(None),
+            on_applied: Mutex::new(None),
         }
     }
 
@@ -133,6 +140,7 @@ impl SyncEngine {
             store,
             tokens,
             transport: Mutex::new(None),
+            on_applied: Mutex::new(None),
         }
     }
 
@@ -147,6 +155,7 @@ impl SyncEngine {
             store,
             tokens,
             transport: Mutex::new(Some(TransportSource::Injected(transport))),
+            on_applied: Mutex::new(None),
         }
     }
 
@@ -219,6 +228,35 @@ impl SyncEngine {
     /// refreshes it first; when the server refuses a request, the cycle
     /// refreshes once and retries. A failure never changes the local data.
     pub async fn run_cycle(&self) -> Result<SyncOutcome, SyncError> {
+        let outcome = self.run_cycle_inner().await?;
+        // One place for both callers (the background scheduler and the
+        // `sync_now` command): whatever pulled remote changes tells the UI.
+        if outcome.applied > 0 {
+            self.notify_applied(outcome.applied);
+        }
+        Ok(outcome)
+    }
+
+    /// Registers the callback that is told about applied remote changes.
+    pub fn set_applied_hook(&self, hook: AppliedHook) {
+        *self
+            .on_applied
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+    }
+
+    fn notify_applied(&self, applied: usize) {
+        let hook = self
+            .on_applied
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(hook) = hook {
+            hook(applied);
+        }
+    }
+
+    async fn run_cycle_inner(&self) -> Result<SyncOutcome, SyncError> {
         match self.cycle().await {
             Err(SyncError::Unauthorized(_)) => {
                 let settings = self.settings()?;
@@ -720,6 +758,51 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         assert_eq!(since.len(), 1);
         assert_eq!(since[0], 0);
+    }
+
+    /// The UI reloads hosts/prefs when a cycle applied remote changes: the
+    /// hook fires once, with the number of applied records, and not at all
+    /// for a cycle that applied nothing.
+    #[test]
+    fn a_cycle_that_applies_remote_changes_notifies_the_hook() {
+        let transport = Arc::new(FakeTransport::new());
+        let (_dir, store, engine, tokens) = engine_with(transport.clone());
+        configure(&store);
+        tokens.set(&signed_in_tokens()).expect("store the tokens");
+        let seen: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        engine.set_applied_hook(Arc::new(move |applied| {
+            sink.lock().unwrap_or_else(|e| e.into_inner()).push(applied);
+        }));
+
+        // Nothing to pull: no notification.
+        block_on(engine.run_cycle()).expect("an empty cycle succeeds");
+        assert!(seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+
+        let mut remote = Host::new(
+            "web-3".to_string(),
+            "web-3.example.com".to_string(),
+            "deploy".to_string(),
+        );
+        remote.id = uuid::Uuid::new_v4().into();
+        let wire = termru_core::sync::WireRecord {
+            id: remote.id.to_string(),
+            kind: RecordKind::Host,
+            rev: 7,
+            updated_at: Utc::now(),
+            deleted: false,
+            payload: Some(serde_json::to_value(&remote).expect("serialize the host")),
+        };
+        {
+            let mut page = transport
+                .pull_page
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            page.records = vec![wire];
+            page.next_rev = 7;
+        }
+        block_on(engine.run_cycle()).expect("the cycle must succeed");
+        assert_eq!(*seen.lock().unwrap_or_else(|e| e.into_inner()), vec![1]);
     }
 
     #[test]

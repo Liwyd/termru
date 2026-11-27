@@ -10,6 +10,15 @@ use crate::validate;
 pub const DEFAULT_SSH_PORT: u16 = 22;
 pub const DEFAULT_TERM: &str = "xterm-256color";
 
+/// Keepalive interval (seconds) a new host starts with, and the interval the
+/// SSH engine uses when a host stores `0`.
+///
+/// There is no separate "disabled" state in the data model, so `0` can only
+/// mean "use the default": a keepalive-less connection silently dies behind
+/// NAT/firewall idle timeouts, which is the failure this default prevents.
+/// A user who really wants (almost) none can store a large interval.
+pub const DEFAULT_KEEPALIVE_SECONDS: u32 = 30;
+
 /// How a host authenticates. Secrets referenced by these variants are stored
 /// exclusively in the OS credential vault and are never part of the synced
 /// payload or the local database.
@@ -48,7 +57,9 @@ pub struct Host {
     /// Terminal type advertised in the SSH pty-req.
     #[serde(default = "default_term")]
     pub term: String,
-    /// Server keepalive interval in seconds; 0 disables keepalives.
+    /// Server keepalive interval in seconds; `0` means "automatic"
+    /// ([`DEFAULT_KEEPALIVE_SECONDS`]) — keepalives cannot be switched off
+    /// entirely (see the constant for why).
     #[serde(default)]
     pub keepalive_seconds: u32,
     /// Sort position within its group (lower first).
@@ -90,7 +101,7 @@ impl Host {
             favorite: false,
             description: None,
             term: default_term(),
-            keepalive_seconds: 0,
+            keepalive_seconds: DEFAULT_KEEPALIVE_SECONDS,
             sort_order: 0,
             created_at: now,
             updated_at: now,
@@ -142,6 +153,14 @@ mod tests {
         assert_eq!(host.term, DEFAULT_TERM);
         assert!(!host.deleted);
         host.validate().unwrap();
+    }
+
+    /// Regression test: new hosts used to start with keepalives off, so an
+    /// idle connection silently died behind a NAT/firewall.
+    #[test]
+    fn new_hosts_keep_the_connection_alive_by_default() {
+        assert_eq!(valid_host().keepalive_seconds, DEFAULT_KEEPALIVE_SECONDS);
+        const { assert!(DEFAULT_KEEPALIVE_SECONDS > 0) };
     }
 
     #[test]

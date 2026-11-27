@@ -138,12 +138,12 @@ pub fn validate_term(value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validates a keepalive interval in seconds (0 disables keepalives).
+/// Validates a keepalive interval in seconds (0 = automatic default).
 pub fn validate_keepalive(seconds: u32) -> Result<()> {
     const MAX_KEEPALIVE: u32 = 3_600;
     if seconds > MAX_KEEPALIVE {
         return Err(CoreError::validation(format!(
-            "keepalive interval must be 0 (disabled) or at most {MAX_KEEPALIVE} seconds"
+            "keepalive interval must be 0 (automatic) or at most {MAX_KEEPALIVE} seconds"
         )));
     }
     Ok(())
