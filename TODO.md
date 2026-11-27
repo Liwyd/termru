@@ -14,6 +14,9 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Visual UI walkthrough on a real desktop session (add host, connect, resize, split pane, move tab to new window, store password, palette, rebind key, sync login).
 - [ ] Tag `v0.1.0` (or subsequent production tag) using credentials on a push-enabled host with release permissions.
 
+### Dependency maintenance
+- [ ] Evaluate migrating `chrono` (RUSTSEC-2026-0543, unmaintained, ignored in `deny.toml`) to `jiff` or `time` before 2027-03-01; keep the stored epoch-ms / RFC 3339 wire formats and the `tokio-postgres` mapping working (see `docs/security/dependency-review.md`).
+
 ---
 
 ## Operational Rules & Conventions
@@ -22,7 +25,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
    - Rust 1.99 workspace (`termru-core`, `termru-store`, `termru-ssh`, `termru-desktop`, `termru-cloud-server`).
    - Tauri 2 stable + Svelte 5 + Vite 8 + TypeScript 5.x + `@xterm/xterm` 6.
    - SQLite locally (rusqlite bundled, WAL mode, foreign keys, versioned migrations) + PostgreSQL for cloud sync.
-   - Pure Rust SSH engine (`russh 0.64`) with TOFU host keys and changed-key warnings.
+   - Pure Rust SSH engine (`russh 0.65`) with TOFU host keys and changed-key warnings.
 
 2. **Security & Privacy:**
    - No secret synchronization: secrets live exclusively in the OS Keyring (`keyring` crate).

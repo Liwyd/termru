@@ -19,7 +19,7 @@ Termru must connect to SSH servers with:
 
 ## Decision
 
-Use **`russh` 0.64 (pure Rust)** as the SSH client implementation, in
+Use **`russh` 0.65 (pure Rust)** as the SSH client implementation, in
 `crates/termru-ssh`, with system OpenSSH as *test fixtures only* (a local
 `sshd` in integration tests).
 

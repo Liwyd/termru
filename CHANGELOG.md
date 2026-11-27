@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+* Dependency updates for RustSec advisories: `russh` 0.64 -> 0.65
+  (RUSTSEC-2026-0495; also pulls `rsa` 0.10.0, which resolves
+  RUSTSEC-2023-0071 so its `deny.toml` ignore is removed), `rusqlite`
+  0.40 -> 0.41 / `libsqlite3-sys` 0.39 (RUSTSEC-2026-0459, bundled SQLite
+  CVE), `url` 2.5.8 -> 2.5.9 (RUSTSEC-2026-0592) and `cookie` 0.18.2 ->
+  0.18.3 (RUSTSEC-2026-0594).
+* `chrono` (RUSTSEC-2026-0543, unmaintained, no patched release) is
+  accepted with a dated `deny.toml` ignore (review by 2027-03-01);
+  migration to `jiff`/`time` is tracked in `TODO.md`.
+
 ### Fixed
 
 * Desktop UI: switching routes or splitting panes no longer kills SSH
