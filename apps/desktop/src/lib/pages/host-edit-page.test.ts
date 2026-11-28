@@ -148,7 +148,7 @@ afterEach(() => {
 });
 
 describe('the page', () => {
-  it('shows the anatomy: one header line, numbered sections, footer', () => {
+  it('shows the anatomy: one header line, a section index, titled groups, footer', () => {
     open(host());
     // One line: a way back, the title, the host being edited. No breadcrumb, no description.
     expect(target.querySelector('nav[aria-label="Breadcrumb"], .description')).toBeNull();
@@ -156,17 +156,25 @@ describe('the page', () => {
     expect(target.querySelector('header.head .count')?.textContent).toBe('staging-api');
     expect(target.querySelector('header.head [aria-label="Back to hosts"]')).not.toBeNull();
     expect(target.textContent).not.toContain('Credentials stay on this device.');
-    const steps = Array.from(target.querySelectorAll('.step')).map((el) =>
-      el.textContent?.replace(/\s+/g, ' ').trim(),
+    // The groups, in order, with sentence-case titles (no numbered mono eyebrow).
+    const titles = Array.from(target.querySelectorAll('section[aria-labelledby] > header h2')).map(
+      (el) => el.textContent,
     );
-    expect(steps).toEqual([
-      '01 / CONNECTION',
-      '02 / AUTHENTICATION',
-      '03 / ORGANIZATION',
-      '04 / JUMP HOSTS',
-      '05 / PORT FORWARDS',
-      '06 / ADVANCED',
+    expect(titles).toEqual([
+      'Connection',
+      'Sign-in',
+      'Jump hosts',
+      'Forwards',
+      'Advanced',
+      'Organization',
     ]);
+    expect(target.querySelector('.step, .wp-label')).toBeNull();
+    // The index on the left lists the same groups and marks the one being read.
+    const index = target.querySelector('nav[aria-label="Sections of this host"]');
+    expect(
+      Array.from(index?.querySelectorAll('button') ?? []).map((b) => b.textContent?.trim()),
+    ).toEqual(titles);
+    expect(index?.querySelectorAll('[aria-current="location"]')).toHaveLength(1);
     for (const label of ['Cancel', 'Save host', 'Save & connect']) {
       expect(findButton(target, label)).toBeTruthy();
     }
@@ -225,6 +233,38 @@ describe('the page', () => {
     expect(target.querySelector('.command')?.textContent).toBe('ssh dev@198.51.100.12 -p 2222');
     expect(target.textContent).toContain('Password authentication');
     expect(target.textContent).toContain('Sandbox / staging-api');
+  });
+
+  it('breaks the preview between words, never inside one', () => {
+    open(host());
+    const words = Array.from(target.querySelectorAll('.command .tok')).map((el) => el.textContent);
+    expect(words).toEqual(['ssh', 'dev@198.51.100.12']);
+    expect(target.querySelector('.command')?.textContent).toBe('ssh dev@198.51.100.12');
+  });
+
+  it('takes you to a group from the index: its heading gets the focus', () => {
+    open(host());
+    const index = target.querySelector('nav[aria-label="Sections of this host"]') as HTMLElement;
+    click(findButton(index, 'Jump hosts'));
+    expect(document.activeElement).toBe(document.getElementById('sec-jump'));
+    expect(
+      findButton(index, 'Jump hosts').getAttribute('aria-current'),
+      'the group you chose is the current one',
+    ).toBe('location');
+  });
+
+  it('keeps what the device stores for the host in the Sign-in group, next to the field', async () => {
+    answers.set('secret_has', true);
+    open(host());
+    await vi.waitFor(() =>
+      expect(target.querySelector('[aria-labelledby="sec-auth"] .stored')?.textContent).toContain(
+        'A password is stored on this device',
+      ),
+    );
+    // There is no rail of credentials any more: the summary holds the preview only.
+    expect(
+      target.querySelector('aside[aria-label="Summary of this host"]')?.textContent,
+    ).not.toContain('Forget password');
   });
 
   it('shows 0 keepalive as Automatic (30 s)', () => {

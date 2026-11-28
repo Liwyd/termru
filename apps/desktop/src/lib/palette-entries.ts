@@ -34,8 +34,13 @@ const START_FOLDERS = 6;
 const PREFERENCE_SECTIONS: { id: string; title: string; keywords: string }[] = [
   {
     id: 'appearance-label',
-    title: 'Terminal appearance',
-    keywords: 'font size line height theme cursor scrollback copy paste',
+    title: 'Appearance',
+    keywords: 'terminal font size line height theme preview colour color',
+  },
+  {
+    id: 'terminal-label',
+    title: 'Terminal',
+    keywords: 'cursor blink scrollback copy select paste confirm',
   },
   { id: 'shortcuts-label', title: 'Keyboard shortcuts', keywords: 'keybindings keys bind record' },
   { id: 'motion-label', title: 'Motion and accessibility', keywords: 'reduce motion focus ring' },

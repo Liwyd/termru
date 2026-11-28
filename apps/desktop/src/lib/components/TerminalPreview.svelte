@@ -55,10 +55,10 @@
 </figure>
 
 <style>
+  /* A pane, as in a session: the terminal colour, 12 px corners, no edge. */
   .preview {
     margin: 0;
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
+    border-radius: var(--termru-radius-pane);
     background: var(--termru-terminal);
     overflow: hidden;
   }
@@ -68,8 +68,7 @@
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.04em;
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
     background: var(--termru-terminal);
   }
 

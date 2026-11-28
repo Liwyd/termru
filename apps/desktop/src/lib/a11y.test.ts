@@ -452,6 +452,47 @@ describe('axe: every route', () => {
     await visit('preferences');
     await expectAccessible();
   });
+
+  it('Folders: a folder selected, its inspector, and the new-folder form', async () => {
+    await start();
+    await visit('folders');
+    const tree = target.querySelectorAll<HTMLButtonElement>(
+      'nav[aria-label="Folders"] button.item',
+    );
+    click(tree[1]);
+    await expectAccessible();
+    click(findButton(target, 'New folder'));
+    await tick();
+    await expectAccessible();
+  });
+
+  it('Identities: an identity selected, and both new-identity forms', async () => {
+    await start();
+    await visit('identities');
+    await tick();
+    await expectAccessible();
+    click(findButton(target, 'New identity'));
+    await tick();
+    await expectAccessible();
+    const existing = target.querySelector<HTMLInputElement>(
+      'input[name="source"][value="existing"]',
+    );
+    existing?.click();
+    flushSync();
+    await expectAccessible();
+  });
+
+  it('Preferences: the section index, a custom font and a shortcut being recorded', async () => {
+    await start();
+    await visit('preferences');
+    const select = document.getElementById('pref-font') as HTMLSelectElement;
+    select.value = '__custom__';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+    click(target.querySelector('[aria-label^="Record a shortcut for"]') as Element);
+    await expectAccessible();
+    shortcuts.cancel();
+  });
 });
 
 describe('axe: dialogs and layers', () => {

@@ -14,8 +14,10 @@ It covers:
 
 - every route: Hosts (loaded, with sessions running, empty, failed to load),
   Sessions (a live tab, nothing open), the host editor (new, editing, with
-  errors showing), Folders (loaded, empty), Identities (loaded, empty), Sync
-  (signed out, with form errors, signed in with a conflict), Preferences;
+  errors showing), Folders (loaded, empty, a folder selected, the new-folder
+  form), Identities (loaded, empty, the new-identity forms), Sync (signed out,
+  with form errors, signed in with a conflict), Preferences (and with a custom
+  font and a shortcut being recorded);
 - every dialog and layer: the delete confirmation, the row menu, the connect
   dialog, the host key question (unknown and changed), the sign-in question
   (keyboard-interactive and passphrase), the close-session question, the
@@ -143,19 +145,29 @@ The tabs, the new-session button and the toolbar are one row.
 
 ### Host editor
 
-Order: the back button of the header ("Back to hosts"), then the six sections
-top to bottom, the rail, the footer.
+Order: the back button of the header ("Back to hosts"), the section index, the
+not-approved strip (when there is one), the six groups top to bottom, the
+connection preview, the footer.
 
-| Section | Controls |
+| Control | Operate |
 |---|---|
-| 01 Connection | Name, Username, Address, Port |
-| 02 Authentication | Method (three radio buttons: Left and Right move, Space selects), then the password field and "Save in this device's credential store", or the Identity select and "Manage identities…", or nothing for the agent |
-| 03 Organization | Folder, Favorite (a toggle), Tags (one toggle per tag), New tag with Add tag (Enter in the field adds), Comment |
-| 04 Jump hosts | Per hop: move earlier, move later, remove (a button at either end says why it does nothing); then the "Add a jump host" select (Arrow keys choose, the host is added at once). The route (`you → bastion → app`) is a polite live region; a problem with the route is the select's error |
-| 05 Port forwards | Per forward: Type (select), Bind address, Bind port, Target host and Target port (not for a SOCKS forward), the Enabled switch, Remove. Then Add forward (the focus goes to the new row's Type) |
-| 06 Advanced | Terminal type, Keepalive; Environment variables (a name and a value per row, Remove, Add variable); Startup command; Forward my SSH agent (a checkbox; its risk is the text under it); Authentication order (two radio buttons, then for a custom order each method with earlier, later and remove, and an Add a method select) |
-| Rail | Forget password, Forget passphrase (when one is stored); "Review them…" when the synced settings of the host are not approved on this device |
+| Section index | The navigation "Sections of this host": a button per group (Connection, Sign-in, Jump hosts, Forwards, Advanced, Organization). Enter or Space scrolls the group to the top and puts the focus on its heading, so a screen reader starts reading there; the one you are reading is `aria-current="location"` and follows the scroll. They are buttons, not links: the app routes by the URL hash |
+
+| Group | Controls |
+|---|---|
+| Connection | Name, Username, Address, Port |
+| Sign-in | Method (three radio buttons: Left and Right move, Space selects), then the password field, "Save in this device's credential store" and, when one is stored, Forget password; or the Identity select, the key file and fingerprint, Forget passphrase (when one is stored) and "Manage identities…"; or nothing for the agent |
+| Jump hosts | Per hop: move earlier, move later, remove (a button at either end says why it does nothing); then the "Add a jump host" select (Arrow keys choose, the host is added at once). The route (`you → bastion → app`) is a polite live region; a problem with the route is the select's error |
+| Forwards | Per forward: Type (select), Bind address, Bind port, Target host and Target port (not for a SOCKS forward), the Enabled switch, Remove. Then Add forward (the focus goes to the new row's Type) |
+| Advanced | Terminal type, Keepalive; Environment variables (a name and a value per row, Remove, Add variable); Startup command; Forward my SSH agent (a checkbox; its risk is the text under it); Authentication order (two radio buttons, then for a custom order each method with earlier, later and remove, and an Add a method select) |
+| Organization | Folder, Favorite (a toggle), Tags (one toggle per tag), New tag with Add tag (Enter in the field adds), Comment |
+| Not approved strip | "Review them…" when the synced settings of the host are not approved on this device |
 | Footer | Cancel, Save host, Save & connect |
+
+The status of what this device stores is a polite region in Sign-in (it is
+read when it changes: "A password is stored on this device", "No password is
+stored…"). The unsaved marker in the header ("Unsaved changes") is a polite
+region too; it is a dot and words, never colour alone.
 
 After a row is added, moved or removed the focus stays on the control that was used
 (or on the Add button after a removal). An error of a forward or a variable is
@@ -180,47 +192,56 @@ asks first: the question focuses Keep editing; Escape keeps editing.
 
 ### Folders
 
-Order: New folder, the folder tree, the list (a Move select per host, Choose
-hosts), the rail.
+Order: New folder, the folder tree, the hosts of the selection (a Move select
+per host, Choose hosts), the inspector.
 
 | Control | How | Operate |
 |---|---|---|
-| Folder tree | Tab through every folder (the selected one has `aria-current`) | Up and Down move the focus; Enter or Space selects. The tree is always open |
+| Folder tree | Tab through every folder (the selected one has `aria-current`) | Up and Down move the focus; Enter or Space selects (and never animates the inspector). The tree is always open |
 | Move | the select of a host row | Arrow keys choose the folder; the host moves at once |
 | Choose hosts | Tab | Opens a search field and a list of hosts; "Move here" per host |
-| Rail form | Tab | Name, Parent folder, Cancel, Save folder; an impossible parent says why (cycle guard) |
-| Delete folder | Tab to the rail | The confirmation says what moves and focuses Cancel |
+| Inspector form | Tab | Name, Parent folder, Cancel, Save folder; an impossible parent says why (cycle guard) |
+| Delete folder | Tab to the inspector | The line over the button says what would move; the confirmation says it again and focuses Cancel |
+
+The inspector is the region "Edit folder" ("New folder" while one is being
+made). Under 860 px of room it sits under the hosts and the page scrolls; the
+order of the keyboard is the same.
 
 ### Identities
 
-Order: New identity, the list, the detail (Choose key…, Unbind, Copy, Edit of
-a host), the rail.
+Order: New identity, the list, the inspector (Choose key…, Unbind, Copy, Edit
+of a host, the form).
 
 | Control | How | Operate |
 |---|---|---|
-| List | Tab through the identities | Enter or Space selects |
-| Rail form (new) | Tab | "Where the key comes from" (two radio buttons), Name, Comment, the passphrase and "Remember the passphrase on this device", or "Choose key file…" |
-| Rail form (edit) | Tab | Name, Comment, Cancel, Save identity |
-| Delete identity | Tab to the rail | The confirmation says what the deletion affects and focuses Cancel |
+| List | Tab through the identities | Enter or Space selects. A row reads its name, short fingerprint, algorithm and how many hosts use it |
+| Inspector form (new) | Tab | "Where the key comes from" (two radio buttons), Name, Comment, the passphrase and "Remember the passphrase on this device", or "Choose key file…" |
+| Inspector form (edit) | Tab | Name, Comment, Cancel, Save identity |
+| Copy | the Fingerprint and Public key groups | Enter or Space copies; the button says "Copied" and a status says it aloud |
+| Delete identity | Tab to the inspector | The line over the button and the confirmation say what the deletion affects; the confirmation focuses Cancel |
 
 ### Sync
 
 Signed out: Server address, Email, Password, Device name, Sign in (errors on
 blur; a bad field takes the focus on submit). Signed in: Sync now, the
 conflicts (for each: Take the server's copy, Keep this device's copy), Change
-server or account, Sign out. The status line is a polite live region: it
-announces "Talking to the server", "Up to date", "Sync offline" and "Last sync
-failed" when they change.
+server or account (a disclosure: `aria-expanded`), Sign out. The status line is
+a polite live region: it announces "Talking to the server", "Up to date", "Sync
+offline" and "Last sync failed" when they change. The status has a shape per
+state besides its colour (dot, ring, diamond, bar).
 
 ### Preferences
 
-Order: Restore defaults, then Font family, Custom font family (when "Other…" is
-chosen), Size, Line height, Theme; Cursor, Cursor blink, Scrollback, Copy on
-select, Confirm multi-line paste; the shortcut table; Reduce motion,
-High-visibility focus, Routine notices, Preview notice.
+Order: Restore defaults, the section index, then Appearance (the preview is not
+interactive: it is hidden from screen readers and has a text description),
+Theme, Font family, Custom font family (when "Other…" is chosen), Size, Line
+height; Terminal (Cursor, Cursor blink, Scrollback, Copy on select, Confirm
+multi-line paste); the shortcut table; Motion & accessibility (Reduce motion,
+High-visibility focus); Notifications (Routine notices, Preview notice); About.
 
 | Control | Operate |
 |---|---|
+| Section index | The navigation "Sections of Preferences": a button per section; Enter or Space scrolls it to the top and focuses its heading (the palette's "Preferences: …" entries do the same) |
 | Selects | Arrow keys change the value; it applies and saves at once |
 | Number fields (Size, Line height, Scrollback) | Type; checked when you leave the field or press Enter; an out-of-range value says the range and saves nothing |
 | Switches | Space or Enter flips it (`role="switch"`, `aria-checked`) |

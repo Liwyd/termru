@@ -9,6 +9,7 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PreferencesPage from './PreferencesPage.svelte';
 import { notices } from '../notify.svelte';
+import { intents } from '../stores/intents.svelte';
 import { defaultPrefs, prefs } from '../stores/prefs.svelte';
 import { shortcuts } from '../stores/shortcuts.svelte';
 import { click, findButton, newTarget, stubBrowserApis, type } from '../test-support/dom';
@@ -340,6 +341,57 @@ describe('shortcuts', () => {
     click(target.querySelector('[aria-label="Reset Close tab to its default"]') as Element);
     await vi.waitFor(() => expect(saved()).toHaveLength(1));
     expect('tab.close' in lastSaved().keybindings).toBe(false);
+  });
+});
+
+describe("the section index and the palette's go-to-section", () => {
+  const index = () => target.querySelector('nav[aria-label="Sections of Preferences"]');
+
+  it('lists the sections in order, with a heading for each', async () => {
+    await mountPage();
+    const labels = Array.from(index()?.querySelectorAll('button') ?? []).map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).toEqual([
+      'Appearance',
+      'Terminal',
+      'Keyboard shortcuts',
+      'Motion & accessibility',
+      'Notifications',
+      'About',
+    ]);
+    for (const id of [
+      'appearance-label',
+      'terminal-label',
+      'shortcuts-label',
+      'motion-label',
+      'notices-label',
+      'about-label',
+    ]) {
+      const heading = document.getElementById(id);
+      expect(heading?.tagName, id).toBe('H2');
+      expect(heading?.getAttribute('tabindex'), id).toBe('-1');
+      expect(heading?.closest('section')?.getAttribute('aria-labelledby'), id).toBe(id);
+    }
+  });
+
+  it('takes the section the palette asked for: its heading gets the focus', async () => {
+    intents.request({ kind: 'preferences-section', id: 'shortcuts-label' });
+    await mountPage();
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(document.getElementById('shortcuts-label')),
+    );
+    expect(intents.pending).toBeNull();
+  });
+
+  it('takes you to a section from the index', async () => {
+    await mountPage();
+    const button = Array.from(index()?.querySelectorAll('button') ?? []).find(
+      (candidate) => candidate.textContent?.trim() === 'Notifications',
+    ) as HTMLButtonElement;
+    click(button);
+    expect(document.activeElement).toBe(document.getElementById('notices-label'));
+    expect(button.getAttribute('aria-current')).toBe('location');
   });
 });
 

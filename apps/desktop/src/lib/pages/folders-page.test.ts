@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe('the page', () => {
-  it('has the page anatomy and three columns', () => {
+  it('has the page anatomy: the tree, the hosts, the inspector', () => {
     mountPage();
     expect(target.querySelector('nav[aria-label="Breadcrumb"], .description')).toBeNull();
     expect(target.querySelector('header.head h1')?.textContent).toBe('Folders');
@@ -119,7 +119,7 @@ describe('the page', () => {
     );
     expect(target.querySelector('nav[aria-label="Folders"]')).not.toBeNull();
     expect(target.querySelector('section.detail')).not.toBeNull();
-    expect(target.querySelector('aside.rail')).not.toBeNull();
+    expect(target.querySelector('aside.insp[aria-label="Edit folder"]')).not.toBeNull();
     // No modal covers the nav.
     expect(target.querySelector('[aria-modal]')).toBeNull();
   });
@@ -143,26 +143,27 @@ describe('the page', () => {
     expect(treeItem('All hosts').getAttribute('aria-current')).toBe('true');
   });
 
-  it('selecting a folder lists its hosts and fills the rail', () => {
+  it('selecting a folder lists its hosts and fills the inspector', () => {
     mountPage();
     click(treeItem('Europe'));
     expect(target.querySelector('h2')?.textContent).toBe('Europe');
     expect(target.querySelector('.trail')?.textContent).toBe('Production');
-    expect(target.querySelector('.count-label')?.textContent).toBe('1 HOST');
+    expect(target.querySelector('.count-label')?.textContent).toBe('1 host');
     const names = Array.from(target.querySelectorAll('.hostlist .host-name')).map(
       (el) => el.textContent,
     );
     expect(names).toEqual(['atlas']);
     expect(field('folder-name').value).toBe('Europe');
     expect(field('folder-parent').value).toBe('prod');
-    expect(target.querySelector('.rail .wp-label')?.textContent).toBe('EDIT FOLDER');
+    expect(target.querySelector('aside.insp .insp-title')?.textContent?.trim()).toBe('Europe');
+    expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('Edit folder');
   });
 
   it('a parent folder lists the hosts of its subfolders too, as its count says', () => {
     mountPage();
     click(treeItem('Production'));
-    expect(target.querySelector('.count-label')?.textContent).toContain('2 HOSTS');
-    expect(target.querySelector('.count-label')?.textContent).toContain('2 SUBFOLDERS');
+    expect(target.querySelector('.count-label')?.textContent).toContain('2 hosts');
+    expect(target.querySelector('.count-label')?.textContent).toContain('2 subfolders');
     const lines = Array.from(target.querySelectorAll('.hostlist .target')).map(
       (el) => el.textContent,
     );
@@ -180,10 +181,10 @@ describe('the page', () => {
     ).toEqual(['archive']);
   });
 
-  it('the rail of "All hosts" explains that it is a view, not a folder', () => {
+  it('the inspector of "All hosts" explains that it is a view, not a folder', () => {
     mountPage();
-    expect(target.querySelector('aside.rail form')).toBeNull();
-    expect(target.querySelector('aside.rail')?.textContent).toContain(
+    expect(target.querySelector('aside.insp form')).toBeNull();
+    expect(target.querySelector('aside.insp')?.textContent).toContain(
       'is a view of your hosts, not a folder',
     );
   });
@@ -207,33 +208,38 @@ describe('the page', () => {
   });
 });
 
-describe('the rail form arrives', () => {
-  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-  const form = () => target.querySelector('.rail form');
+describe('the inspector content arrives', () => {
+  const content = () => target.querySelector('aside.insp .content');
+  const choose = (label: string, detail: number) => {
+    treeItem(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail }));
+    flushSync();
+  };
 
-  it('moves in when it opens while the page is open, and not on a later click', async () => {
-    window.dispatchEvent(new Event('pointerdown'));
+  it('cross-fades when a click chooses a folder, and not when a key does', () => {
     mountPage();
-    await frame();
-    await frame();
-    // "All hosts" has no form: choosing a folder opens it.
-    expect(form()).toBeNull();
-    click(treeItem('Sandbox'));
-    expect(form()?.classList.contains('appear')).toBe(true);
-    // Another folder reuses the same form: it does not play again.
-    const same = form();
-    click(treeItem('Europe'));
-    expect(form()).toBe(same);
+    choose('Sandbox', 1);
+    expect(content()?.classList.contains('fade')).toBe(true);
+    // Enter and Space click with a detail of 0: nothing a key starts is animated.
+    choose('Europe', 0);
+    expect(content()?.classList.contains('fade')).toBe(false);
   });
 
-  it('does not move when the page opens on a folder', async () => {
-    window.dispatchEvent(new Event('pointerdown'));
+  it('does not move when the page opens on a folder', () => {
     hosts.folderSelection = 'sand';
     mountPage();
-    expect(form()).not.toBeNull();
-    await frame();
-    expect(form()?.classList.contains('appear')).toBe(false);
+    expect(target.querySelector('aside.insp form')).not.toBeNull();
+    // The first paint is not "a click chose it".
+    expect(content()?.classList.contains('fade')).toBe(false);
     hosts.folderSelection = 'all';
+  });
+
+  it("replaces the form with the next folder's own values", () => {
+    mountPage();
+    choose('Sandbox', 1);
+    expect(field('folder-name').value).toBe('Sandbox');
+    choose('Europe', 1);
+    expect(field('folder-name').value).toBe('Europe');
+    expect(field('folder-parent').value).toBe('prod');
   });
 });
 
@@ -303,9 +309,9 @@ describe('moving hosts', () => {
     mountPage();
     click(treeItem('Europe'));
     // The examples first, the full searchable list on request.
-    expect(target.querySelector('#available-label')?.textContent).toContain('EXAMPLES');
+    expect(target.querySelector('#available-label')?.textContent).toContain('examples');
     click(findButton(target, 'Choose hosts'));
-    expect(target.querySelector('#available-label')?.textContent).not.toContain('EXAMPLES');
+    expect(target.querySelector('#available-label')?.textContent).not.toContain('examples');
     type(
       target.querySelector('input[aria-label="Search hosts to move"]') as HTMLInputElement,
       'arch',
@@ -353,7 +359,7 @@ describe('the edit rail and the cycle guard', () => {
       ['edge', true],
       ['sand', false],
     ]);
-    expect(target.querySelector('aside.rail')?.textContent).toContain(
+    expect(target.querySelector('aside.insp')?.textContent).toContain(
       'cannot be its own parent or be moved into one of its descendants',
     );
   });
@@ -369,7 +375,7 @@ describe('the edit rail and the cycle guard', () => {
     click(findButton(target, 'Save folder'));
     await tick();
     expect(callsOf('group_save')).toHaveLength(0);
-    expect(target.querySelector('aside.rail')?.textContent).toContain(
+    expect(target.querySelector('aside.insp')?.textContent).toContain(
       'cannot move into one of its own subfolders',
     );
   });
@@ -435,7 +441,8 @@ describe('the edit rail and the cycle guard', () => {
     click(treeItem('Production'));
     click(findButton(target, 'New folder'));
     await tick();
-    expect(target.querySelector('.rail .wp-label')?.textContent).toBe('NEW FOLDER');
+    expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('New folder');
+    expect(target.querySelector('aside.insp .insp-title')?.textContent?.trim()).toBe('New folder');
     expect(field('folder-name').value).toBe('');
     expect(field('folder-parent').value).toBe('prod');
     expect(document.activeElement).toBe(field('folder-name'));
@@ -447,7 +454,8 @@ describe('the edit rail and the cycle guard', () => {
     await vi.waitFor(() => expect(noticeText(notices.visible.at(-1))).toBe('Folder created. Asia'));
     // The new folder is selected and its rail edits it.
     expect(treeItem('Asia').getAttribute('aria-current')).toBe('true');
-    expect(target.querySelector('.rail .wp-label')?.textContent).toBe('EDIT FOLDER');
+    expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('Edit folder');
+    expect(target.querySelector('aside.insp .insp-title')?.textContent?.trim()).toBe('Asia');
   });
 
   it('a refreshed list does not wipe what is being typed', () => {

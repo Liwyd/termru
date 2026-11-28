@@ -9,7 +9,7 @@
   import type { Host } from '../types';
 
   /**
-   * `04 / JUMP HOSTS`: the ordered list of hosts a connection passes through
+   * The Jump hosts section: the ordered list of hosts a connection passes through
    * on the way (a bastion), the route that results (`you → bastion → app`)
    * and what is wrong with it. Each hop is another host of the library and
    * keeps its own address, key and host-key decision (ADR 0010).
@@ -75,10 +75,8 @@
 </script>
 
 <EditorSection
-  step="04"
-  label="JUMP HOSTS"
   id="sec-jump"
-  title="Reach it through other hosts"
+  title="Jump hosts"
   blurb="Pass through a bastion or gateway first. Each jump host is a host of your library and keeps its own sign-in."
 >
   {#if form.jumpChain.length > 0}
@@ -185,17 +183,20 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--termru-border);
+    gap: 2px;
   }
 
+  /* A hop is a quiet row of the page: no line, a soft fill. */
   .hop {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--termru-space-12);
     min-height: 56px;
-    padding: var(--termru-space-8) 0;
-    border-bottom: 1px solid var(--termru-border);
+    padding: var(--termru-space-8) var(--termru-space-8) var(--termru-space-8)
+      var(--termru-space-12);
+    border-radius: var(--termru-radius-row);
+    background: var(--termru-side);
   }
 
   .n {

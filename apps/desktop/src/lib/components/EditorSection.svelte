@@ -2,23 +2,17 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * One numbered section of the host editor (frame 4): the mono step label,
-   * the 18 px heading and a muted sentence on the left, the fields on the
-   * right. It collapses to one column under 860 px.
+   * One group of the host editor: a sentence-case title, a quiet sentence under
+   * it, and the fields. Groups are separated by space, not by lines; the
+   * section index on the left of the page lists them by their titles.
    */
   let {
-    step,
-    label,
     id,
     title,
     blurb,
     children,
   }: {
-    /** `04` */
-    step: string;
-    /** `JUMP HOSTS` */
-    label: string;
-    /** The id of the heading (the section is labelled by it). */
+    /** The id of the heading (the section is labelled by it, the index finds it by it). */
     id: string;
     title: string;
     blurb: string;
@@ -27,11 +21,10 @@
 </script>
 
 <section class="section" aria-labelledby={id}>
-  <div class="meta">
-    <p class="wp-label step"><span>{step}</span> / {label}</p>
-    <h2 {id}>{title}</h2>
+  <header class="meta">
+    <h2 {id} tabindex="-1">{title}</h2>
     <p class="blurb">{blurb}</p>
-  </div>
+  </header>
   <div class="fields">
     {@render children()}
   </div>
@@ -39,45 +32,45 @@
 
 <style>
   .section {
-    display: grid;
-    grid-template-columns: 208px minmax(0, 1fr);
-    column-gap: 30px;
-    padding: var(--termru-space-24) 0;
-    border-top: 1px solid var(--termru-border);
-  }
-
-  .section:first-child {
-    border-top: none;
-    padding-top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-16);
+    min-width: 0;
+    /* A section reached from the index lands a little below the top edge. */
+    scroll-margin-top: var(--termru-space-8);
   }
 
   .meta {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-8);
+    gap: 2px;
     min-width: 0;
-  }
-
-  .step span {
-    color: var(--termru-accent-text);
-  }
-
-  .step {
-    color: var(--termru-accent-text);
   }
 
   h2 {
     margin: 0;
-    font-size: 18px;
-    line-height: 28px;
-    font-weight: var(--termru-text-heading-weight);
+    font-size: var(--termru-text-title-size);
+    line-height: var(--termru-text-title-lh);
+    font-weight: var(--termru-text-title-weight);
+    letter-spacing: -0.01em;
+    color: var(--termru-text);
+  }
+
+  h2:focus {
+    outline: none;
+  }
+
+  h2:focus-visible {
+    outline: var(--termru-focus-w) solid var(--termru-accent-text);
+    outline-offset: var(--termru-focus-offset);
+    border-radius: 4px;
   }
 
   .blurb {
     margin: 0;
-    font-size: var(--termru-text-control-size);
-    line-height: var(--termru-text-control-lh);
-    color: var(--termru-text-2);
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    color: var(--termru-text-3);
   }
 
   .fields {
@@ -85,12 +78,5 @@
     flex-direction: column;
     gap: var(--termru-space-16);
     min-width: 0;
-  }
-
-  @media (max-width: 860px) {
-    .section {
-      grid-template-columns: minmax(0, 1fr);
-      row-gap: var(--termru-space-16);
-    }
   }
 </style>

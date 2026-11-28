@@ -465,7 +465,9 @@ kbd {
   cursor: pointer;
 }
 
-:is(.workpage, .sx-dialog) input[aria-invalid='true'],
+/* Specific enough to beat the edge a field has by default (which is written
+   with the `:not()` of its type): an invalid field must show it. */
+:is(.workpage, .sx-dialog) input[aria-invalid='true']:not([type='checkbox']):not([type='radio']),
 :is(.workpage, .sx-dialog) select[aria-invalid='true'] {
   border-color: var(--termru-err-text);
 }
@@ -532,24 +534,6 @@ kbd {
 
 :is(.workpage, .sx-dialog) button.danger.quiet {
   color: var(--termru-err-text);
-}
-
-/* A section label: sentence case, 11 px, medium. The pages that have not been
-   rebuilt yet still write theirs in capitals (`FOLDER TREE`); the label shows
-   them as a sentence until their markup is rewritten. */
-:is(.workpage, .sx-dialog) :is(.wp-label, .section-label) {
-  margin: 0;
-  font-family: var(--termru-font-ui);
-  font-size: var(--termru-text-meta-size);
-  line-height: var(--termru-text-meta-lh);
-  font-weight: var(--termru-text-meta-weight);
-  letter-spacing: 0;
-  text-transform: lowercase;
-  color: var(--termru-text-3);
-}
-
-:is(.workpage, .sx-dialog) :is(.wp-label, .section-label)::first-letter {
-  text-transform: uppercase;
 }
 
 /* A block that arrives on a page (`actions/appear.ts`): opacity and a 4 px

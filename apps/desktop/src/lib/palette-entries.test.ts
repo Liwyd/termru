@@ -254,13 +254,14 @@ describe('palette entries', () => {
     const entries = buildPaletteEntries(deps());
     const sections = entries.filter((entry) => entry.group === 'Preferences');
     expect(sections.map((entry) => entry.title)).toEqual([
-      'Preferences: Terminal appearance',
+      'Preferences: Appearance',
+      'Preferences: Terminal',
       'Preferences: Keyboard shortcuts',
       'Preferences: Motion and accessibility',
       'Preferences: Notifications',
       'Preferences: About',
     ]);
-    sections[1].run();
+    sections[2].run();
     expect(route.route).toBe('preferences');
     expect(intents.pending).toEqual({ kind: 'preferences-section', id: 'shortcuts-label' });
   });

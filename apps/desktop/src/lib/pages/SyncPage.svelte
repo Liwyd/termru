@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import { appear } from '../actions/appear';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import { listen } from '../ipc-backend';
   import { formatLastSession } from '../last-session';
   import { network } from '../stores/network.svelte';
+  import { afterFirstPaint } from '../settled.svelte';
   import { sync } from '../stores/sync.svelte';
   import type { ConflictView } from '../types';
   import { emailError, serverUrlError } from '../validation';
@@ -22,6 +24,9 @@
    * Sync now / sign in / sign out. It gives no list of the account's other
    * devices yet, so the Devices section shows this device and says so.
    */
+
+  /** The form that opens while the page is open moves in; one there at the start does not. */
+  const page = afterFirstPaint();
 
   $effect(() => {
     void sync.load();
@@ -235,221 +240,130 @@
   </PageHeader>
 
   <div class="scroll">
-    <div class="columns">
-      <div class="main">
-        {#if sync.signedIn}
-          <section aria-labelledby="status-label">
-            <p class="wp-label" id="status-label">Status</p>
-            <div class="status {line.tone}" role="status" aria-live="polite">
-              <p class="state"><span class="glyph" aria-hidden="true"></span>{line.label}</p>
-              <p class="state-detail">{line.detail}</p>
+    <div class="column">
+      {#if sync.signedIn}
+        <section class="block" aria-labelledby="status-label">
+          <h2 class="sr-only" id="status-label">Status</h2>
+          <div class="status {line.tone}" role="status" aria-live="polite">
+            <p class="state"><span class="glyph" aria-hidden="true"></span>{line.label}</p>
+            <p class="state-detail">{line.detail}</p>
+          </div>
+          <dl class="facts">
+            <div>
+              <dt>Last sync</dt>
+              <dd>{lastSync}</dd>
             </div>
-            <dl class="facts">
-              <div>
-                <dt>Last sync</dt>
-                <dd>{lastSync}</dd>
-              </div>
-              <div>
-                <dt>Server</dt>
-                <dd class="mono">{sync.status?.settings.server_url}</dd>
-              </div>
-              <div>
-                <dt>Account</dt>
-                <dd class="mono">{sync.status?.settings.email}</dd>
-              </div>
-              <div>
-                <dt>Waiting to send</dt>
-                <dd>{plural(sync.pending, 'change')}</dd>
-              </div>
-              <div>
-                <dt>Conflicts</dt>
-                <dd>{sync.conflictCount}</dd>
-              </div>
-            </dl>
-          </section>
+            <div>
+              <dt>Server</dt>
+              <dd class="mono">{sync.status?.settings.server_url}</dd>
+            </div>
+            <div>
+              <dt>Account</dt>
+              <dd class="mono">{sync.status?.settings.email}</dd>
+            </div>
+            <div>
+              <dt>Waiting to send</dt>
+              <dd>{plural(sync.pending, 'change')}</dd>
+            </div>
+            <div>
+              <dt>Conflicts</dt>
+              <dd>{sync.conflictCount}</dd>
+            </div>
+          </dl>
+        </section>
 
-          {#if sync.conflicts.length > 0}
-            <section aria-labelledby="conflicts-label" class="conflicts">
-              <p class="wp-label" id="conflicts-label">Conflicts</p>
-              <p class="note">
-                Choose which copy to keep. The other one is replaced; nothing is overwritten until
-                you choose.
-              </p>
-              <ul>
-                {#each sync.conflicts as conflict (conflict.record_id)}
-                  {@const changed = differences(conflict)}
-                  <li>
-                    <div class="conflict-head">
-                      <p class="record">
-                        <span class="record-name">{recordName(conflict)}</span>
-                        <span class="kind">{KINDS[conflict.kind] ?? conflict.kind}</span>
-                      </p>
-                    </div>
-                    {#if conflict.remote === null}
-                      <p class="note">Deleted on the server, changed on this device.</p>
-                    {:else if conflict.local === null}
-                      <p class="note">Deleted on this device, changed on the server.</p>
-                    {:else if changed.length > 0}
-                      <table class="diff">
-                        <thead>
-                          <tr><th>Field</th><th>This device</th><th>Server</th></tr>
-                        </thead>
-                        <tbody>
-                          {#each changed.slice(0, MAX_DIFFERENCES) as row (row.field)}
-                            <tr>
-                              <th scope="row">{row.field}</th>
-                              <td>{row.local}</td>
-                              <td>{row.server}</td>
-                            </tr>
-                          {/each}
-                        </tbody>
-                      </table>
-                      {#if changed.length > MAX_DIFFERENCES}
-                        <p class="note">
-                          and {changed.length - MAX_DIFFERENCES} more field{changed.length -
-                            MAX_DIFFERENCES ===
-                          1
-                            ? ''
-                            : 's'}
-                        </p>
-                      {/if}
-                    {/if}
-                    <div class="choices">
-                      <button
-                        type="button"
-                        disabled={sync.busy}
-                        title={sync.busy ? 'A sync is running.' : undefined}
-                        onclick={() => void sync.resolve(conflict.record_id, false)}
-                      >
-                        Take the server’s copy
-                      </button>
-                      <button
-                        type="button"
-                        class="primary"
-                        disabled={sync.busy}
-                        title={sync.busy ? 'A sync is running.' : undefined}
-                        onclick={() => void sync.resolve(conflict.record_id, true)}
-                      >
-                        Keep this device’s copy
-                      </button>
-                    </div>
-                  </li>
-                {/each}
-              </ul>
-            </section>
-          {/if}
-
-          <section aria-labelledby="devices-label">
-            <p class="wp-label" id="devices-label">Devices</p>
-            <ul class="devices">
-              <li>
-                <span class="device-name">
-                  {sync.status?.settings.device_name || 'This device'}
-                  <span class="this">This device</span>
-                </span>
-                <span class="mono device-id">{sync.status?.settings.device_id}</span>
-              </li>
-            </ul>
+        {#if sync.conflicts.length > 0}
+          <section aria-labelledby="conflicts-label" class="group conflicts">
+            <h2 class="label" id="conflicts-label">Conflicts</h2>
             <p class="note">
-              The desktop app cannot list your other devices yet. To revoke one, use the server’s
-              device list.
+              Choose which copy to keep. The other one is replaced; nothing is overwritten until you
+              choose.
             </p>
+            <ul>
+              {#each sync.conflicts as conflict (conflict.record_id)}
+                {@const changed = differences(conflict)}
+                <li>
+                  <p class="record">
+                    <span class="record-name">{recordName(conflict)}</span>
+                    <span class="kind">{KINDS[conflict.kind] ?? conflict.kind}</span>
+                  </p>
+                  {#if conflict.remote === null}
+                    <p class="note">Deleted on the server, changed on this device.</p>
+                  {:else if conflict.local === null}
+                    <p class="note">Deleted on this device, changed on the server.</p>
+                  {:else if changed.length > 0}
+                    <table class="diff">
+                      <thead>
+                        <tr><th>Field</th><th>This device</th><th>Server</th></tr>
+                      </thead>
+                      <tbody>
+                        {#each changed.slice(0, MAX_DIFFERENCES) as row (row.field)}
+                          <tr>
+                            <th scope="row">{row.field}</th>
+                            <td>{row.local}</td>
+                            <td>{row.server}</td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                    {#if changed.length > MAX_DIFFERENCES}
+                      <p class="note">
+                        and {changed.length - MAX_DIFFERENCES} more field{changed.length -
+                          MAX_DIFFERENCES ===
+                        1
+                          ? ''
+                          : 's'}
+                      </p>
+                    {/if}
+                  {/if}
+                  <div class="choices">
+                    <button
+                      type="button"
+                      disabled={sync.busy}
+                      title={sync.busy ? 'A sync is running.' : undefined}
+                      onclick={() => void sync.resolve(conflict.record_id, false)}
+                    >
+                      Take the server’s copy
+                    </button>
+                    <button
+                      type="button"
+                      disabled={sync.busy}
+                      title={sync.busy ? 'A sync is running.' : undefined}
+                      onclick={() => void sync.resolve(conflict.record_id, true)}
+                    >
+                      Keep this device’s copy
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ul>
           </section>
         {/if}
 
-        {#if !sync.signedIn || configuring}
-          <section aria-labelledby="account-label">
-            <p class="wp-label" id="account-label">
-              {sync.signedIn ? 'CHANGE SERVER OR ACCOUNT' : 'SIGN IN'}
-            </p>
-            {#if !sync.signedIn}
-              <h2>Connect to a sync server</h2>
-              <p class="note lead">
-                Sign in to a Termru sync server to keep hosts, folders and preferences in step.
-                Passwords and keys are never uploaded.
-              </p>
-            {/if}
-            <form class="form" onsubmit={signIn} oninput={() => (dirty = true)} novalidate>
-              <Field label="Server address" id="sync-server" error={shown('server')}>
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="url"
-                    placeholder="https://sync.example.com"
-                    autocomplete="off"
-                    spellcheck="false"
-                    bind:value={serverUrl}
-                    onblur={() => touch('server')}
-                  />
-                {/snippet}
-              </Field>
-              <div class="pair">
-                <Field label="Email" id="sync-email" error={shown('email')}>
-                  {#snippet control(attrs)}
-                    <input
-                      {...attrs}
-                      type="email"
-                      autocomplete="username"
-                      spellcheck="false"
-                      bind:value={email}
-                      onblur={() => touch('email')}
-                    />
-                  {/snippet}
-                </Field>
-                <Field
-                  label="Password"
-                  id="sync-password"
-                  error={shown('password')}
-                  hint="Used to sign in once. Termru keeps a token in this device’s credential store, not the password."
-                >
-                  {#snippet control(attrs)}
-                    <input
-                      {...attrs}
-                      type="password"
-                      autocomplete="current-password"
-                      bind:value={password}
-                      onblur={() => touch('password')}
-                    />
-                  {/snippet}
-                </Field>
-              </div>
-              <Field
-                label="Device name"
-                id="sync-device"
-                optional
-                hint="Shown in the server’s device list"
-              >
-                {#snippet control(attrs)}
-                  <input {...attrs} type="text" placeholder="my laptop" bind:value={deviceName} />
-                {/snippet}
-              </Field>
+        <section aria-labelledby="devices-label" class="group">
+          <h2 class="label" id="devices-label">Devices</h2>
+          <ul class="devices">
+            <li>
+              <span class="device-name">
+                {sync.status?.settings.device_name || 'This device'}
+                <span class="this">This device</span>
+              </span>
+              <span class="mono device-id">{sync.status?.settings.device_id}</span>
+            </li>
+          </ul>
+          <p class="note">
+            The desktop app cannot list your other devices yet. To revoke one, use the server’s
+            device list.
+          </p>
+        </section>
 
-              {#if sync.error && !sync.signedIn}
-                <p class="problem" role="alert">{sync.error}</p>
-              {/if}
-
-              <div class="form-actions">
-                {#if sync.signedIn}
-                  <button type="button" class="quiet" onclick={() => (configuring = false)}>
-                    Cancel
-                  </button>
-                {/if}
-                <button type="submit" class="primary" disabled={sync.busy}>
-                  {sync.busy ? 'Signing in…' : 'Sign in'}
-                </button>
-              </div>
-            </form>
-          </section>
-        {/if}
-      </div>
-
-      <aside class="rail" aria-label="About sync">
-        {#if sync.signedIn}
-          <p class="wp-label">Account</p>
+        <section aria-labelledby="account-actions-label" class="group">
+          <h2 class="label" id="account-actions-label">Account</h2>
           <div class="account-actions">
             <button
               type="button"
               aria-expanded={configuring}
+              aria-controls="sync-account-form"
               onclick={() => (configuring = !configuring)}
             >
               {configuring ? 'Hide the form' : 'Change server or account'}
@@ -462,32 +376,121 @@
             Signing out forgets the token and the server address. Hosts and preferences stay on this
             device.
           </p>
-          <hr />
-        {:else}
-          <div class="callout">
-            <p class="wp-label accent">Local workspace</p>
-            <p>
+        </section>
+      {/if}
+
+      {#if !sync.signedIn || configuring}
+        <section
+          class="group"
+          id="sync-account-form"
+          aria-labelledby="account-label"
+          use:appear={{ enabled: page.value }}
+        >
+          <h2 class="label" id="account-label">
+            {sync.signedIn ? 'Change server or account' : 'Sign in'}
+          </h2>
+          {#if !sync.signedIn}
+            <p class="lead">Connect to a sync server</p>
+            <p class="note">
+              Sign in to a Termru sync server to keep hosts, folders and preferences in step.
+              Passwords and keys are never uploaded.
+            </p>
+            <p class="note">
               Sync is off. Hosts, folders, identities and preferences are saved on this device only.
             </p>
-          </div>
-        {/if}
+          {/if}
+          <form class="form" onsubmit={signIn} oninput={() => (dirty = true)} novalidate>
+            <Field label="Server address" id="sync-server" error={shown('server')}>
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="url"
+                  placeholder="https://sync.example.com"
+                  autocomplete="off"
+                  spellcheck="false"
+                  bind:value={serverUrl}
+                  onblur={() => touch('server')}
+                />
+              {/snippet}
+            </Field>
+            <div class="pair">
+              <Field label="Email" id="sync-email" error={shown('email')}>
+                {#snippet control(attrs)}
+                  <input
+                    {...attrs}
+                    type="email"
+                    autocomplete="username"
+                    spellcheck="false"
+                    bind:value={email}
+                    onblur={() => touch('email')}
+                  />
+                {/snippet}
+              </Field>
+              <Field
+                label="Password"
+                id="sync-password"
+                error={shown('password')}
+                hint="Used to sign in once. Termru keeps a token in this device’s credential store, not the password."
+              >
+                {#snippet control(attrs)}
+                  <input
+                    {...attrs}
+                    type="password"
+                    autocomplete="current-password"
+                    bind:value={password}
+                    onblur={() => touch('password')}
+                  />
+                {/snippet}
+              </Field>
+            </div>
+            <Field
+              label="Device name"
+              id="sync-device"
+              optional
+              hint="Shown in the server’s device list"
+            >
+              {#snippet control(attrs)}
+                <input {...attrs} type="text" placeholder="my laptop" bind:value={deviceName} />
+              {/snippet}
+            </Field>
 
-        <p class="wp-label">What syncs</p>
-        <ul class="plain">
-          <li>Hosts and folders</li>
-          <li>Identities (names, comments, fingerprints)</li>
-          <li>Preferences</li>
-        </ul>
+            {#if sync.error && !sync.signedIn}
+              <p class="problem" role="alert">{sync.error}</p>
+            {/if}
 
-        <p class="wp-label">Stays on this device</p>
-        <ul class="plain">
-          <li>Passwords and key passphrases</li>
-          <li>Private keys and their paths</li>
-          <li>Host key decisions</li>
-        </ul>
+            <div class="form-actions">
+              {#if sync.signedIn}
+                <button type="button" class="quiet" onclick={() => (configuring = false)}>
+                  Cancel
+                </button>
+              {/if}
+              <button type="submit" class="primary" disabled={sync.busy}>
+                {sync.busy ? 'Signing in…' : 'Sign in'}
+              </button>
+            </div>
+          </form>
+        </section>
+      {/if}
 
-        <p class="note">Local work and SSH sessions never wait for sync</p>
-      </aside>
+      <section class="lists" aria-label="What syncs">
+        <div class="list">
+          <h2 class="label">What syncs</h2>
+          <ul>
+            <li>Hosts and folders</li>
+            <li>Identities (names, comments, fingerprints)</li>
+            <li>Preferences</li>
+          </ul>
+        </div>
+        <div class="list">
+          <h2 class="label">Stays on this device</h2>
+          <ul>
+            <li>Passwords and key passphrases</li>
+            <li>Private keys and their paths</li>
+            <li>Host key decisions</li>
+          </ul>
+        </div>
+        <p class="note wide">Local work and SSH sessions never wait for sync</p>
+      </section>
     </div>
   </div>
 </div>
@@ -497,122 +500,96 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-40);
+  }
+
+  .column {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-24);
+    gap: var(--termru-space-28);
+    max-width: 720px;
+    min-width: 0;
   }
 
   .sync-now {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    padding: 0 var(--termru-space-24);
+    gap: 7px;
   }
 
-  /* Main column | hairline | rail. */
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    flex: 1;
-    min-height: 0;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
-  .main {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-32);
-    padding-right: var(--termru-space-48);
-    min-width: 0;
-  }
-
-  .rail {
+  .group {
     display: flex;
     flex-direction: column;
     gap: var(--termru-space-12);
-    padding-left: var(--termru-space-32);
-    border-left: 1px solid var(--termru-border);
     min-width: 0;
-    align-self: start;
   }
 
-  .wp-label {
-    margin-bottom: var(--termru-space-12);
+  /* A group's label: sentence case, 11 px. */
+  .label {
+    margin: 0;
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
   }
 
-  .rail .wp-label {
-    margin: var(--termru-space-12) 0 0;
-  }
-
-  .rail .wp-label:first-child {
-    margin-top: 0;
-  }
-
-  h2 {
-    margin: 0 0 var(--termru-space-8);
+  .lead {
+    margin: 0;
     font-size: var(--termru-text-heading-size);
     line-height: var(--termru-text-heading-lh);
     font-weight: var(--termru-text-heading-weight);
+    letter-spacing: -0.015em;
   }
 
   .note {
     margin: 0;
+    max-width: 62ch;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     color: var(--termru-text-2);
   }
 
-  .conflicts .note {
-    margin-bottom: var(--termru-space-12);
-  }
-
-  .note.lead {
-    margin-bottom: var(--termru-space-16);
-    max-width: 52ch;
-  }
-
   .mono {
     font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-secondary-size);
+    font-size: var(--termru-text-mono-size);
+    letter-spacing: -0.01em;
     overflow-wrap: anywhere;
   }
 
-  /* ---- status ---- */
+  /* ---- the status: one panel, a word and what stands behind it ---- */
 
-  .status {
-    padding: var(--termru-space-16);
-    border-left: 2px solid var(--termru-accent);
-    background: var(--termru-accent-soft);
-  }
-
-  .status.working {
-    border-left-color: var(--termru-text-2);
+  .block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-20);
+    padding: var(--termru-space-20) var(--termru-space-24);
+    border-radius: var(--termru-radius-lg);
     background: var(--termru-side);
-  }
-
-  .status.attention,
-  .status.offline {
-    border-left-color: var(--termru-warn-text);
-    background: var(--termru-warn-soft);
-  }
-
-  .status.failed {
-    border-left-color: var(--termru-err-text);
-    background: var(--termru-err-soft);
   }
 
   .state {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-8);
+    gap: var(--termru-space-10);
     margin: 0;
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
-    font-weight: 600;
+    font-size: var(--termru-text-heading-size);
+    line-height: var(--termru-text-heading-lh);
+    font-weight: var(--termru-text-heading-weight);
+    letter-spacing: -0.015em;
+    color: var(--termru-live-text);
   }
 
-  .ok .state {
-    color: var(--termru-accent-text);
+  .working .state {
+    color: var(--termru-text);
   }
 
   .attention .state,
@@ -626,18 +603,18 @@
 
   .state-detail {
     margin: var(--termru-space-4) 0 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
+    max-width: 60ch;
     color: var(--termru-text-2);
     overflow-wrap: anywhere;
   }
 
-  /* Glyph per state, as on the session badge: ■ ok, □ working, ◆ failed or
-     needs a decision, ▬ offline. */
+  /* A shape per state besides the colour: a dot when up to date, a ring while
+     it works, a diamond when it needs a decision or failed, a bar offline. */
   .glyph {
     flex: none;
     width: 8px;
     height: 8px;
+    border-radius: 50%;
     background: currentColor;
   }
 
@@ -648,41 +625,38 @@
 
   .attention .glyph,
   .failed .glyph {
+    border-radius: 1px;
     transform: rotate(45deg) scale(0.9);
   }
 
   .offline .glyph {
     width: 9px;
     height: 2px;
+    border-radius: 1px;
   }
 
   .facts {
-    margin: var(--termru-space-16) 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-10);
+    margin: 0;
   }
 
   .facts > div {
     display: grid;
-    grid-template-columns: 160px minmax(0, 1fr);
-    gap: var(--termru-space-16);
-    padding: var(--termru-space-12) 0;
-    border-bottom: 1px solid var(--termru-border);
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: var(--termru-space-12);
   }
 
   dt {
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
   }
 
   dd {
     margin: 0;
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-secondary-lh);
+    min-width: 0;
+    color: var(--termru-text);
     overflow-wrap: anywhere;
-  }
-
-  dd.mono {
-    font-size: var(--termru-text-secondary-size);
   }
 
   /* ---- conflicts ---- */
@@ -691,8 +665,8 @@
   .devices {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-12);
-    margin: 0 0 var(--termru-space-12);
+    gap: var(--termru-space-8);
+    margin: 0;
     padding: 0;
     list-style: none;
   }
@@ -701,28 +675,35 @@
     display: flex;
     flex-direction: column;
     gap: var(--termru-space-12);
-    padding: var(--termru-space-16);
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
+    padding: var(--termru-space-16) var(--termru-space-20);
+    border-radius: var(--termru-radius-pane);
+    background: var(--termru-side);
   }
 
   .record {
     display: flex;
     align-items: baseline;
-    flex-wrap: wrap;
-    gap: var(--termru-space-12);
+    gap: var(--termru-space-10);
     margin: 0;
+    min-width: 0;
   }
 
   .record-name {
-    font-weight: 600;
-    overflow-wrap: anywhere;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .kind {
-    font-family: var(--termru-font-ui);
-    font-size: var(--termru-text-meta-size);
+    flex: none;
+    height: 20px;
+    padding: 0 var(--termru-space-8);
+    border-radius: 6px;
+    background: var(--termru-raised);
     color: var(--termru-text-2);
+    font-size: var(--termru-text-secondary-size);
+    line-height: 20px;
   }
 
   .diff {
@@ -735,33 +716,33 @@
 
   .diff th,
   .diff td {
-    padding: var(--termru-space-8) var(--termru-space-12) var(--termru-space-8) 0;
+    padding: var(--termru-space-4) var(--termru-space-12) var(--termru-space-4) 0;
     text-align: left;
     vertical-align: top;
     overflow-wrap: anywhere;
   }
 
   .diff thead th {
-    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
     font-weight: var(--termru-text-meta-weight);
-    color: var(--termru-text-2);
-    border-bottom: 1px solid var(--termru-border);
+    color: var(--termru-text-3);
   }
 
   .diff tbody th {
-    font-weight: 600;
+    font-family: var(--termru-font-mono);
+    font-weight: 500;
+    color: var(--termru-text-2);
   }
 
   .diff td {
     font-family: var(--termru-font-mono);
+    color: var(--termru-text);
   }
 
   .choices {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: var(--termru-space-12);
+    gap: var(--termru-space-8);
   }
 
   /* ---- devices ---- */
@@ -770,133 +751,108 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    flex-wrap: wrap;
-    gap: var(--termru-space-12);
-    padding: var(--termru-space-12) 0;
-    border-bottom: 1px solid var(--termru-border);
+    gap: var(--termru-space-16);
+    min-width: 0;
   }
 
   .device-name {
     display: inline-flex;
     align-items: baseline;
-    gap: var(--termru-space-12);
-    font-weight: 550;
+    gap: var(--termru-space-10);
+    min-width: 0;
+    font-weight: 500;
   }
 
   .this {
-    padding: 2px 8px;
-    border-radius: var(--termru-radius-input);
+    height: 20px;
+    padding: 0 var(--termru-space-8);
+    border-radius: 6px;
     background: var(--termru-accent-soft);
     color: var(--termru-accent-text);
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    font-weight: 550;
+    font-size: var(--termru-text-secondary-size);
+    font-weight: 400;
+    line-height: 20px;
   }
 
   .device-id {
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
   }
 
-  /* ---- form ---- */
+  /* ---- account ---- */
+
+  .account-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--termru-space-8);
+  }
 
   .form {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-12);
-    max-width: 640px;
+    gap: var(--termru-space-16);
+    margin-top: var(--termru-space-8);
   }
 
   .pair {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--termru-space-16);
-  }
-
-  .problem {
-    margin: 0;
-    padding: var(--termru-space-12) var(--termru-space-16);
-    border-left: 2px solid var(--termru-err-text);
-    background: var(--termru-err-soft);
-    color: var(--termru-err-text);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    overflow-wrap: anywhere;
+    align-items: start;
   }
 
   .form-actions {
     display: flex;
     justify-content: flex-end;
-    gap: var(--termru-space-12);
-    padding-top: var(--termru-space-12);
-  }
-
-  /* ---- rail ---- */
-
-  .account-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
     gap: var(--termru-space-8);
   }
 
-  hr {
-    width: 100%;
-    margin: var(--termru-space-12) 0 0;
-    border: none;
-    border-top: 1px solid var(--termru-border);
+  .form-actions button {
+    padding: 0 var(--termru-space-16);
   }
 
-  .callout {
-    padding: var(--termru-space-16);
-    border-left: 2px solid var(--termru-accent);
-    background: var(--termru-side);
-  }
-
-  .callout p {
+  .problem {
     margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
+    color: var(--termru-err-text);
+    overflow-wrap: anywhere;
   }
 
-  .callout .wp-label.accent {
-    margin-bottom: var(--termru-space-4);
-    color: var(--termru-accent-text);
+  /* ---- what syncs ---- */
+
+  .lists {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--termru-space-12) var(--termru-space-24);
   }
 
-  .plain {
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-8);
+    min-width: 0;
+  }
+
+  .list ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--termru-space-4);
     margin: 0;
     padding: 0;
     list-style: none;
-    font-size: var(--termru-text-secondary-size);
-    line-height: 26px;
-    color: var(--termru-text);
+    color: var(--termru-text-2);
   }
 
-  @media (max-width: 960px) {
-    .columns {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--termru-space-32);
-    }
+  .wide {
+    grid-column: 1 / -1;
+  }
 
-    .main {
-      padding-right: 0;
-    }
-
-    .rail {
-      padding-left: 0;
-      padding-top: var(--termru-space-24);
-      border-left: none;
-      border-top: 1px solid var(--termru-border);
-    }
-
-    .pair {
+  @media (max-width: 760px) {
+    .pair,
+    .lists {
       grid-template-columns: minmax(0, 1fr);
     }
 
     .facts > div {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--termru-space-4);
+      grid-template-columns: 96px minmax(0, 1fr);
     }
   }
 </style>

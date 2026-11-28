@@ -1,28 +1,31 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { appear } from '../actions/appear';
   import Field from '../components/Field.svelte';
   import { formatCount } from '../count-line';
   import Icon from '../components/Icon.svelte';
+  import InspectorPanel from '../components/InspectorPanel.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import SessionDialog from '../components/SessionDialog.svelte';
+  import SplitBody from '../components/SplitBody.svelte';
   import { openFile } from '../ipc-backend';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { intents } from '../stores/intents.svelte';
   import { identities } from '../stores/identities.svelte';
   import { route } from '../stores/route.svelte';
   import { notify } from '../notify.svelte';
-  import { afterFirstPaint } from '../settled.svelte';
   import { MAX_NAME_LEN } from '../validation';
   import type { Host, Identity } from '../types';
 
   const PAGE = 20;
   const MIN_PASSPHRASE = 5;
 
-  /** The rail edits the selected identity, or makes a new one. */
+  /** The inspector edits the selected identity, or makes a new one. */
   let mode = $state<'edit' | 'create'>('edit');
-  /** The form of a rail that opens while the page is open moves in; one there at the start does not. */
-  const page = afterFirstPaint();
+  /**
+   * How the selection last changed: a key never animates the inspector, and
+   * neither does the first paint (nothing has been chosen yet).
+   */
+  let via = $state<'pointer' | 'keyboard'>('keyboard');
   let source = $state<'generate' | 'existing'>('generate');
   let name = $state('');
   let comment = $state('');
@@ -88,7 +91,13 @@
     if (picked) untrack(() => void identities.ensureKey(picked));
   });
 
-  // The rail follows the selection (by id: a refreshed list must not wipe what is typed).
+  // The rows say which algorithm their key is: read the keys of the rows once
+  // (the store caches each answer, so a key is never read twice).
+  $effect(() => {
+    for (const entry of sorted.slice(0, 100)) untrack(() => void identities.ensureKey(entry));
+  });
+
+  // The inspector follows the selection (by id: a refreshed list must not wipe what is typed).
   $effect(() => {
     void identityId;
     const editing = mode === 'edit';
@@ -130,13 +139,23 @@
   );
   const hasBack = $derived(route.draft !== null);
 
-  function select(id: string): void {
+  /** What the inspector is about: a new value replaces its content. */
+  const inspectorKey = $derived(mode === 'create' ? 'new' : (identity?.id ?? 'none'));
+
+  function select(id: string, how: 'pointer' | 'keyboard'): void {
     identities.selectedId = id;
     mode = 'edit';
+    via = how;
   }
 
-  function startCreate(): void {
+  /** `detail` is 0 for a click made with the keyboard (Enter, Space). */
+  function modality(event: MouseEvent): 'pointer' | 'keyboard' {
+    return event.detail > 0 ? 'pointer' : 'keyboard';
+  }
+
+  function startCreate(how: 'pointer' | 'keyboard' = 'keyboard'): void {
     mode = 'create';
+    via = how;
     source = 'generate';
     name = '';
     comment = '';
@@ -154,7 +173,7 @@
     if (intents.take('new-identity')) startCreate();
   });
 
-  function cancelRail(): void {
+  function cancelForm(): void {
     mode = 'edit';
     if (identity) {
       name = identity.name;
@@ -294,8 +313,15 @@
     return value ? `${value.slice(0, 14)}…` : 'No fingerprint yet';
   }
 
-  function hostLabel(count: number): string {
-    return `${count} ${count === 1 ? 'host' : 'hosts'}`;
+  /** What a row says its key is: the algorithm, or why it cannot. */
+  function algorithmOf(entry: Identity): { text: string; tone: 'ok' | 'warn' | 'none' } {
+    const state = identities.keys[entry.id];
+    if (state?.status === 'ready') return { text: state.info.algorithm, tone: 'ok' };
+    if (state?.status === 'error') return { text: 'Key unreadable', tone: 'warn' };
+    if (state?.status === 'none' || (identities.bindingsLoaded && !identities.bindings[entry.id])) {
+      return { text: 'No key file', tone: 'warn' };
+    }
+    return { text: '—', tone: 'none' };
   }
 </script>
 
@@ -305,52 +331,80 @@
       {#if hasBack}
         <button type="button" class="ghost" onclick={() => route.back()}>Back to host</button>
       {/if}
-      <button type="button" class="primary new" onclick={startCreate}>
+      <button type="button" class="primary new" onclick={(event) => startCreate(modality(event))}>
         <Icon name="plus" size={16} />
         New identity
       </button>
     {/snippet}
   </PageHeader>
 
-  <div class="scroll">
-    <div class="columns">
-      <!-- Column 1: the identities. -->
-      <nav class="list" aria-label="Identities">
-        <p class="wp-label">Identities</p>
+  <SplitBody>
+    {#snippet main()}
+      <div class="list">
+        {#if hosts.error}
+          <p class="problem" role="alert">
+            Could not read your hosts: {hosts.error}
+            <button type="button" class="link" onclick={() => void hosts.load()}>Retry</button>
+          </p>
+        {/if}
+
         {#if sorted.length === 0}
-          <p class="empty-list">
+          <p class="empty">
             No identity yet. Generate a key or add an existing one to sign in without a password.
           </p>
         {:else}
-          <ul>
-            {#each sorted as entry (entry.id)}
-              <li>
-                <button
-                  type="button"
-                  class="item"
-                  class:active={mode === 'edit' && identity?.id === entry.id}
-                  aria-current={mode === 'edit' && identity?.id === entry.id ? 'true' : undefined}
-                  onclick={() => select(entry.id)}
-                >
-                  <Icon name="key" size={17} />
-                  <span class="who">
-                    <span class="item-name">{entry.name}</span>
-                    <span class="item-sub">{shortFingerprint(entry.fingerprint)}</span>
-                  </span>
-                  <span class="count">{usage.get(entry.id)?.length ?? 0}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          <nav class="table" aria-label="Identities">
+            <div class="head" aria-hidden="true">
+              <span></span>
+              <span>Identity</span>
+              <span class="col-algo">Algorithm</span>
+              <span class="col-hosts">Hosts</span>
+            </div>
+            <ul>
+              {#each sorted as entry (entry.id)}
+                {@const algorithm = algorithmOf(entry)}
+                <li>
+                  <button
+                    type="button"
+                    class="item"
+                    class:active={mode === 'edit' && identity?.id === entry.id}
+                    aria-current={mode === 'edit' && identity?.id === entry.id ? 'true' : undefined}
+                    onclick={(event) => select(entry.id, modality(event))}
+                  >
+                    <span class="key"><Icon name="key" size={15} /></span>
+                    <span class="who">
+                      <span class="item-name">{entry.name}</span>
+                      <span class="item-sub" title={entry.fingerprint ?? undefined}
+                        >{shortFingerprint(entry.fingerprint)}</span
+                      >
+                    </span>
+                    <span class="algo {algorithm.tone} col-algo">{algorithm.text}</span>
+                    <span class="col-hosts"
+                      ><span class="count">{usage.get(entry.id)?.length ?? 0}</span><span
+                        class="sr-only"
+                      >
+                        {(usage.get(entry.id)?.length ?? 0) === 1 ? 'host uses' : 'hosts use'} it</span
+                      ></span
+                    >
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          </nav>
         {/if}
-        <p class="footnote">
+        <p class="note">
           An identity is a name for a key. Only the path of the key file is stored, and it never
           leaves this device.
         </p>
-      </nav>
+      </div>
+    {/snippet}
 
-      <!-- Column 2: the selected identity. -->
-      <section class="detail" aria-labelledby="detail-title">
+    {#snippet inspector()}
+      <InspectorPanel
+        label={mode === 'create' ? 'New identity' : 'Edit identity'}
+        contentKey={inspectorKey}
+        animate={via === 'pointer'}
+      >
         <!-- The buttons change their label; this says it aloud too. -->
         <span class="sr-only" role="status"
           >{copied === 'fingerprint'
@@ -359,29 +413,23 @@
               ? 'Public key copied'
               : ''}</span
         >
-        {#if hosts.error}
-          <p class="problem" role="alert">
-            Could not read your hosts: {hosts.error}
-            <button type="button" class="link" onclick={() => void hosts.load()}>Retry</button>
-          </p>
-        {/if}
-        {#if identity && mode === 'edit'}
-          <header class="detail-head">
-            <div class="titles">
-              <p class="trail">{identity.comment ?? 'Identity'}</p>
-              <h2 id="detail-title">{identity.name}</h2>
-            </div>
-            <p class="wp-label count-label">{hostLabel(users.length).toUpperCase()} USING</p>
-          </header>
 
-          <section class="block" aria-labelledby="key-file-label">
-            <p class="wp-label" id="key-file-label">Key file</p>
+        {#if identity && mode === 'edit'}
+          <div class="titles">
+            <h2 class="insp-title" title={identity.name}>{identity.name}</h2>
+            <p class="insp-sub" title={identity.comment ?? undefined}>
+              {identity.comment ?? 'Identity'}
+            </p>
+          </div>
+
+          <section class="insp-group" aria-labelledby="key-file-label">
+            <p class="ttl" id="key-file-label">Key file</p>
             {#if keyPath}
-              <code class="path">{keyPath}</code>
+              <code class="path mono">{keyPath}</code>
             {:else}
-              <p class="muted">No key file is bound to this identity on this device.</p>
+              <p class="insp-note">No key file is bound to this identity on this device.</p>
             {/if}
-            <div class="inline">
+            <div class="insp-actions wrap">
               <button type="button" onclick={() => void chooseKey(identity)}>
                 {keyPath ? 'Choose another key…' : 'Choose key…'}
               </button>
@@ -394,61 +442,66 @@
           </section>
 
           {#if keyState?.status === 'loading'}
-            <p class="muted" aria-live="polite">Reading the key…</p>
+            <p class="insp-note" aria-live="polite">Reading the key…</p>
           {:else if keyState?.status === 'error'}
             <p class="problem" role="alert">{keyState.message}</p>
           {:else if keyState?.status === 'ready'}
-            <section class="block" aria-labelledby="fingerprint-label">
-              <p class="wp-label" id="fingerprint-label">Fingerprint</p>
-              <div class="copyline">
-                <code class="value">{keyState.info.fingerprint}</code>
+            <section class="insp-group" aria-labelledby="fingerprint-label">
+              <div class="ttl-row">
+                <p class="ttl" id="fingerprint-label">Fingerprint</p>
                 <button
                   type="button"
                   class="copy"
                   aria-label="Copy the fingerprint"
                   onclick={() => void copy('fingerprint', keyState.info.fingerprint)}
                 >
-                  <Icon name={copied === 'fingerprint' ? 'check' : 'copy'} size={15} />
+                  <Icon name={copied === 'fingerprint' ? 'check' : 'copy'} size={14} />
                   {copied === 'fingerprint' ? 'Copied' : 'Copy'}
                 </button>
               </div>
-              <p class="muted small">
+              <code class="value mono">{keyState.info.fingerprint}</code>
+              <p class="insp-note">
                 {keyState.info.algorithm}{keyState.info.encrypted
                   ? ' · protected by a passphrase'
                   : ' · no passphrase'}
               </p>
             </section>
 
-            <section class="block" aria-labelledby="public-label">
-              <p class="wp-label" id="public-label">Public key</p>
-              <div class="copyline top">
-                <code class="value public">{keyState.info.public_key}</code>
+            <section class="insp-group" aria-labelledby="public-label">
+              <div class="ttl-row">
+                <p class="ttl" id="public-label">Public key</p>
                 <button
                   type="button"
                   class="copy"
                   aria-label="Copy the public key"
                   onclick={() => void copy('public', keyState.info.public_key)}
                 >
-                  <Icon name={copied === 'public' ? 'check' : 'copy'} size={15} />
+                  <Icon name={copied === 'public' ? 'check' : 'copy'} size={14} />
                   {copied === 'public' ? 'Copied' : 'Copy'}
                 </button>
               </div>
-              <p class="muted small">
-                Add this line to <code>~/.ssh/authorized_keys</code> on the server. It is safe to share.
+              <code class="value public mono">{keyState.info.public_key}</code>
+              <p class="insp-note">
+                Add this line to <code class="mono">~/.ssh/authorized_keys</code> on the server. It is
+                safe to share.
               </p>
             </section>
           {/if}
 
-          <section class="block" aria-labelledby="users-label">
-            <p class="wp-label" id="users-label">Hosts using this identity</p>
+          <section class="insp-group" aria-labelledby="users-label">
+            <p class="ttl" id="users-label">
+              <span>Hosts using this identity</span><span class="mono">{users.length}</span>
+            </p>
             {#if users.length === 0}
-              <p class="muted">No host signs in with this identity yet.</p>
+              <p class="insp-note">No host signs in with this identity yet.</p>
             {:else}
               <ul class="users">
                 {#each users.slice(0, usersShown) as host (host.id)}
                   <li>
-                    <span class="user-name">{host.name}</span>
-                    <span class="target">{host.username}@{host.address}:{host.port}</span>
+                    <span class="who">
+                      <span class="user-name">{host.name}</span>
+                      <span class="target">{host.username}@{host.address}:{host.port}</span>
+                    </span>
                     <button type="button" class="link" onclick={() => route.edit(host)}>
                       Edit<span class="sr-only"> {host.name}</span>
                     </button>
@@ -463,37 +516,25 @@
             {/if}
           </section>
         {:else if mode === 'create'}
-          <header class="detail-head">
-            <div class="titles">
-              <p class="trail">Identity</p>
-              <h2 id="detail-title">New identity</h2>
-            </div>
-          </header>
-          <p class="muted">
+          <div class="titles">
+            <h2 class="insp-title">New identity</h2>
+            <p class="insp-sub">Generate a key, or use one you have</p>
+          </div>
+          <p class="insp-note">
             Generate a fresh ed25519 key, or point an identity at a key file you already have. The
             private key never leaves this device and is never synced.
           </p>
         {:else}
-          <header class="detail-head">
-            <div class="titles">
-              <p class="trail">Identity</p>
-              <h2 id="detail-title">No identity selected</h2>
-            </div>
-          </header>
-          <p class="muted">Choose an identity in the list, or make a new one.</p>
+          <div class="titles">
+            <h2 class="insp-title">No identity selected</h2>
+            <p class="insp-sub">Identity</p>
+          </div>
+          <p class="insp-note">Choose an identity in the list, or make a new one.</p>
         {/if}
-      </section>
-
-      <!-- Column 3: the rail. -->
-      <aside class="rail" aria-label={mode === 'create' ? 'New identity' : 'Edit identity'}>
-        <p class="wp-label accent">{mode === 'create' ? 'NEW IDENTITY' : 'EDIT IDENTITY'}</p>
 
         {#if mode === 'create' || identity}
-          <form
-            onsubmit={(event) => void submit(event)}
-            novalidate
-            use:appear={{ enabled: page.value }}
-          >
+          <form onsubmit={(event) => void submit(event)} novalidate>
+            {#if mode === 'edit'}<p class="ttl">Details</p>{/if}
             {#if mode === 'create'}
               <div class="choices" role="radiogroup" aria-label="Where the key comes from">
                 <label class="choice" class:selected={source === 'generate'}>
@@ -560,21 +601,21 @@
                   >
                 </label>
               {/if}
-              <p class="note">
+              <p class="insp-note">
                 A new ed25519 key is written to Termru’s key folder, readable by you only. An
                 existing file is never overwritten.
               </p>
             {:else if mode === 'create'}
-              <p class="note">
+              <p class="insp-note">
                 You pick the private key file next. Only its path is stored; the file is not copied
                 or read into the database.
               </p>
             {/if}
 
-            {#if formError}<p class="form-error" role="alert">{formError}</p>{/if}
+            {#if formError}<p class="insp-note error form-error" role="alert">{formError}</p>{/if}
 
-            <div class="rail-actions">
-              <button type="button" class="quiet" onclick={cancelRail}>Cancel</button>
+            <div class="insp-actions form-actions">
+              <button type="button" class="quiet" onclick={cancelForm}>Cancel</button>
               <button
                 type="submit"
                 class="primary"
@@ -591,20 +632,21 @@
               </button>
             </div>
           </form>
-        {:else}
-          <p class="note">Choose an identity to rename it, or make a new one.</p>
         {/if}
 
         {#if identity && mode === 'edit'}
-          <hr />
-          <button type="button" class="danger quiet delete" onclick={askDelete}>
-            <Icon name="trash" size={15} />
-            Delete identity
-          </button>
+          <section class="insp-group" aria-labelledby="identity-delete-label">
+            <p class="ttl" id="identity-delete-label">Delete</p>
+            <p class="insp-note">{identities.deleteBody(identity)}</p>
+            <button type="button" class="danger quiet delete" onclick={askDelete}>
+              <Icon name="trash" size={15} />
+              Delete identity
+            </button>
+          </section>
         {/if}
-      </aside>
-    </div>
-  </div>
+      </InspectorPanel>
+    {/snippet}
+  </SplitBody>
 
   <SessionDialog
     open={deleteOpen}
@@ -624,298 +666,10 @@
 </div>
 
 <style>
-  .scroll {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-24);
-  }
-
   .new {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    padding: 0 var(--termru-space-24);
-  }
-
-  .columns {
-    display: grid;
-    grid-template-columns: 280px minmax(0, 1fr) 392px;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-16);
-    padding-right: var(--termru-space-24);
-    border-right: 1px solid var(--termru-border);
-    min-width: 0;
-  }
-
-  .list ul {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-8);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .item {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-12);
-    width: 100%;
-    min-height: 54px;
-    padding: 0 var(--termru-space-12);
-    border: none;
-    border-radius: var(--termru-radius-button);
-    background: none;
-    color: var(--termru-text);
-    text-align: left;
-  }
-
-  .item :global(.icon) {
-    color: var(--termru-text-2);
-  }
-
-  .who {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .item-name {
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .item-sub {
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    font-weight: 400;
-    color: var(--termru-text-2);
-  }
-
-  .count {
-    font-size: var(--termru-text-secondary-size);
-    color: var(--termru-text-2);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* A row of a list is not a button that gives under the finger (it would
-     shrink the whole row), and it needs a hover of its own. */
-  .item.item:active:not(:disabled) {
-    transform: none;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .item:hover:not(.active) {
-      background-color: var(--termru-side);
-    }
-  }
-
-  .item.active {
-    background: var(--termru-accent-soft);
-    color: var(--termru-accent-text);
-  }
-
-  .item.active :global(.icon),
-  .item.active .count,
-  .item.active .item-sub {
-    color: var(--termru-accent-text);
-  }
-
-  .empty-list,
-  .footnote {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
-  }
-
-  .footnote {
-    padding-top: var(--termru-space-16);
-    border-top: 1px solid var(--termru-border);
-  }
-
-  .detail {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-24);
-    padding: 0 var(--termru-space-32);
-    min-width: 0;
-  }
-
-  .detail-head {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--termru-space-16);
-  }
-
-  .titles {
-    min-width: 0;
-  }
-
-  .trail {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
-    overflow-wrap: anywhere;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 24px;
-    line-height: 36px;
-    font-weight: 500;
-    overflow-wrap: anywhere;
-  }
-
-  .count-label {
-    flex: none;
-    padding-bottom: var(--termru-space-8);
-  }
-
-  .block {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-12);
-    padding-top: var(--termru-space-24);
-    border-top: 1px solid var(--termru-border);
-    min-width: 0;
-  }
-
-  .block:first-of-type {
-    border-top: none;
-    padding-top: 0;
-  }
-
-  .muted {
-    margin: 0;
-    font-size: var(--termru-text-control-size);
-    line-height: var(--termru-text-control-lh);
-    color: var(--termru-text-2);
-  }
-
-  .muted.small {
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-  }
-
-  .problem {
-    margin: 0;
-    padding: var(--termru-space-12) var(--termru-space-16);
-    border-left: 2px solid var(--termru-err-text);
-    background: var(--termru-err-soft);
-    color: var(--termru-err-text);
-    font-size: var(--termru-text-control-size);
-    overflow-wrap: anywhere;
-  }
-
-  code {
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-secondary-size);
-  }
-
-  .path {
-    line-height: 20px;
-    overflow-wrap: anywhere;
-  }
-
-  .inline {
-    display: flex;
-    gap: var(--termru-space-8);
-    flex-wrap: wrap;
-  }
-
-  .copyline {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-12);
-    min-width: 0;
-  }
-
-  .copyline.top {
-    align-items: flex-start;
-  }
-
-  .value {
-    flex: 1;
-    min-width: 0;
-    padding: var(--termru-space-12);
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
-    background: var(--termru-field);
-    line-height: 20px;
-    overflow-wrap: anywhere;
-  }
-
-  .value.public {
-    max-height: 120px;
-    overflow: auto;
-    user-select: all;
-  }
-
-  .copy {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--termru-space-8);
-    flex: none;
-    min-width: 88px;
-    justify-content: center;
-  }
-
-  .users {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .users li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
-    align-items: center;
-    gap: var(--termru-space-16);
-    min-height: 48px;
-    border-bottom: 1px solid var(--termru-border);
-  }
-
-  .user-name {
-    font-size: var(--termru-text-body-size);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .target {
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-meta-size);
-    color: var(--termru-text-2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .more {
-    align-self: flex-start;
-  }
-
-  .users li .link.link {
-    text-decoration: none;
+    gap: 7px;
   }
 
   .sr-only {
@@ -927,20 +681,273 @@
     white-space: nowrap;
   }
 
-  .rail {
+  /* The identities: quiet rows, as on the Hosts page. */
+  .list {
     display: flex;
     flex-direction: column;
     gap: var(--termru-space-16);
-    padding-left: 28px;
-    border-left: 1px solid var(--termru-border);
+    min-width: 0;
+    padding: var(--termru-space-4) var(--termru-space-16) var(--termru-space-16);
+  }
+
+  .table {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
   }
 
-  .rail .accent {
+  .head,
+  .item {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1.6fr) minmax(0, 1fr) 72px;
+    align-items: center;
+    column-gap: var(--termru-space-12);
+    padding: 0 var(--termru-space-12);
+  }
+
+  .head {
+    height: 30px;
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
+  }
+
+  .col-hosts {
+    text-align: right;
+  }
+
+  .table ul {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .item {
+    width: 100%;
+    height: var(--termru-row-h);
+    min-height: 0;
+    border-radius: var(--termru-radius-row);
+    background: transparent;
+    color: var(--termru-text);
+    font-weight: 400;
+    text-align: left;
+    /* Only the press moves. The selection changes at once: a row is often
+       chosen from the keyboard, and that is never animated. */
+    transition: transform var(--motion-fast) var(--ease-out);
+  }
+
+  /* A row of a list gives under the finger no more than a row does. */
+  .item:active:not(:disabled) {
+    transform: none;
+  }
+
+  .item.active {
+    background: var(--termru-raised);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .item:not(.active) {
+      transition: background-color var(--motion-fast) ease;
+    }
+
+    .item:not(.active):hover:not(:disabled) {
+      background: color-mix(in srgb, var(--termru-raised) 60%, transparent);
+    }
+  }
+
+  .key {
+    display: inline-grid;
+    place-items: center;
+    color: var(--termru-text-3);
+  }
+
+  .item.active .key {
     color: var(--termru-accent-text);
   }
 
-  .rail form {
+  .who {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .item-name {
+    font-size: 13.5px;
+    line-height: 20px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .item-sub {
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-mono-size);
+    line-height: 16px;
+    letter-spacing: -0.01em;
+    color: var(--termru-text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .algo {
+    min-width: 0;
+    font: 500 12px var(--termru-font-mono);
+    color: var(--termru-text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .algo.warn {
+    font-family: var(--termru-font-ui);
+    color: var(--termru-warn-text);
+  }
+
+  .algo.none {
+    color: var(--termru-text-3);
+  }
+
+  .count {
+    font: 500 12px var(--termru-font-mono);
+    color: var(--termru-text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty {
+    margin: 0;
+    padding: var(--termru-space-16) var(--termru-space-12);
+    color: var(--termru-text-2);
+  }
+
+  .note {
+    margin: 0 var(--termru-space-12);
+    max-width: 60ch;
+    font-size: var(--termru-text-secondary-size);
+    line-height: var(--termru-text-secondary-lh);
+    color: var(--termru-text-3);
+  }
+
+  .problem {
+    margin: 0 var(--termru-space-12);
+    color: var(--termru-err-text);
+    overflow-wrap: anywhere;
+  }
+
+  /* The inspector. */
+  .titles :global(.insp-title) {
+    margin: 0;
+  }
+
+  .mono {
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-mono-size);
+  }
+
+  .path {
+    line-height: 20px;
+    color: var(--termru-text);
+    overflow-wrap: anywhere;
+  }
+
+  .wrap {
+    flex-wrap: wrap;
+  }
+
+  /* A group's label with its action at the right. */
+  .ttl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--termru-space-8);
+    min-height: 24px;
+  }
+
+  .ttl-row .ttl {
+    margin: 0;
+  }
+
+  .value {
+    display: block;
+    align-self: stretch;
+    padding: var(--termru-space-8) var(--termru-space-12);
+    border-radius: var(--termru-radius-input);
+    background: var(--termru-base);
+    color: var(--termru-text);
+    line-height: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .value.public {
+    max-height: 112px;
+    overflow: auto;
+    user-select: all;
+  }
+
+  .copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 0 var(--termru-space-8);
+    margin-right: calc(var(--termru-space-8) * -1);
+    background: transparent;
+    color: var(--termru-text-2);
+    font-size: var(--termru-text-secondary-size);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .copy:hover:not(:disabled) {
+      background: var(--termru-raised-2);
+      color: var(--termru-text);
+    }
+  }
+
+  .users {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .users li {
+    display: flex;
+    align-items: center;
+    gap: var(--termru-space-12);
+    min-height: 44px;
+  }
+
+  .users .who {
+    flex: 1;
+  }
+
+  .user-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .target {
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    line-height: 16px;
+    color: var(--termru-text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .more {
+    align-self: flex-start;
+  }
+
+  form {
     display: flex;
     flex-direction: column;
     gap: var(--termru-space-16);
@@ -949,7 +956,7 @@
   .choices {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--termru-space-8);
+    gap: var(--termru-space-4);
   }
 
   .choice {
@@ -957,33 +964,25 @@
     display: inline-flex;
     align-items: center;
     gap: var(--termru-space-8);
-    min-height: 36px;
+    min-height: 30px;
     padding: 0 var(--termru-space-12);
-    border: 1px solid transparent;
-    border-radius: var(--termru-radius-button);
-    font-size: var(--termru-text-control-size);
-    font-weight: var(--termru-text-control-weight);
+    border-radius: var(--termru-radius-sm);
     color: var(--termru-text-2);
     cursor: pointer;
-    transition:
-      transform var(--motion-fast) var(--ease-out),
-      background-color var(--motion-fast) ease,
-      border-color var(--motion-fast) ease,
-      color var(--motion-fast) ease;
+    transition: transform var(--motion-fast) var(--ease-out);
   }
 
   .choice.selected {
-    border-color: var(--termru-border);
-    background: var(--termru-side);
+    background: var(--termru-raised-2);
     color: var(--termru-text);
   }
 
   .choice:active {
-    transform: scale(var(--press-scale, 0.97));
+    transform: scale(var(--press-scale, 0.98));
   }
 
   .choice:has(input:focus-visible) {
-    outline: var(--termru-focus-w) solid var(--termru-accent);
+    outline: var(--termru-focus-w) solid var(--termru-accent-text);
     outline-offset: var(--termru-focus-offset);
   }
 
@@ -1010,35 +1009,16 @@
     height: 15px;
   }
 
-  .note {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
+  .muted {
     color: var(--termru-text-2);
   }
 
-  .form-error {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    color: var(--termru-err-text);
-    overflow-wrap: anywhere;
+  .form-actions {
+    justify-content: flex-end;
   }
 
-  .rail-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-12);
-  }
-
-  .rail-actions .primary {
-    padding: 0 var(--termru-space-24);
-  }
-
-  hr {
-    width: 100%;
-    margin: var(--termru-space-8) 0;
-    border: none;
-    border-top: 1px solid var(--termru-border);
+  .form-actions button {
+    padding: 0 var(--termru-space-16);
   }
 
   .delete {
@@ -1046,53 +1026,6 @@
     display: inline-flex;
     align-items: center;
     gap: var(--termru-space-8);
-  }
-
-  @media (max-width: 1180px) {
-    .columns {
-      grid-template-columns: 240px minmax(0, 1fr);
-      row-gap: var(--termru-space-32);
-    }
-
-    .rail {
-      grid-column: 1 / -1;
-      padding: var(--termru-space-24) 0 0;
-      border-left: none;
-      border-top: 1px solid var(--termru-border);
-    }
-
-    .detail {
-      padding-right: 0;
-    }
-  }
-
-  @media (max-width: 760px) {
-    .columns {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .list {
-      padding-right: 0;
-      padding-bottom: var(--termru-space-24);
-      border-right: none;
-      border-bottom: 1px solid var(--termru-border);
-    }
-
-    .list ul {
-      max-height: 260px;
-      overflow: auto;
-    }
-
-    .detail {
-      padding: 0;
-    }
-
-    .users li {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .target {
-      display: none;
-    }
+    margin-left: calc(var(--termru-space-12) * -1);
   }
 </style>

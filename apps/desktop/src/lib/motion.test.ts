@@ -267,3 +267,95 @@ describe('the Sessions page and the overlays (O2)', () => {
     expect(/\.tab[^{]*\{[^}]*transition/.test(tab)).toBe(false);
   });
 });
+
+describe('the work pages (O3): the editor, Folders, Identities, Sync, Preferences', () => {
+  const read = (path: string) =>
+    readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+  const style = (source: string) =>
+    source.slice(source.indexOf('<style>')).replace(/\/\*[\s\S]*?\*\//g, '');
+
+  const PAGES = [
+    './components/EditorSection.svelte',
+    './components/HostEditor.svelte',
+    './components/InspectorPanel.svelte',
+    './components/SectionIndex.svelte',
+    './components/SplitBody.svelte',
+    './pages/FoldersPage.svelte',
+    './pages/IdentitiesPage.svelte',
+    './pages/PreferencesPage.svelte',
+    './pages/SyncPage.svelte',
+  ];
+
+  it('takes every duration from the motion tokens', () => {
+    for (const path of PAGES) {
+      for (const match of style(read(path)).matchAll(/(?:transition|animation)\s*:([^;]*);/g)) {
+        const value = match[1];
+        if (value.trim() === 'none') continue;
+        const literal = value.replace(/var\([^)]*\)/g, '').match(/\b\d*\.?\d+m?s\b/);
+        expect(literal, `${path}: ${match[0]}`).toBeNull();
+      }
+    }
+  });
+
+  it('writes no uppercase eyebrow, no numbered mono label, no `wp-label`', () => {
+    for (const path of PAGES) {
+      const source = read(path);
+      expect(source, path).not.toMatch(/text-transform:\s*uppercase/);
+      expect(source, path).not.toMatch(/\.toUpperCase\(\)/);
+      expect(source, path).not.toMatch(/class="[^"]*\b(wp-label|section-label|step)\b/);
+      // `01 / CONNECTION`
+      expect(source, path).not.toMatch(/>\s*\d\d\s*\/\s*[A-Z]{3,}/);
+    }
+  });
+
+  it('cross-fades the content of an inspector in 120 ms, and only when a click chose it', () => {
+    const panel = read('./components/InspectorPanel.svelte');
+    expect(style(panel)).toMatch(
+      /\.content\.fade \{[^}]*animation: inspector-in var\(--motion-context\) var\(--ease-out\)/,
+    );
+    expect(panel).toContain('class:fade={animate}');
+    // The pages say "a click" by the detail of the event: a key's click has none.
+    for (const path of ['./pages/FoldersPage.svelte', './pages/IdentitiesPage.svelte']) {
+      expect(read(path), path).toMatch(/event\.detail > 0/);
+      expect(read(path), path).toContain('animate={via ===');
+    }
+  });
+
+  it('changes the current item of an index, a tree and a list at once (they are keyboard targets)', () => {
+    // The base rule moves the press only; the colour fade belongs to the items that
+    // are not current, under the hover gate.
+    for (const [path, selector, on] of [
+      ['./components/SectionIndex.svelte', '\\.item', 'on'],
+      ['./pages/FoldersPage.svelte', '\\.item', 'active'],
+    ] as const) {
+      const source = read(path);
+      expect(source).toMatch(
+        new RegExp(
+          `${selector} \\{[^}]*transition:\\s*transform var\\(--motion-fast\\) var\\(--ease-out\\);[^}]*\\}`,
+        ),
+      );
+      expect(source).toMatch(
+        new RegExp(
+          `@media \\(hover: hover\\) and \\(pointer: fine\\) \\{\\s*${selector}:not\\(\\.${on}\\) \\{\\s*transition:[^}]*color var\\(--motion-fast\\) ease`,
+        ),
+      );
+    }
+    // A row of identities and the radio choices fade nothing on a key either.
+    expect(style(read('./pages/IdentitiesPage.svelte'))).toMatch(
+      /\.item \{[^}]*transition: transform var\(--motion-fast\) var\(--ease-out\);/,
+    );
+  });
+
+  it('shows the unsaved marker at once: it appears while you type, and a key never moves anything', () => {
+    expect(style(read('./components/HostEditor.svelte'))).not.toMatch(/@starting-style/);
+    expect(style(read('./components/HostEditor.svelte'))).not.toMatch(
+      /\.pill[^{]*\{[^}]*transition/,
+    );
+  });
+
+  it('jumps to a section at once: no smooth scrolling', () => {
+    for (const path of PAGES) {
+      expect(read(path), path).not.toMatch(/behavior:\s*['"]smooth['"]|scroll-behavior:\s*smooth/);
+    }
+  });
+});

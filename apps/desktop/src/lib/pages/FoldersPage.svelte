@@ -1,11 +1,12 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { appear } from '../actions/appear';
   import { formatCount } from '../count-line';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
+  import InspectorPanel from '../components/InspectorPanel.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import SessionDialog from '../components/SessionDialog.svelte';
+  import SplitBody from '../components/SplitBody.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import {
     buildFolderTree,
@@ -22,7 +23,6 @@
   import { intents } from '../stores/intents.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { notify } from '../notify.svelte';
-  import { afterFirstPaint } from '../settled.svelte';
   import type { Group, Host } from '../types';
   import type { Pane } from '../stores/sessions.svelte';
 
@@ -32,10 +32,13 @@
   const PAGE = 50;
   const MAX_NAME = 128;
 
-  /** The rail edits the selected folder, or makes a new one. */
+  /** The inspector edits the selected folder, or makes a new one. */
   let mode = $state<'edit' | 'create'>('edit');
-  /** The form of a rail that opens while the page is open moves in; one there at the start does not. */
-  const page = afterFirstPaint();
+  /**
+   * How the selection last changed: a key never animates the inspector, and
+   * neither does the first paint (nothing has been chosen yet).
+   */
+  let via = $state<'pointer' | 'keyboard'>('keyboard');
   let name = $state('');
   let parentId = $state('');
   let nameTouched = $state(false);
@@ -104,7 +107,7 @@
       : 'Every folder',
   );
   const hostCount = $derived(
-    `${formatCount(listed.length)} ${listed.length === 1 ? 'HOST' : 'HOSTS'}${node && node.childCount > 0 ? ` · ${formatCount(node.childCount)} ${node.childCount === 1 ? 'SUBFOLDER' : 'SUBFOLDERS'}` : ''}`,
+    `${formatCount(listed.length)} ${listed.length === 1 ? 'host' : 'hosts'}${node && node.childCount > 0 ? ` · ${formatCount(node.childCount)} ${node.childCount === 1 ? 'subfolder' : 'subfolders'}` : ''}`,
   );
 
   /** The pane of a running session by host id (the card shows "Connected"). */
@@ -118,7 +121,7 @@
     return map;
   });
 
-  // The rail follows the selection: a folder's own values, or a blank form.
+  // The inspector follows the selection: a folder's own values, or a blank form.
   // It follows the folder (its id), not its object: a refreshed list must not
   // wipe what is being typed.
   $effect(() => {
@@ -162,15 +165,23 @@
     canMoveUnder(hosts.groups, mode === 'edit' ? (folder?.id ?? null) : null, parentId || null),
   );
   const canEdit = $derived(mode === 'create' || folder !== null);
-  const railLabel = $derived(mode === 'create' ? 'NEW FOLDER' : 'EDIT FOLDER');
+  /** What the inspector is about: a new value replaces its content. */
+  const inspectorKey = $derived(mode === 'create' ? 'new' : `${selection}`);
 
-  function select(next: Selection): void {
+  function select(next: Selection, how: 'pointer' | 'keyboard'): void {
     hosts.folderSelection = next;
     mode = 'edit';
+    via = how;
   }
 
-  function startCreate(): void {
+  /** `detail` is 0 for a click made with the keyboard (Enter, Space). */
+  function modality(event: MouseEvent): 'pointer' | 'keyboard' {
+    return event.detail > 0 ? 'pointer' : 'keyboard';
+  }
+
+  function startCreate(how: 'pointer' | 'keyboard' = 'keyboard'): void {
     mode = 'create';
+    via = how;
     name = '';
     // The selected folder is the parent of the new one (frame 5).
     parentId = folder?.id ?? '';
@@ -185,7 +196,7 @@
     if (intents.take('new-folder')) startCreate();
   });
 
-  function cancelRail(): void {
+  function cancelForm(): void {
     mode = 'edit';
     if (folder) {
       name = folder.name;
@@ -246,6 +257,11 @@
     deleteTarget = folder;
     deleteOpen = true;
   }
+
+  /** What deleting the selected folder would do, said before the question is asked. */
+  const consequence = $derived(
+    folder ? deleteSentence(folder.name, deleteImpact(hosts.groups, hosts.hosts, folder.id)) : '',
+  );
 
   const deleteText = $derived(
     deleteTarget
@@ -340,213 +356,241 @@
 <div class="workpage folders">
   <PageHeader title="Folders" count={formatCount(hosts.groups.length)}>
     {#snippet actions()}
-      <button type="button" class="primary new" onclick={startCreate}>
+      <button type="button" class="primary new" onclick={(event) => startCreate(modality(event))}>
         <Icon name="folder-plus" size={16} />
         New folder
       </button>
     {/snippet}
   </PageHeader>
 
-  <div class="scroll">
-    <div class="columns">
-      <!-- Column 1: the tree. -->
-      <nav class="tree" aria-label="Folders">
-        <p class="wp-label">Folder tree</p>
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <ul onkeydown={onTreeKeyDown} bind:this={treeList}>
-          <li>
-            <button
-              type="button"
-              class="item"
-              class:active={selection === 'all'}
-              aria-current={selection === 'all' ? 'true' : undefined}
-              onclick={() => select('all')}
-            >
-              <Icon name="layers" size={17} />
-              <span class="label">All hosts</span>
-              <span class="count">{formatCount(tree.total)}</span>
-            </button>
-          </li>
-          {#each tree.nodes as entry (entry.group.id)}
+  <SplitBody>
+    {#snippet main()}
+      <div class="cols">
+        <!-- The tree: where to look. -->
+        <nav class="tree" aria-label="Folders">
+          <p class="sect">Folder tree</p>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <ul onkeydown={onTreeKeyDown} bind:this={treeList}>
             <li>
               <button
                 type="button"
                 class="item"
-                class:active={selection === entry.group.id}
-                style:padding-left="calc(var(--termru-space-12) + {treeIndent(entry.depth)}px)"
-                aria-current={selection === entry.group.id ? 'true' : undefined}
-                title={entry.path}
-                onclick={() => select(entry.group.id)}
+                class:active={selection === 'all'}
+                aria-current={selection === 'all' ? 'true' : undefined}
+                onclick={(event) => select('all', modality(event))}
               >
-                <Icon name="folder" size={17} />
-                <span class="label">{entry.group.name}</span>
-                <span class="count">{formatCount(entry.count)}</span>
+                <Icon name="layers" size={15} />
+                <span class="label">All hosts</span>
+                <span class="count">{formatCount(tree.total)}</span>
               </button>
             </li>
-          {/each}
-          <li>
-            <button
-              type="button"
-              class="item"
-              class:active={selection === 'unfiled'}
-              aria-current={selection === 'unfiled' ? 'true' : undefined}
-              onclick={() => select('unfiled')}
-            >
-              <Icon name="inbox" size={17} />
-              <span class="label">Unfiled</span>
-              <span class="count">{formatCount(tree.unfiled)}</span>
-            </button>
-          </li>
-        </ul>
-        <p class="footnote">
-          Folders are navigation, not copies. Each host belongs to exactly one folder.
-        </p>
-      </nav>
-
-      <!-- Column 2: what is in the selection. -->
-      <section class="detail" aria-labelledby="detail-title" aria-busy={hosts.loading}>
-        {#if hosts.error}
-          <p class="problem" role="alert">
-            Could not read your hosts: {hosts.error}
-            <button type="button" class="link" onclick={() => void hosts.load()}>Retry</button>
-          </p>
-        {/if}
-        <header class="detail-head">
-          <div class="titles">
-            <p class="trail">{trail}</p>
-            <h2 id="detail-title">{title}</h2>
-          </div>
-          <p class="wp-label count-label">{hostCount}</p>
-        </header>
-
-        {#if listed.length > 0}
-          <ul class="hostlist" aria-label="Hosts in {title}">
-            {#each listed.slice(0, shown) as host (host.id)}
-              {@const live = livePane.get(host.id)}
-              <li class="host">
-                <span class="prompt" aria-hidden="true"><Icon name="terminal" size={17} /></span>
-                <span class="who">
-                  <span class="host-name">{host.name}</span>
-                  <span class="target">{targetLine(host)}</span>
-                </span>
-                {#if live}<StatusBadge pane={live} />{/if}
-                <span class="move-wrap">
-                  <select
-                    class="move"
-                    aria-label="Move {host.name} to another folder"
-                    onchange={(event) => onMoveChange(host, event)}
-                  >
-                    <option value="">Move</option>
-                    <option value="__none__" disabled={!host.group_id}>Unfiled (no folder)</option>
-                    {#each hosts.folderOptions as option (option.id)}
-                      <option value={option.id} disabled={host.group_id === option.id}
-                        >{option.label}{host.group_id === option.id ? ' (current)' : ''}</option
-                      >
-                    {/each}
-                  </select>
-                </span>
+            {#each tree.nodes as entry (entry.group.id)}
+              <li>
+                <button
+                  type="button"
+                  class="item"
+                  class:active={selection === entry.group.id}
+                  style:padding-left="calc(var(--termru-space-8) + {treeIndent(entry.depth)}px)"
+                  aria-current={selection === entry.group.id ? 'true' : undefined}
+                  title={entry.path}
+                  onclick={(event) => select(entry.group.id, modality(event))}
+                >
+                  <Icon name="folder" size={15} />
+                  <span class="label">{entry.group.name}</span>
+                  <span class="count">{formatCount(entry.count)}</span>
+                </button>
               </li>
             {/each}
-          </ul>
-          {#if listed.length > shown}
-            <button type="button" class="more" onclick={() => (shown += 100)}>
-              Show {formatCount(Math.min(100, listed.length - shown))} more of {formatCount(
-                listed.length - shown,
-              )}
-            </button>
-          {/if}
-        {:else if hosts.hosts.length === 0}
-          <p class="empty">No hosts yet. Add one on the Hosts page, then file it here.</p>
-        {:else if selection === 'all'}
-          <p class="empty">No hosts.</p>
-        {:else}
-          <p class="empty">
-            {selection === 'unfiled' ? 'Every host is in a folder.' : `No hosts in “${title}” yet.`}
-          </p>
-        {/if}
-
-        {#if movable}
-          <div class="pick-bar">
-            <p>
-              {selection === 'unfiled'
-                ? 'Take a host out of its folder.'
-                : 'Move a host here from another folder.'}
-            </p>
-            {#if available.length > 0}
+            <li>
               <button
                 type="button"
-                aria-expanded={picking}
-                aria-controls="pick-panel"
-                onclick={() => (picking = !picking)}
+                class="item"
+                class:active={selection === 'unfiled'}
+                aria-current={selection === 'unfiled' ? 'true' : undefined}
+                onclick={(event) => select('unfiled', modality(event))}
               >
-                <Icon name="plus" size={15} />
-                Choose hosts
+                <Icon name="inbox" size={15} />
+                <span class="label">Unfiled</span>
+                <span class="count">{formatCount(tree.unfiled)}</span>
+              </button>
+            </li>
+          </ul>
+          <p class="note">
+            Folders are navigation, not copies. Each host belongs to exactly one folder.
+          </p>
+        </nav>
+
+        <!-- What is in the selection. -->
+        <section class="detail" aria-labelledby="detail-title" aria-busy={hosts.loading}>
+          {#if hosts.error}
+            <p class="problem" role="alert">
+              Could not read your hosts: {hosts.error}
+              <button type="button" class="link" onclick={() => void hosts.load()}>Retry</button>
+            </p>
+          {/if}
+          <header class="detail-head">
+            <div class="titles">
+              <h2 id="detail-title">{title}</h2>
+              <p class="trail">{trail}</p>
+            </div>
+            <p class="count-label">{hostCount}</p>
+          </header>
+
+          {#if listed.length > 0}
+            <ul class="hostlist" aria-label="Hosts in {title}">
+              {#each listed.slice(0, shown) as host (host.id)}
+                {@const live = livePane.get(host.id)}
+                <li class="host">
+                  <span class="who">
+                    <span class="host-name">{host.name}</span>
+                    <span class="target">{targetLine(host)}</span>
+                  </span>
+                  {#if live}<StatusBadge pane={live} />{/if}
+                  <span class="move-wrap">
+                    <select
+                      class="move"
+                      aria-label="Move {host.name} to another folder"
+                      onchange={(event) => onMoveChange(host, event)}
+                    >
+                      <option value="">Move</option>
+                      <option value="__none__" disabled={!host.group_id}>Unfiled (no folder)</option
+                      >
+                      {#each hosts.folderOptions as option (option.id)}
+                        <option value={option.id} disabled={host.group_id === option.id}
+                          >{option.label}{host.group_id === option.id ? ' (current)' : ''}</option
+                        >
+                      {/each}
+                    </select>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+            {#if listed.length > shown}
+              <button type="button" class="more" onclick={() => (shown += 100)}>
+                Show {formatCount(Math.min(100, listed.length - shown))} more of {formatCount(
+                  listed.length - shown,
+                )}
               </button>
             {/if}
-          </div>
-
-          {#if available.length > 0}
-            <section class="available" id="pick-panel" aria-labelledby="available-label">
-              <p class="wp-label" id="available-label">
-                AVAILABLE TO MOVE{picking ? '' : ' · EXAMPLES'}
-              </p>
-              {#if picking}
-                <input
-                  type="search"
-                  class="pick-search"
-                  aria-label="Search hosts to move"
-                  placeholder="Search name, address or username"
-                  bind:value={pickQuery}
-                />
-              {/if}
-              <ul class="pick-list" class:scroll-list={picking}>
-                {#each picking ? pickList : examples as host (host.id)}
-                  <li class="pick">
-                    <span class="pick-name">{host.name}</span>
-                    <span class="pick-from">{folderOf(host)}</span>
-                    <button
-                      type="button"
-                      class="link here"
-                      aria-label="Move {host.name} here"
-                      onclick={() => void move(host, folder ? folder.id : null)}
-                    >
-                      Move here <Icon name="arrow-right" size={14} />
-                    </button>
-                  </li>
-                {:else}
-                  <li class="pick-empty">No host matches.</li>
-                {/each}
-              </ul>
-              {#if picking && available.length > pickList.length && pickQuery.trim() === ''}
-                <p class="hint">
-                  Showing {pickList.length} of {available.length}. Search to narrow it down.
-                </p>
-              {/if}
-            </section>
+          {:else if hosts.hosts.length === 0}
+            <p class="empty">No hosts yet. Add one on the Hosts page, then file it here.</p>
+          {:else if selection === 'all'}
+            <p class="empty">No hosts.</p>
+          {:else}
+            <p class="empty">
+              {selection === 'unfiled'
+                ? 'Every host is in a folder.'
+                : `No hosts in “${title}” yet.`}
+            </p>
           {/if}
-        {:else}
-          <p class="hint">Choose a folder in the tree to move hosts into it.</p>
-        {/if}
 
-        <aside class="callout" aria-label="One folder, always">
-          <p class="wp-label accent">ONE FOLDER, ALWAYS</p>
-          <p>
+          {#if movable}
+            <div class="pick-bar">
+              <p>
+                {selection === 'unfiled'
+                  ? 'Take a host out of its folder.'
+                  : 'Move a host here from another folder.'}
+              </p>
+              {#if available.length > 0}
+                <button
+                  type="button"
+                  aria-expanded={picking}
+                  aria-controls="pick-panel"
+                  onclick={() => (picking = !picking)}
+                >
+                  <Icon name="plus" size={15} />
+                  Choose hosts
+                </button>
+              {/if}
+            </div>
+
+            {#if available.length > 0}
+              <section class="available" id="pick-panel" aria-labelledby="available-label">
+                <p class="sect" id="available-label">
+                  Available to move{picking ? '' : ' · examples'}
+                </p>
+                {#if picking}
+                  <input
+                    type="search"
+                    class="pick-search"
+                    aria-label="Search hosts to move"
+                    placeholder="Search name, address or username"
+                    bind:value={pickQuery}
+                  />
+                {/if}
+                <ul class="pick-list" class:scroll-list={picking}>
+                  {#each picking ? pickList : examples as host (host.id)}
+                    <li class="pick">
+                      <span class="pick-name">{host.name}</span>
+                      <span class="pick-from">{folderOf(host)}</span>
+                      <button
+                        type="button"
+                        class="ghost here"
+                        aria-label="Move {host.name} here"
+                        onclick={() => void move(host, folder ? folder.id : null)}
+                      >
+                        Move here <Icon name="arrow-right" size={14} />
+                      </button>
+                    </li>
+                  {:else}
+                    <li class="pick-empty">No host matches.</li>
+                  {/each}
+                </ul>
+                {#if picking && available.length > pickList.length && pickQuery.trim() === ''}
+                  <p class="hint">
+                    Showing {pickList.length} of {available.length}. Search to narrow it down.
+                  </p>
+                {/if}
+              </section>
+            {/if}
+          {:else}
+            <p class="hint">Choose a folder in the tree to move hosts into it.</p>
+          {/if}
+
+          <p class="note one-folder">
             A host lives in exactly one folder. Moving it here removes it from its current folder;
             its credentials and active sessions are not changed.
           </p>
-        </aside>
-      </section>
+        </section>
+      </div>
+    {/snippet}
 
-      <!-- Column 3: the edit rail. -->
-      <aside class="rail" aria-label={mode === 'create' ? 'New folder' : 'Edit folder'}>
-        <p class="wp-label accent">{railLabel}</p>
+    {#snippet inspector()}
+      <InspectorPanel
+        label={mode === 'create' ? 'New folder' : 'Edit folder'}
+        contentKey={inspectorKey}
+        animate={via === 'pointer'}
+      >
+        <div class="titles">
+          <h2 class="insp-title" title={mode === 'create' ? 'New folder' : title}>
+            {mode === 'create' ? 'New folder' : title}
+          </h2>
+          <p class="insp-sub" title={mode === 'create' ? undefined : trail}>
+            {#if mode === 'create'}
+              {folder ? `Inside ${folderPath(hosts.groups, folder.id)}` : 'At the top level'}
+            {:else if folder}
+              {trail}
+            {:else}
+              A view of your hosts
+            {/if}
+          </p>
+        </div>
 
         {#if canEdit}
-          <form
-            onsubmit={(event) => void saveFolder(event)}
-            novalidate
-            use:appear={{ enabled: page.value }}
-          >
+          {#if mode === 'edit' && node}
+            <dl class="kv">
+              <dt>Hosts</dt>
+              <dd>
+                {formatCount(node.count)}{node.count !== node.directCount
+                  ? ` · ${formatCount(node.directCount)} directly in it`
+                  : ''}
+              </dd>
+              <dt>Subfolders</dt>
+              <dd>{formatCount(node.childCount)}</dd>
+            </dl>
+          {/if}
+
+          <form onsubmit={(event) => void saveFolder(event)} novalidate>
             <Field label="Name" id="folder-name" error={nameTouched ? nameError : null}>
               {#snippet control(attrs)}
                 <input
@@ -584,14 +628,14 @@
               {/snippet}
             </Field>
 
-            <p class="rule-note">
+            <p class="insp-note">
               The folder cannot be its own parent or be moved into one of its descendants.
             </p>
 
-            {#if formError}<p class="form-error" role="alert">{formError}</p>{/if}
+            {#if formError}<p class="insp-note error form-error" role="alert">{formError}</p>{/if}
 
-            <div class="rail-actions">
-              <button type="button" class="quiet" onclick={cancelRail}>Cancel</button>
+            <div class="insp-actions form-actions">
+              <button type="button" class="quiet" onclick={cancelForm}>Cancel</button>
               <button
                 type="submit"
                 class="primary"
@@ -603,26 +647,31 @@
             </div>
           </form>
         {:else}
-          <p class="rule-note">
+          <p class="insp-note">
             {selection === 'all' ? '“All hosts”' : '“Unfiled”'} is a view of your hosts, not a folder.
             Choose a folder in the tree to rename it or move it, or make a new one.
           </p>
         {/if}
 
-        <hr />
-        <p class="rule-note small">
-          New folder opens this editor with a blank name and the selected folder as its parent.
-        </p>
+        {#if mode === 'create'}
+          <p class="insp-note">
+            New folder opens this editor with a blank name and the selected folder as its parent.
+          </p>
+        {/if}
 
         {#if folder && mode === 'edit'}
-          <button type="button" class="danger quiet delete" onclick={askDelete}>
-            <Icon name="trash" size={15} />
-            Delete folder
-          </button>
+          <section class="insp-group danger-zone" aria-labelledby="folder-delete-label">
+            <p class="ttl" id="folder-delete-label">Delete</p>
+            <p class="insp-note">{consequence}</p>
+            <button type="button" class="danger quiet delete" onclick={askDelete}>
+              <Icon name="trash" size={15} />
+              Delete folder
+            </button>
+          </section>
         {/if}
-      </aside>
-    </div>
-  </div>
+      </InspectorPanel>
+    {/snippet}
+  </SplitBody>
 
   <SessionDialog
     open={deleteOpen}
@@ -642,44 +691,43 @@
 </div>
 
 <style>
-  .scroll {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-24);
-  }
-
   .new {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    padding: 0 var(--termru-space-24);
+    gap: 7px;
   }
 
-  /* Three columns: tree | detail | edit rail, separated by hairlines. */
-  .columns {
+  /* The tree, then the hosts of the selection. Each scrolls on its own. */
+  .cols {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr) 392px;
+    grid-template-columns: 224px minmax(0, 1fr);
     flex: 1;
     min-height: 0;
+  }
+
+  .sect {
+    margin: 0;
+    padding: 0 var(--termru-space-8) var(--termru-space-6);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
   }
 
   .tree {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-16);
-    padding-right: var(--termru-space-24);
-    border-right: 1px solid var(--termru-border);
     min-width: 0;
+    min-height: 0;
+    padding: var(--termru-space-4) var(--termru-space-8) var(--termru-space-16)
+      var(--termru-space-20);
+    overflow: auto;
   }
 
   .tree ul {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-8);
+    gap: 1px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -688,21 +736,23 @@
   .item {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-12);
+    gap: 9px;
     width: 100%;
-    min-height: 42px;
-    padding: 0 var(--termru-space-12);
-    border: none;
-    border-radius: var(--termru-radius-button);
-    background: none;
-    color: var(--termru-text);
-    font-size: var(--termru-text-body-size);
-    font-weight: 450;
+    height: 30px;
+    min-height: 0;
+    padding: 0 var(--termru-space-8);
+    border-radius: var(--termru-radius-sm);
+    background: transparent;
+    color: var(--termru-text-2);
+    font-weight: 400;
     text-align: left;
+    /* Only the press moves. The selection changes at once: a folder is often
+       chosen from the keyboard, and that is never animated. */
+    transition: transform var(--motion-fast) var(--ease-out);
   }
 
-  .item :global(.icon) {
-    color: var(--termru-text-2);
+  .item :global(svg) {
+    flex: none;
   }
 
   .item .label {
@@ -714,105 +764,118 @@
   }
 
   .count {
-    font-size: var(--termru-text-secondary-size);
-    color: var(--termru-text-2);
+    flex: none;
+    font: 500 11px var(--termru-font-mono);
+    color: var(--termru-text-3);
     font-variant-numeric: tabular-nums;
   }
 
-  /* A row of a list is not a button that gives under the finger (it would
-     shrink the whole row), and it needs a hover of its own. */
-  .item.item:active:not(:disabled) {
-    transform: none;
+  .item.active {
+    background: var(--termru-raised);
+    color: var(--termru-text);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .item:hover:not(.active) {
-      background-color: var(--termru-side);
+    .item:not(.active) {
+      transition:
+        transform var(--motion-fast) var(--ease-out),
+        background-color var(--motion-fast) ease,
+        color var(--motion-fast) ease;
+    }
+
+    .item:not(.active):hover:not(:disabled) {
+      background: color-mix(in srgb, var(--termru-raised) 60%, transparent);
+      color: var(--termru-text);
     }
   }
 
-  .item.active {
-    background: var(--termru-accent-soft);
-    color: var(--termru-accent-text);
-    font-weight: 600;
-  }
-
-  .item.active :global(.icon),
-  .item.active .count {
-    color: var(--termru-accent-text);
-  }
-
-  .footnote {
-    margin: var(--termru-space-12) 0 0;
-    padding-top: var(--termru-space-16);
-    border-top: 1px solid var(--termru-border);
+  .note {
+    margin: var(--termru-space-16) var(--termru-space-8) 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
   }
 
   .detail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-24);
-    padding: 0 var(--termru-space-32);
+    gap: var(--termru-space-16);
     min-width: 0;
+    min-height: 0;
+    padding: var(--termru-space-4) var(--termru-space-16) var(--termru-space-16);
+    overflow: auto;
   }
 
   .detail-head {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: var(--termru-space-16);
+    gap: var(--termru-space-12);
+    padding: 0 var(--termru-space-12);
   }
 
   .titles {
     min-width: 0;
   }
 
+  .detail-head h2 {
+    margin: 0;
+    font-size: var(--termru-text-title-size);
+    line-height: var(--termru-text-title-lh);
+    font-weight: var(--termru-text-title-weight);
+    letter-spacing: -0.01em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .trail {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
-    overflow-wrap: anywhere;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 24px;
-    line-height: 36px;
-    font-weight: 500;
-    overflow-wrap: anywhere;
+    color: var(--termru-text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .count-label {
     flex: none;
-    padding-bottom: var(--termru-space-8);
+    margin: 0;
+    font: 500 12px var(--termru-font-mono);
+    color: var(--termru-text-3);
   }
 
+  /* The hosts: quiet 52 px rows, as on the Hosts page. */
   .hostlist {
+    display: flex;
+    flex-direction: column;
     margin: 0;
     padding: 0;
     list-style: none;
-    border: 1px solid var(--termru-border);
-    background: var(--termru-side);
   }
 
   .host {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-16);
-    min-height: 72px;
-    padding: 0 var(--termru-space-24);
+    gap: var(--termru-space-12);
+    height: var(--termru-row-h);
+    padding: 0 var(--termru-space-8) 0 var(--termru-space-12);
+    border-radius: var(--termru-radius-row);
   }
 
-  .host + .host {
-    border-top: 1px solid var(--termru-border);
+  @media (hover: hover) and (pointer: fine) {
+    .host {
+      transition: background-color var(--motion-fast) ease;
+    }
+
+    .host:hover {
+      background: var(--termru-raised);
+    }
   }
 
-  .prompt {
-    color: var(--termru-accent-text);
+  .host:focus-within {
+    background: var(--termru-raised);
   }
 
   .who {
@@ -823,8 +886,10 @@
   }
 
   .host-name {
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
+    font-size: 13.5px;
+    line-height: 20px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -832,211 +897,186 @@
 
   .target {
     font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    color: var(--termru-text-2);
+    font-size: var(--termru-text-mono-size);
+    line-height: 16px;
+    letter-spacing: -0.01em;
+    color: var(--termru-text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* A native select that reads as the frame's "Move ▾" button: the list of
-     folders can be long, and the platform's list scrolls and searches. */
-  .move {
-    width: 88px;
-    min-height: 36px;
-    padding: 0 28px 0 var(--termru-space-12);
-    border: 1px solid transparent;
+  .move-wrap {
+    flex: none;
+  }
+
+  /* Move: a quiet control that reads as a button, lit by the row. */
+  :global(.workpage) select.move {
+    width: 96px;
+    min-height: 28px;
+    padding: 0 28px 0 var(--termru-space-10);
+    border-color: transparent;
     background-color: transparent;
-    font-family: inherit;
-    font-weight: var(--termru-text-control-weight);
+    color: var(--termru-text-2);
+    font-family: var(--termru-font-ui);
+    font-size: var(--termru-text-control-size);
     background-position: right 10px center;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .host:hover :global(select.move),
+    :global(.workpage) select.move:hover:not(:disabled) {
+      background-color: var(--termru-raised-2);
+      border-color: transparent;
+      color: var(--termru-text);
+    }
   }
 
   .more {
     align-self: flex-start;
+    margin-left: var(--termru-space-12);
   }
 
   .empty,
   .hint {
     margin: 0;
+    padding: 0 var(--termru-space-12);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
   }
 
   .empty {
-    padding: var(--termru-space-32) 0;
-    border-top: 1px solid var(--termru-border);
-    border-bottom: 1px solid var(--termru-border);
-    text-align: center;
+    padding-top: var(--termru-space-16);
+    padding-bottom: var(--termru-space-16);
+    font-size: var(--termru-text-body-size);
+    line-height: var(--termru-text-body-lh);
+    color: var(--termru-text-2);
   }
 
   .pick-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-16);
-    padding-bottom: var(--termru-space-24);
-    border-bottom: 1px solid var(--termru-border);
+    gap: var(--termru-space-12);
+    padding: 0 var(--termru-space-12);
   }
 
   .pick-bar p {
     margin: 0;
-    font-size: var(--termru-text-control-size);
     color: var(--termru-text-2);
   }
 
   .pick-bar button {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    flex: none;
+    gap: 7px;
   }
 
   .available {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-12);
+    gap: var(--termru-space-8);
+    margin: 0 var(--termru-space-4);
+    padding: var(--termru-space-12) var(--termru-space-8) var(--termru-space-8);
+    border-radius: var(--termru-radius-pane);
+    background: var(--termru-side);
+  }
+
+  .available .pick-search {
+    margin: 0 var(--termru-space-4);
+    width: auto;
   }
 
   .pick-list {
+    display: flex;
+    flex-direction: column;
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
   .pick-list.scroll-list {
-    max-height: 320px;
+    max-height: 260px;
     overflow: auto;
   }
 
   .pick {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    display: flex;
     align-items: center;
-    gap: var(--termru-space-16);
-    min-height: 48px;
+    gap: var(--termru-space-12);
+    min-height: 40px;
+    padding: 0 var(--termru-space-4) 0 var(--termru-space-8);
+    border-radius: var(--termru-radius-sm);
   }
 
   .pick-name {
-    font-size: var(--termru-text-body-size);
+    font-weight: 500;
+    flex: none;
+    max-width: 40%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .pick-from {
+    flex: 1;
+    min-width: 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .pick-empty {
-    padding: var(--termru-space-16) 0;
-    font-size: var(--termru-text-secondary-size);
+    padding: var(--termru-space-8);
+    color: var(--termru-text-3);
+  }
+
+  .pick .here {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    flex: none;
     color: var(--termru-text-2);
   }
 
-  /* The global link style underlines; here the arrow says it is a link. */
-  .pick .here.here {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--termru-space-4);
-    min-height: 32px;
-    font-size: var(--termru-text-secondary-size);
-    text-decoration: none;
+  @media (hover: hover) and (pointer: fine) {
+    .pick .here:hover:not(:disabled) {
+      background: var(--termru-raised-2);
+      color: var(--termru-text);
+    }
+  }
+
+  .one-folder {
+    margin: var(--termru-space-4) var(--termru-space-12) 0;
+    max-width: 60ch;
   }
 
   .problem {
-    margin: 0;
-    padding: var(--termru-space-12) var(--termru-space-16);
-    border-left: 2px solid var(--termru-err-text);
-    background: var(--termru-err-soft);
+    margin: 0 var(--termru-space-12);
     color: var(--termru-err-text);
-    font-size: var(--termru-text-control-size);
-    overflow-wrap: anywhere;
   }
 
-  .callout {
-    padding: var(--termru-space-16) var(--termru-space-24);
-    border-left: 2px solid var(--termru-border);
-    background: var(--termru-side);
-  }
-
-  .callout p {
+  /* The inspector: the name and where it sits, what it holds, the form. */
+  .titles :global(.insp-title) {
     margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
   }
 
-  .rail .accent {
-    color: var(--termru-accent-text);
-  }
-
-  /* The callout's title is a sans label, not a mono one (frame 5). */
-  .callout .accent {
-    font-family: var(--termru-font-ui);
-    font-size: var(--termru-text-secondary-size);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    color: var(--termru-accent-text);
-  }
-
-  .callout .wp-label {
-    margin-bottom: var(--termru-space-8);
-  }
-
-  .rail {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-16);
-    padding-left: 28px;
-    border-left: 1px solid var(--termru-border);
-    min-width: 0;
-  }
-
-  .rail form {
+  form {
     display: flex;
     flex-direction: column;
     gap: var(--termru-space-16);
   }
 
-  .rule-note {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
+  .form-actions {
+    justify-content: flex-end;
   }
 
-  .rule-note.small {
-    font-size: var(--termru-text-secondary-size);
-  }
-
-  .form-error {
-    margin: 0;
-    font-size: var(--termru-text-secondary-size);
-    color: var(--termru-err-text);
-  }
-
-  .rail-actions {
-    display: flex;
-    gap: var(--termru-space-12);
-    align-items: center;
-  }
-
-  .rail-actions .primary {
-    padding: 0 var(--termru-space-24);
-  }
-
-  hr {
-    width: 100%;
-    margin: var(--termru-space-8) 0;
-    border: none;
-    border-top: 1px solid var(--termru-border);
+  .form-actions button {
+    padding: 0 var(--termru-space-16);
   }
 
   .delete {
@@ -1044,54 +1084,33 @@
     display: inline-flex;
     align-items: center;
     gap: var(--termru-space-8);
+    margin-left: calc(var(--termru-space-12) * -1);
   }
 
-  /* A narrower window: the rail drops under the other two columns. */
-  @media (max-width: 1180px) {
-    .columns {
-      grid-template-columns: 224px minmax(0, 1fr);
-      row-gap: var(--termru-space-32);
-    }
-
-    .rail {
-      grid-column: 1 / -1;
-      padding: var(--termru-space-24) 0 0;
-      border-left: none;
-      border-top: 1px solid var(--termru-border);
-    }
-
-    .detail {
-      padding-right: 0;
+  /* Room is by the width of the body, not of the window: the stage (the tree,
+     the hosts, the inspector) stacks when it is short. */
+  @container body (max-width: 1000px) {
+    .cols {
+      grid-template-columns: 188px minmax(0, 1fr);
     }
   }
 
-  @media (max-width: 760px) {
-    .columns {
-      grid-template-columns: minmax(0, 1fr);
+  @container body (max-width: 860px) {
+    .cols {
+      display: flex;
+      flex-direction: column;
+      flex: none;
+      gap: var(--termru-space-12);
     }
 
     .tree {
-      padding-right: 0;
-      padding-bottom: var(--termru-space-24);
-      border-right: none;
-      border-bottom: 1px solid var(--termru-border);
-    }
-
-    .tree ul {
-      max-height: 260px;
-      overflow: auto;
+      flex: none;
+      max-height: 220px;
+      padding-right: var(--termru-space-16);
     }
 
     .detail {
-      padding: 0;
-    }
-
-    .pick {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .pick-from {
-      display: none;
+      overflow: visible;
     }
   }
 </style>

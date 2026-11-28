@@ -7,7 +7,7 @@
   import type { AuthKind } from '../types';
 
   /**
-   * What `06 / ADVANCED` holds besides the terminal type and the keepalive
+   * What the Advanced section holds besides the terminal type and the keepalive
    * (data model v2, ADR 0010): environment variables, the startup command,
    * agent forwarding and the order the authentication methods are tried in.
    *
@@ -211,7 +211,7 @@
   </div>
   {#if form.authOrder === null}
     <p class="note">
-      The method chosen under Authentication first, then whatever question the server asks.
+      The method chosen under Sign-in first, then whatever question the server asks.
     </p>
   {:else}
     <ol class="order-list" aria-label="Methods, in the order they are tried">
@@ -431,8 +431,7 @@
   }
 
   .choice.selected {
-    border-color: var(--termru-border);
-    background: var(--termru-side);
+    background: var(--termru-raised);
     color: var(--termru-text);
   }
 
@@ -464,7 +463,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--termru-border);
+    gap: 2px;
   }
 
   .order-list li {
@@ -473,7 +472,9 @@
     align-items: center;
     gap: var(--termru-space-12);
     min-height: 44px;
-    border-bottom: 1px solid var(--termru-border);
+    padding: 0 var(--termru-space-8) 0 var(--termru-space-12);
+    border-radius: var(--termru-radius-row);
+    background: var(--termru-side);
   }
 
   .n {

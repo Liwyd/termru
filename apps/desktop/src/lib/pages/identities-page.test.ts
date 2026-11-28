@@ -91,7 +91,7 @@ async function mountPage(): Promise<void> {
   component = mount(IdentitiesPage, { target });
   flushSync();
   // The bindings and the key of the selected identity are read.
-  await vi.waitFor(() => expect(target.textContent).toMatch(/FINGERPRINT|No key file/));
+  await vi.waitFor(() => expect(target.textContent).toMatch(/Fingerprint|No key file/));
 }
 
 beforeEach(() => {
@@ -275,19 +275,29 @@ describe('the key of an identity', () => {
   });
 });
 
-describe('the rail form arrives', () => {
-  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+describe('the inspector content arrives', () => {
+  const content = () => target.querySelector('aside.insp .content');
+  const choose = (label: string, detail: number) => {
+    listItem(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail }));
+    flushSync();
+  };
 
-  it('moves in when New identity opens it, not when the page opens on an identity', async () => {
-    window.dispatchEvent(new Event('pointerdown'));
+  it('cross-fades when a click chooses an identity, and not when a key does or at first paint', async () => {
     await mountPage();
-    await frame();
-    // The page opened on the first identity: its form is part of the first paint.
-    expect(target.querySelector('.rail form')?.classList.contains('appear')).toBe(false);
-    click(listItem('work-ed25519'));
+    // The page opened on the first identity: that is part of the first paint.
+    expect(content()?.classList.contains('fade')).toBe(false);
+    choose('work-ed25519', 1);
+    expect(content()?.classList.contains('fade')).toBe(true);
+    // Enter and Space click with a detail of 0: nothing a key starts is animated.
+    choose('ci-key', 0);
+    expect(content()?.classList.contains('fade')).toBe(false);
+  });
+
+  it('opens the form of a new identity in the inspector', async () => {
+    await mountPage();
     click(findButton(target, 'New identity'));
-    // The same form element is reused between edit and create: no replay.
-    expect(target.querySelector('.rail form')).not.toBeNull();
+    expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('New identity');
+    expect(target.querySelector('aside.insp form')).not.toBeNull();
   });
 });
 
@@ -352,14 +362,17 @@ describe('generating a key', () => {
     await mountPage();
     click(findButton(target, 'New identity'));
     await tick();
-    expect(target.querySelector('.rail .wp-label')?.textContent).toBe('NEW IDENTITY');
+    expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('New identity');
+    expect(target.querySelector('aside.insp .insp-title')?.textContent?.trim()).toBe(
+      'New identity',
+    );
     expect(document.activeElement).toBe(field('identity-name'));
     expect(findButton(target, 'Generate key')).toBeTruthy();
     expect(field('identity-passphrase')).not.toBeNull();
     // The "remember" box only matters once there is a passphrase.
-    expect(target.querySelector('.rail input[type="checkbox"]')).toBeNull();
+    expect(target.querySelector('.insp input[type="checkbox"]')).toBeNull();
     type(field('identity-passphrase'), 'correct horse');
-    expect(target.querySelector('.rail input[type="checkbox"]')).not.toBeNull();
+    expect(target.querySelector('.insp input[type="checkbox"]')).not.toBeNull();
   });
 
   it('generates an ed25519 key through the backend and shows it', async () => {
@@ -397,7 +410,7 @@ describe('generating a key', () => {
     type(field('identity-name'), 'locked');
     type(field('identity-passphrase'), 'correct horse');
     const box = target.querySelector<HTMLInputElement>(
-      '.rail input[type="checkbox"]',
+      '.insp input[type="checkbox"]',
     ) as HTMLInputElement;
     box.checked = true;
     box.dispatchEvent(new Event('change', { bubbles: true }));
@@ -410,7 +423,7 @@ describe('generating a key', () => {
     });
     // The passphrase does not stay in the form.
     await vi.waitFor(() =>
-      expect(target.querySelector('.rail .wp-label')?.textContent).toBe('EDIT IDENTITY'),
+      expect(target.querySelector('aside.insp')?.getAttribute('aria-label')).toBe('Edit identity'),
     );
     expect(JSON.stringify(notices.visible)).not.toContain('correct horse');
   });

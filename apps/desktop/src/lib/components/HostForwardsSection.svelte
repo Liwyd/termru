@@ -10,7 +10,7 @@
   import type { ForwardKind } from '../types';
 
   /**
-   * `05 / PORT FORWARDS`: local (`-L`), remote (`-R`) and dynamic (`-D`,
+   * The Forwards section: local (`-L`), remote (`-R`) and dynamic (`-D`,
    * SOCKS) forwards that start with the session. A forward without a bind
    * address listens on loopback only; any other address is an explicit
    * choice, called out in the row. Each row is checked the way the backend
@@ -67,10 +67,8 @@
 </script>
 
 <EditorSection
-  step="05"
-  label="PORT FORWARDS"
   id="sec-forwards"
-  title="Forward ports with the session"
+  title="Forwards"
   blurb="Open a port on this machine, on the server, or a SOCKS proxy, for as long as the session lives."
 >
   {#if form.forwardRows.length === 0}
@@ -261,13 +259,12 @@
     flex-direction: column;
     gap: var(--termru-space-12);
     padding: var(--termru-space-16);
-    border: 1px solid var(--termru-border);
-    border-radius: var(--termru-radius-input);
+    border-radius: var(--termru-radius-pane);
     background: var(--termru-side);
     min-width: 0;
-    transition: opacity var(--motion-fast) ease;
   }
 
+  /* A switch is flipped with a key as often as with a click: it changes at once. */
   .forward.off {
     opacity: 0.72;
   }

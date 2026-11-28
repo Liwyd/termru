@@ -427,6 +427,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     tokens. New tokens: `--termru-tab-h`, `--termru-tool-size`,
     `--termru-pane-gap`, `--termru-pane-head-h`, `--termru-pane-foot-h`.
 
+* **Obsidian redesign, part 3 of 4: the host editor, Folders, Identities, Sync
+  and Preferences.**
+  * **Host editor.** A quiet page: a left **section index** (Connection,
+    Sign-in, Jump hosts, Forwards, Advanced, Organization) that follows the
+    scroll (`aria-current="location"`) and takes you to a group from the
+    keyboard (the heading gets the focus; the jump is instant), and sentence-case
+    group titles with a muted sentence under each (no `01 /` mono eyebrows, no
+    capitals, no lines between groups). The header is one line (back, title, the
+    host, a warm dot and "Unsaved changes" while the form differs from what is
+    saved); the footer stays in view (Cancel, an error line, Save host, Save &
+    connect in champagne). The credential rail is gone: *what the device stores
+    for the host* (a stored password and Forget password; the key file, its
+    passphrase and Forget passphrase) now sits in **Sign-in**, next to the field
+    it is about; the **not-approved synced settings** note is a soft warm strip
+    over the groups, with Review them…; the **connection preview** (`ssh -J … -L
+    … -D … -R … -A user@host`, broken between words, never inside one) stays in
+    view on the right while the page has room (a window about 1300 px wide or
+    more) and becomes a strip over the groups below that. Every field, validation, the unsaved-changes guard and the save
+    flows are as before; the **Organization** group moved to the end, as in the
+    brief.
+  * **Folders and Identities** are list and inspector pages like Hosts. Folders:
+    the folder tree on the left, the hosts of the selection as quiet 52 px rows
+    (name, `user@host:port`, the live badge, a Move select), "Choose hosts" to
+    bring one in, and the 340 px inspector for the selected folder: where it
+    sits, how many hosts and subfolders it holds, Name and Parent folder (the
+    cycle guard as before), Save folder, and Delete with what would move said
+    before you ask (the confirmation is unchanged). Identities: rows with the
+    name, the short fingerprint, the algorithm (or "No key file") and how many
+    hosts use it; the inspector has the key file (Choose key…, Unbind), the
+    fingerprint and the public key with a Copy each, the hosts that use it with
+    Edit, Name and Comment, Delete, and, for **New identity**, the generate form
+    (passphrase, Remember the passphrase) or the key-file form.
+  * **Sync** is a calm page: one panel says the state in a word and a shape
+    (Up to date, Syncing, N conflicts to decide, Last sync failed, Sync offline)
+    with last sync, server, account, waiting changes and conflicts under it;
+    then the conflicts (a table of the fields that differ and a button per
+    side), Devices (this device, and that the other devices cannot be listed
+    yet), Account (Change server or account, Sign out), and What syncs / Stays on
+    this device. Signed out, the page is the sign-in form. Sync now stays the one
+    primary action.
+  * **Preferences** are grouped rows with a left section index: **Appearance**
+    (the live terminal preview first, then Theme, Font family, Size, Line
+    height), **Terminal** (Cursor, Cursor blink, Scrollback, Copy on select,
+    Confirm multi-line paste), **Keyboard shortcuts** (the full table with
+    Record, Unbind, Reset and the fixed keys), **Motion & accessibility**,
+    **Notifications** and **About**. The palette's "Preferences: …" entries go
+    to the same headings; there is a new one, "Preferences: Terminal", and
+    "Terminal appearance" is now "Appearance".
+  * **Shared.** `InspectorPanel` (the raised 340 px panel with the 120 ms
+    cross-fade for a click, none for a key or the first paint), `SplitBody` (the
+    list and the inspector side by side; under 860 px the inspector goes under
+    the list and the page scrolls, so nothing is out of reach) and
+    `SectionIndex`. The `wp-label` / `section-label` rule that showed capitals
+    as sentences is removed: no page writes them any more. `EditorSection` lost
+    its `step` and `label`.
+  * **Fixed.** A field with an error showed no red edge (its rule was less
+    specific than the field's own edge); it does now. Going to a Preferences
+    section (from the palette) no longer scrolls the whole shell: only the page
+    moves (`scroll-section.ts`).
+  * **Motion.** Choosing an index item, a folder, an identity or a radio choice
+    changes at once; only the press moves. A block that arrives while you look
+    (the account form of Sync) rises 4 px and fades in; reduced motion keeps an
+    80 ms fade.
+
 ## [0.2.0] — 2026-10-25
 
 The first release of the UI/UX redesign (Phase 19, R1–R3 of the plan in
