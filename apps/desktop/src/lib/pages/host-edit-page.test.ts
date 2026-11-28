@@ -5,6 +5,8 @@
  * unsaved-changes guard on a page change and on the window closing.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HostEditPage from './HostEditPage.svelte';
@@ -146,14 +148,14 @@ afterEach(() => {
 });
 
 describe('the page', () => {
-  it('shows the anatomy of frame 4: breadcrumb, title, line, numbered sections, footer', () => {
+  it('shows the anatomy: one header line, numbered sections, footer', () => {
     open(host());
-    const crumbs = target.querySelector('nav[aria-label="Breadcrumb"]')?.textContent ?? '';
-    expect(crumbs).toMatch(/Hosts\s*\/\s*Sandbox\s*\/\s*staging-api/);
-    expect(target.querySelector('h1')?.textContent).toBe('Edit connection');
-    expect(target.textContent).toContain(
-      'Connection details first. Credentials stay on this device.',
-    );
+    // One line: a way back, the title, the host being edited. No breadcrumb, no description.
+    expect(target.querySelector('nav[aria-label="Breadcrumb"], .description')).toBeNull();
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Edit connection');
+    expect(target.querySelector('header.head .count')?.textContent).toBe('staging-api');
+    expect(target.querySelector('header.head [aria-label="Back to hosts"]')).not.toBeNull();
+    expect(target.textContent).not.toContain('Credentials stay on this device.');
     const steps = Array.from(target.querySelectorAll('.step')).map((el) =>
       el.textContent?.replace(/\s+/g, ' ').trim(),
     );
@@ -172,44 +174,33 @@ describe('the page', () => {
     expect(target.querySelector('[aria-modal]')).toBeNull();
   });
 
-  it('keeps the breadcrumb to one short line for a deep folder and a long name', () => {
+  it('keeps the header to one line for a long name: the name is cut, its title has it all', () => {
     const longName =
       'customer-facing-reporting-service-eu-central-1-blue-green-canary-deployment-primary';
-    hosts.groups = [
-      { ...group('g1', 'Northwind Industries Holdings'), parent_id: null },
-      { ...group('g2', 'Platform Infrastructure and Site Reliability'), parent_id: 'g1' },
-      { ...group('g3', 'Production (Frankfurt, eu-central-1)'), parent_id: 'g2' },
-    ];
-    open(host({ name: longName, group_id: 'g3' }));
-    const crumbs = Array.from(
-      target.querySelectorAll<HTMLElement>('nav[aria-label="Breadcrumb"] li > :not(.sep)'),
+    open(host({ name: longName }));
+    const count = target.querySelector<HTMLElement>('header.head .count');
+    expect(count?.textContent).toBe(longName);
+    expect(count?.title).toBe(longName);
+    // The stylesheet ends it in an ellipsis instead of wrapping.
+    const source = readFileSync(
+      resolve(import.meta.dirname, '../components/PageHeader.svelte'),
+      'utf8',
     );
-    expect(crumbs.map((crumb) => crumb.textContent?.trim())).toEqual([
-      'Hosts',
-      '… / Production (Frankfurt, eu-central-1)',
-      longName,
-    ]);
-    // Each is cut to one line by the stylesheet; the title has the whole text.
-    expect(crumbs[1].title).toBe(
-      'Northwind Industries Holdings / Platform Infrastructure and Site Reliability / Production (Frankfurt, eu-central-1)',
-    );
-    expect(crumbs[2].title).toBe(longName);
+    expect(source).toMatch(/\.count \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/);
   });
 
   it('is a new connection when no host is edited, with the name focused', () => {
     open(null);
-    expect(target.querySelector('h1')?.textContent).toBe('New connection');
-    expect(target.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toMatch(
-      /Hosts\s*\/\s*New connection/,
-    );
+    expect(target.querySelector('header.head h1')?.textContent).toBe('New connection');
+    expect(target.querySelector('header.head .count')).toBeNull();
     expect(input('host-name').value).toBe('');
     expect(document.activeElement).toBe(input('host-name'));
   });
 
-  it('breadcrumb "Hosts" goes back', () => {
+  it('the way back in the header returns to Hosts', () => {
     route.go('hosts');
     open(host());
-    click(findButton(target, 'Hosts'));
+    click(target.querySelector('header.head [aria-label="Back to hosts"]') as Element);
     expect(route.route).toBe('hosts');
   });
 

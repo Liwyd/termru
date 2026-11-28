@@ -140,9 +140,9 @@
     margin: 0;
     list-style: none;
     height: var(--termru-tabstrip-h);
-    padding: 0 var(--termru-space-5) 0 var(--termru-space-5);
+    padding: 0 var(--termru-space-24) 0 var(--termru-space-24);
     border-bottom: var(--termru-border-w) solid var(--termru-border);
-    background: var(--termru-canvas);
+    background: var(--termru-side);
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -157,20 +157,20 @@
     align-self: center;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    margin-left: var(--termru-space-4);
-    padding: 0 var(--termru-space-3);
+    gap: var(--termru-space-8);
+    margin-left: var(--termru-space-16);
+    padding: 0 var(--termru-space-12);
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-weight: 500;
     white-space: nowrap;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .new:hover {
-      background: color-mix(in srgb, var(--termru-surface) 70%, transparent);
+      background: color-mix(in srgb, var(--termru-base) 70%, transparent);
       border-color: transparent;
     }
   }
@@ -196,11 +196,11 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-5);
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-24);
     text-align: center;
-    background: var(--termru-surface);
-    color: var(--termru-muted);
+    background: var(--termru-base);
+    color: var(--termru-text-2);
   }
 
   .empty h1 {
@@ -208,7 +208,7 @@
     font-size: var(--termru-text-title-size);
     line-height: var(--termru-text-title-lh);
     font-weight: var(--termru-text-title-weight);
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .empty p {
@@ -219,19 +219,19 @@
 
   .empty-actions {
     display: flex;
-    gap: var(--termru-space-3);
-    margin-top: var(--termru-space-3);
+    gap: var(--termru-space-12);
+    margin-top: var(--termru-space-12);
   }
 
   .empty-actions button {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   @media (max-width: 900px) {
     .strip {
-      padding: 0 var(--termru-space-3);
+      padding: 0 var(--termru-space-12);
     }
   }
 </style>

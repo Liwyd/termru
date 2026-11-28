@@ -16,7 +16,6 @@
   import { connectFlow } from '../stores/connect.svelte';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { identities } from '../stores/identities.svelte';
-  import { shortenPath } from '../folders';
   import { route } from '../stores/route.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { notify } from '../notify.svelte';
@@ -184,23 +183,6 @@
   });
 
   const heading = $derived(form.isNew ? 'New connection' : 'Edit connection');
-  const crumbs = $derived([
-    { label: 'Hosts', onclick: () => route.back() },
-    ...(form.isNew
-      ? [{ label: 'New connection' }]
-      : [
-          ...(folderLabel(form.groupId)
-            ? [
-                {
-                  label: shortenPath(folderLabel(form.groupId), 1),
-                  title: folderLabel(form.groupId),
-                },
-              ]
-            : []),
-          { label: form.name.trim() || 'Untitled' },
-        ]),
-  ]);
-
   function folderLabel(groupId: string): string {
     return hosts.folderOptions.find((option) => option.id === groupId)?.label ?? '';
   }
@@ -450,22 +432,21 @@
 </script>
 
 <div class="workpage editor">
-  <div class="scroll">
-    <PageHeader
-      {crumbs}
-      title={heading}
-      description="Connection details first. Credentials stay on this device."
-    >
-      {#snippet actions()}
-        <div class="state" aria-live="polite">
-          {#if form.dirty}
-            <span class="pill"><span class="glyph" aria-hidden="true">■</span> Unsaved changes</span
-            >
-          {/if}
-        </div>
-      {/snippet}
-    </PageHeader>
+  <PageHeader
+    title={heading}
+    count={form.isNew ? null : form.name.trim() || 'Untitled'}
+    back={{ label: 'Back to hosts', onclick: () => route.back() }}
+  >
+    {#snippet actions()}
+      <div class="state" aria-live="polite">
+        {#if form.dirty}
+          <span class="pill"><span class="glyph" aria-hidden="true">■</span> Unsaved changes</span>
+        {/if}
+      </div>
+    {/snippet}
+  </PageHeader>
 
+  <div class="scroll">
     <form
       id="host-form"
       class="layout"
@@ -797,7 +778,7 @@
 
       <aside class="rail" aria-label="Summary of this host">
         <section class="credential" aria-labelledby="rail-credential">
-          <p class="wp-label accent" id="rail-credential">LOCAL CREDENTIAL</p>
+          <p class="wp-label accent" id="rail-credential">Local credential</p>
           {#if form.authType === 'password'}
             {#if credential.password === true}
               <p>
@@ -846,7 +827,7 @@
 
         {#if execPending}
           <section class="credential approval" aria-labelledby="rail-approval">
-            <p class="wp-label accent" id="rail-approval">NOT APPROVED ON THIS DEVICE</p>
+            <p class="wp-label accent" id="rail-approval">Not approved on this device</p>
             <p>
               This host has a startup command, agent forwarding, environment variables or a forward
               on another address that came from sync. Connections leave them out until you approve
@@ -859,7 +840,7 @@
         {/if}
 
         <section class="preview" aria-labelledby="rail-preview">
-          <p class="wp-label" id="rail-preview">CONNECTION PREVIEW</p>
+          <p class="wp-label" id="rail-preview">Connection preview</p>
           <code class="command">{preview}</code>
           <p class="muted">{authSummary}</p>
           <p class="muted where">{whereSummary}</p>
@@ -932,10 +913,10 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-6);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
   }
 
   .state {
@@ -947,11 +928,11 @@
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 4px var(--termru-space-3);
+    gap: var(--termru-space-8);
+    padding: 4px var(--termru-space-12);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-warning-soft);
-    color: var(--termru-warning);
+    background: var(--termru-warn-soft);
+    color: var(--termru-warn-text);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: 550;
@@ -969,7 +950,7 @@
   .layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 336px;
-    column-gap: var(--termru-space-8);
+    column-gap: var(--termru-space-48);
     align-items: start;
     min-width: 0;
   }
@@ -984,12 +965,12 @@
     margin: 0;
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .row {
     display: grid;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     align-items: start;
     min-width: 0;
   }
@@ -1015,21 +996,21 @@
   .choices {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .choice {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-4);
+    padding: 0 var(--termru-space-16);
     border: 1px solid transparent;
     border-radius: var(--termru-radius-button);
     font-size: var(--termru-text-control-size);
     font-weight: var(--termru-text-control-weight);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     cursor: pointer;
     transition:
       transform var(--motion-fast) var(--ease-out),
@@ -1040,8 +1021,8 @@
 
   .choice.selected {
     border-color: var(--termru-border);
-    background: var(--termru-subtle);
-    color: var(--termru-fg);
+    background: var(--termru-side);
+    color: var(--termru-text);
   }
 
   .choice:active {
@@ -1063,7 +1044,7 @@
 
   .mark {
     font-size: 11px;
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .secret {
@@ -1077,12 +1058,12 @@
   .reveal {
     position: absolute;
     top: 50%;
-    right: var(--termru-space-1);
+    right: var(--termru-space-4);
     transform: translateY(-50%);
     min-height: 32px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .secret .reveal:active:not(:disabled) {
@@ -1092,10 +1073,10 @@
   .check {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-fg);
+    color: var(--termru-text);
     cursor: pointer;
   }
 
@@ -1106,11 +1087,11 @@
   }
 
   .muted {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .warn {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .keyline {
@@ -1128,14 +1109,14 @@
   .favorite {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: var(--termru-input-h);
     border-color: transparent;
     background: none;
   }
 
   .favorite[aria-pressed='true'] {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   fieldset.tags {
@@ -1144,13 +1125,13 @@
     border: none;
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-width: 0;
   }
 
   legend {
     padding: 0;
-    margin-bottom: var(--termru-space-2);
+    margin-bottom: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: 550;
@@ -1159,35 +1140,35 @@
   .chips {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     min-height: 30px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border-radius: 999px;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .chip.on {
     border-color: var(--termru-accent);
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .new-tag {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .field-error {
     margin: 0;
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-secondary-size);
   }
 
@@ -1195,7 +1176,7 @@
   .rail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
     min-width: 0;
   }
 
@@ -1203,7 +1184,7 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow-wrap: anywhere;
   }
 
@@ -1211,10 +1192,10 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-4) var(--termru-space-5);
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-16) var(--termru-space-24);
     border-left: 2px solid var(--termru-border);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   /* The card's title is a sans label, not a mono one (frame 4). */
@@ -1223,19 +1204,19 @@
     font-size: var(--termru-text-secondary-size);
     font-weight: 600;
     letter-spacing: 0.04em;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .preview {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .command {
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
-    color: var(--termru-fg);
+    color: var(--termru-text);
     overflow-wrap: anywhere;
   }
 
@@ -1254,9 +1235,9 @@
   .footer {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     margin: 0 var(--termru-page-inset-x);
-    padding: var(--termru-space-4) 0;
+    padding: var(--termru-space-16) 0;
     border-top: 1px solid var(--termru-border);
   }
 
@@ -1266,26 +1247,26 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
     overflow-wrap: anywhere;
   }
 
   .buttons {
     display: flex;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   .buttons button {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 0 var(--termru-space-4);
+    gap: var(--termru-space-8);
+    padding: 0 var(--termru-space-16);
   }
 
   @media (max-width: 1180px) {
     .layout {
       grid-template-columns: minmax(0, 1fr);
-      row-gap: var(--termru-space-6);
+      row-gap: var(--termru-space-32);
     }
   }
 

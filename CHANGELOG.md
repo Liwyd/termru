@@ -316,6 +316,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hosts footer mentions Enter; the Favorites tab and the editor's Favorite
   button use the same star icon as the rows instead of a text glyph; the Folders
   rail no longer ends with "No dialog interrupts your workspace".
+* **Obsidian redesign, part 1 of 4: foundation, shell and the Hosts page.**
+  * **Look.** Dark is the default theme ("System" still follows the operating
+    system, Light forces the light set): a near-black base with raised steps
+    and a champagne accent, in the tokens of `app.css` (`base`, `side`,
+    `raised`, `raised-2`, `text`/`text-2`/`text-3`, `line`/`border`, `accent`,
+    `live`/`warn`/`err`). Geist and Geist Mono are bundled (SIL OFL, files in
+    `src/assets/fonts/`, CSP `font-src 'self'` unchanged) and replace Inter;
+    IBM Plex Mono stays as a font to choose in Preferences. Radii 7-14,
+    spacing 4/6/8/10/12/16/20/24/28, UI text 13/20, labels 11 in sentence
+    case, motion 100-140 ms ease-out with a 2 % press. The terminal palettes
+    (dark and light, all 16 ANSI colours) are built on the same colours. The
+    new defaults for new installs are the dark theme, Geist Mono and 13 px
+    (`preference.rs`); a stored preference is never changed.
+  * **Contrast.** Every text colour holds 4.5:1 on the base, side and raised
+    surfaces in both themes (`design-tokens.test.ts`). To get there the
+    tertiary text and the accent, live, warn and error colours *as text* are
+    a step darker in the light theme (`text-3`, `accent-text`, `live-text`,
+    `warn-text`, `err-text`); fills keep the approved colours.
+  * **Shell.** A 236 px left sidebar replaces the top navigation: the brand,
+    the "Search or run" pill that opens the command palette, the **Live**
+    sessions (a dot and the pane count; a click focuses it), the **Library**
+    (All hosts, Favorites, Recent) and the **Folders** tree with counts and a
+    New folder button, then Identities, Sync (with a status dot) and
+    Preferences. It collapses to an icon rail (`Ctrl+Shift+B`, a button, and by
+    itself under 900 px); the choice is remembered on the device. The 28 px
+    status bar shows the live count, the sync state, a line for the page and
+    the keys that work on it. The window title bar remains only where the
+    system needs it (Windows controls, macOS traffic lights).
+  * **Command palette.** The one place that reaches everything: the running
+    sessions, every host (Enter connects or opens, Shift+Enter edits), every
+    page, new host, import `~/.ssh/config`, new folder, new identity (generate
+    a key), split right and down, duplicate, move to a new window, find in the
+    terminal, sync now, the theme, the library views and folders, the sections
+    of Preferences and the inspector. Sections while the field is empty, a
+    ranked list when it is not, shortcuts and the key hints on screen, no
+    animation.
+  * **One-line page header** on every page (title and count, chips, actions,
+    one champagne primary action): no breadcrumbs, no description sentences.
+    The host editor has a back button instead of its breadcrumb.
+  * **Hosts.** Borderless 52 px rows (star, name and address, folder, sign-in,
+    live or last session, Open/Connect with Enter and a menu with every row
+    action), the selected row raised, the arrows and Enter drive the selection,
+    the sort chips (Recent activity, Name, Folder, remembered), a search field
+    in the header, Import `~/.ssh/config` as the secondary action, the
+    running-sessions strip, and the empty, error, loading, 10 000-host and
+    long-name states. The sidebar chooses the view (Library entries, folders,
+    Unfiled).
+  * **Inspector** (340 px, collapsible, remembered) for the selected host: the
+    route `you → hops → host`, sign-in and its second step, the authentication
+    order, folder, keepalive, the forwards with the live status of a running
+    session, tags, what happens on connect (environment, startup command,
+    agent forwarding) and whether this device has approved the synced
+    settings that act, with Review. Its content fades in for 120 ms when a
+    click chooses a host and never for a key. There is no Files action (no
+    SFTP exists yet) and no host-key row (no command reads `known_hosts` for
+    one host).
+  * The other pages (Sessions, Folders, Identities, Sync, Preferences, the
+    editor) keep their layouts on the new tokens and shell; their own redesign
+    follows in parts 2 and 3. Their section labels are sentence case now.
+  * Dev mock: `&palette[=text]` opens the command palette on start.
 
 ## [0.2.0] — 2026-10-25
 

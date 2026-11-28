@@ -44,9 +44,9 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: var(--termru-space-4);
-    padding: var(--termru-space-5) var(--termru-space-3) var(--termru-space-5) 28px;
-    background: var(--termru-subtle);
+    gap: var(--termru-space-16);
+    padding: var(--termru-space-24) var(--termru-space-12) var(--termru-space-24) 28px;
+    background: var(--termru-side);
   }
 
   .text {
@@ -61,14 +61,14 @@
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
     font-weight: var(--termru-text-control-weight);
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .detail {
-    margin-top: var(--termru-space-1);
+    margin-top: var(--termru-space-4);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .dismiss {
@@ -83,13 +83,13 @@
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .dismiss:hover {
-      background: color-mix(in srgb, var(--termru-fg) 7%, transparent);
-      color: var(--termru-fg);
+      background: color-mix(in srgb, var(--termru-text) 7%, transparent);
+      color: var(--termru-text);
       border-color: transparent;
     }
   }

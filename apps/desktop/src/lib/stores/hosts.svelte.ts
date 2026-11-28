@@ -1,9 +1,21 @@
 import { api } from '../ipc';
+import { readStored, writeStored } from '../device-storage';
+import { buildFolderTree, type FolderTree } from '../folders';
 import { notify } from '../notify.svelte';
 import type { Group, Host, Identity, RecentHost, Tag } from '../types';
 
-/** The filter tabs of the hosts page (frame 1). */
+/** The views of the hosts list: the Library entries of the sidebar (and Unfiled). */
 export type HostFilterTab = 'all' | 'favorites' | 'recent' | 'unfiled';
+
+/** How the hosts list is ordered: the chips of the page header. */
+export type HostSort = 'recent' | 'name' | 'folder';
+
+const SORT_KEY = 'termru.hosts.sort';
+
+function readSort(): HostSort {
+  const stored = readStored(SORT_KEY);
+  return stored === 'name' || stored === 'folder' ? stored : 'recent';
+}
 
 /** Hosts + identities, loaded from the local store. */
 export class HostsStore {
@@ -24,8 +36,12 @@ export class HostsStore {
   /** The reason the last `save` failed (shown by the editor). */
   saveError = $state<string | null>(null);
   query = $state('');
-  /** The active filter tab of the hosts table. */
+  /** The active view of the hosts table (the Library entry of the sidebar). */
   filterTab = $state<HostFilterTab>('all');
+  /** The order of the table (remembered on this device). */
+  sort = $state<HostSort>(readSort());
+  /** The host the table has selected (the inspector shows it). Null: the first row. */
+  selectedId = $state<string | null>(null);
   /**
    * What the folders page has selected: every host, the hosts without a
    * folder, or a folder id. It lives here so it survives a visit to another
@@ -78,11 +94,34 @@ export class HostsStore {
   });
 
   /**
-   * Every host in table order (see `byRecent`). The full set is sorted
-   * once per data change, so every keystroke is a pure filter: re-sorting
-   * 10 000 hosts costs ~150 ms, filtering them costs ~6 ms.
+   * Every host in table order (see `byRecent`, `byName`, `byFolder`). The full
+   * set is sorted once per data change or change of order, so every keystroke
+   * is a pure filter: re-sorting 10 000 hosts costs ~150 ms, filtering them
+   * costs ~6 ms.
    */
-  sortedAll = $derived.by(() => [...this.hosts].sort((a, b) => this.byRecent(a, b)));
+  sortedAll = $derived.by(() => {
+    const all = [...this.hosts];
+    switch (this.sort) {
+      case 'name':
+        return all.sort((a, b) => this.byName(a, b) || this.byRecent(a, b));
+      case 'folder': {
+        // The path of every folder once: the comparison runs n log n times.
+        const labels = new Map(this.folderOptions.map((option) => [option.id, option.label]));
+        const pathOf = (host: Host): string =>
+          host.group_id ? (labels.get(host.group_id) ?? '') : '';
+        return all.sort((a, b) => {
+          const pa = pathOf(a);
+          const pb = pathOf(b);
+          // Hosts without a folder come last.
+          if ((pa === '') !== (pb === '')) return pa === '' ? 1 : -1;
+          if (pa !== pb) return pa < pb ? -1 : 1;
+          return this.byName(a, b) || this.byRecent(a, b);
+        });
+      }
+      default:
+        return all.sort((a, b) => this.byRecent(a, b));
+    }
+  });
 
   /**
    * The hosts matching the search box and the folder dropdown. The folder
@@ -118,8 +157,15 @@ export class HostsStore {
     return false;
   }
 
+  /** Alphabetical, as a codepoint comparison (see `byRecent`). */
+  byName(a: Host, b: Host): number {
+    if (a.name < b.name) return -1;
+    if (a.name > b.name) return 1;
+    return 0;
+  }
+
   /**
-   * The sort of the hosts table: most recent connection first, never-used
+   * The default sort of the hosts table: most recent connection first, never-used
    * hosts last; favorites before the rest; then by name. The name compare
    * is a codepoint comparison on purpose: `localeCompare` costs ~4 µs per
    * call, which is half a second over 10 000 hosts.
@@ -173,6 +219,45 @@ export class HostsStore {
     }
     return { all: base.length, favorites, recent, unfiled };
   });
+
+  /**
+   * The folders with the number of hosts in each (and under each), and the
+   * hosts without a folder. Derived: the sidebar draws it on every page.
+   */
+  folderTree: FolderTree = $derived.by(() => buildFolderTree(this.groups, this.hosts));
+
+  /**
+   * The size of every Library entry of the sidebar, over the whole library (the
+   * search box and the folder filter do not change it).
+   */
+  libraryCounts = $derived.by(() => {
+    const recentAt = this.recentAt;
+    let favorites = 0;
+    let recent = 0;
+    for (const host of this.hosts) {
+      if (host.favorite) favorites += 1;
+      if (recentAt[host.id] !== undefined) recent += 1;
+    }
+    return { all: this.hosts.length, favorites, recent, unfiled: this.folderTree.unfiled };
+  });
+
+  /** Shows one Library entry: every host, the favorites, the recent ones, or those without a folder. */
+  showLibrary(view: HostFilterTab): void {
+    this.filterTab = view;
+    this.folderFilter = '';
+  }
+
+  /** Shows the hosts of a folder (and of the folders under it). */
+  showFolder(folderId: string): void {
+    this.filterTab = 'all';
+    this.folderFilter = folderId;
+  }
+
+  /** Changes the order of the table and remembers it on this device. */
+  setSort(sort: HostSort): void {
+    this.sort = sort;
+    writeStored(SORT_KEY, sort);
+  }
 
   /** The last connection time of a host (ms), `null` when never used. */
   lastUsed(host: Host): number | null {

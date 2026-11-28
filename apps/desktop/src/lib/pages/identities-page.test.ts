@@ -136,16 +136,16 @@ afterEach(() => {
 });
 
 describe('the page', () => {
-  it('has the page anatomy: breadcrumb, title, line, primary action', async () => {
+  it('has the page anatomy: one header line with the title, the count and the primary action', async () => {
     await mountPage();
-    expect(target.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toMatch(
-      /Workspace\s*\/\s*Credentials/,
-    );
-    expect(target.querySelector('h1')?.textContent).toBe('Identities');
-    expect(target.textContent).toContain(
-      'Named keys for signing in. The key files stay on this device.',
-    );
+    expect(target.querySelector('nav[aria-label="Breadcrumb"], .description')).toBeNull();
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Identities');
+    expect(target.querySelector('header.head .count')).not.toBeNull();
+    expect(target.textContent).not.toContain('Named keys for signing in');
     expect(findButton(target, 'New identity').className).toContain('primary');
+    expect(target.querySelector('header.head')?.contains(findButton(target, 'New identity'))).toBe(
+      true,
+    );
     expect(target.querySelector('[aria-modal]')).toBeNull();
   });
 
@@ -264,7 +264,7 @@ describe('the key of an identity', () => {
   it('lists the hosts that use the identity, and opens one in the editor', async () => {
     await mountPage();
     click(listItem('work-ed25519'));
-    await vi.waitFor(() => expect(target.textContent).toContain('HOSTS USING THIS IDENTITY'));
+    await vi.waitFor(() => expect(target.textContent).toContain('Hosts using this identity'));
     const rows = Array.from(target.querySelectorAll('.users li .user-name')).map(
       (el) => el.textContent,
     );

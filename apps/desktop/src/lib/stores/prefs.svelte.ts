@@ -15,10 +15,11 @@ export const DEFAULT_LINE_HEIGHT = 1.3;
 const LEGACY_LINE_HEIGHT = 1.65;
 
 const DEFAULT_PREFS: Preferences = {
-  theme: 'system',
+  // Dark is the default theme; "System" follows the operating system.
+  theme: 'dark',
   terminal: {
-    font_family: 'IBM Plex Mono, monospace',
-    font_size: 14,
+    font_family: 'Geist Mono, monospace',
+    font_size: 13,
     scrollback: 10_000,
     cursor_blink: true,
     cursor_style: 'block',

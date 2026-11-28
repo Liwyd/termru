@@ -62,10 +62,15 @@ describe('motion tokens (Doc B)', () => {
   const root = declarationsOf(':root');
 
   it('defines the four motion tokens of the specification', () => {
+    // Fast (100-140 ms), one ease-out curve.
     expect(root['--motion-fast']).toBe('100ms');
-    expect(root['--motion-context']).toBe('160ms');
-    expect(root['--motion-structure']).toBe('220ms');
-    expect(root['--ease-quiet']).toBe('cubic-bezier(0.2, 0, 0, 1)');
+    expect(root['--motion-context']).toBe('120ms');
+    expect(root['--motion-structure']).toBe('140ms');
+    expect(root['--ease-out']).toBe('cubic-bezier(0.23, 1, 0.32, 1)');
+    // A press gives by 2 %, a popover and a dialog start at 97 and 98 %.
+    expect(root['--press-scale']).toBe('0.98');
+    expect(root['--pop-scale']).toBe('0.97');
+    expect(root['--dialog-scale']).toBe('0.98');
   });
 
   it('collapses the tokens under prefers-reduced-motion', () => {
@@ -109,7 +114,7 @@ describe('motion tokens (Doc B)', () => {
 });
 
 describe('what arrives and what is pressed (4d)', () => {
-  it('moves an arriving block by opacity and transform only, 160 ms ease-out, 4 px', () => {
+  it('moves an arriving block by opacity and transform only, 120 ms ease-out, 4 px', () => {
     const rule = /\.appear\.appear-in\s*\{([^{}]*)\}/.exec(CSS)?.[1] ?? '';
     expect(rule).toMatch(/opacity var\(--appear-duration\) var\(--ease-out\)/);
     expect(rule).toMatch(/transform var\(--appear-duration\) var\(--ease-out\)/);
@@ -122,16 +127,16 @@ describe('what arrives and what is pressed (4d)', () => {
 
   it('takes the shift away and keeps an 80 ms fade under reduced motion (system and preference)', () => {
     const reduced =
-      /prefers-reduced-motion: reduce\)\s*\{\s*html:root:not\(\[data-reduced-motion='off'\]\)\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
+      /prefers-reduced-motion: reduce\)\s*\{\s*:root:not\(\[data-reduced-motion='off'\]\)\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
     expect(reduced.test(CSS)).toBe(true);
     const forced =
-      /html:root\[data-reduced-motion='on'\]\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
+      /:root\[data-reduced-motion='on'\]\s*\{[^{}]*--appear-shift:\s*0px;[^{}]*--appear-duration:\s*80ms/;
     expect(forced.test(CSS)).toBe(true);
   });
 
-  it('presses every button by 3 % in 100 ms, menu entries excepted, at specificity zero', () => {
+  it('presses every button by 2 % in 100 ms, menu entries excepted, at specificity zero', () => {
     expect(CSS).toMatch(
-      /:where\(button:not\(\[role='menuitem'\]\):active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\)\s*\{\s*transform:\s*scale\(var\(--press-scale, 0\.97\)\)/,
+      /:where\(button:not\(\[role='menuitem'\]\):active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\)\s*\{\s*transform:\s*scale\(var\(--press-scale, 0\.98\)\)/,
     );
     expect(CSS).toMatch(
       /:where\(button:not\(\[role='menuitem'\]\)\)\s*\{\s*transition:\s*transform var\(--motion-fast\) var\(--ease-out\)/,
@@ -156,7 +161,7 @@ describe('what arrives and what is pressed (4d)', () => {
     expect(rest.match(/[^{}]*:hover[^{}]*\{/g)).toBeNull();
   });
 
-  it('changes the state of a tab, a switch and a nav item at once (they are keyboard targets)', () => {
+  it('changes the state of a tab, a switch, a sidebar item and a sort chip at once (they are keyboard targets)', () => {
     const read = (path: string) =>
       readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
     // The tab name: no transition and no press.
@@ -167,11 +172,11 @@ describe('what arrives and what is pressed (4d)', () => {
     expect(read('./components/Toggle.svelte')).toMatch(
       /\.toggle \{[^}]*transition: transform var\(--motion-fast\) var\(--ease-out\);[^}]*\}/,
     );
-    // The nav item and the hosts filter tab: the base rule moves the press only; the colour
-    // fade is declared for the items that are not active, under the hover gate.
-    for (const [path, selector] of [
-      ['./components/AppNav.svelte', '\\.item'],
-      ['./pages/HostsPage.svelte', '\\.tabs button'],
+    // The sidebar item and the sort chip: the base rule moves the press only; the colour
+    // fade is declared for the items that are not on, under the hover gate.
+    for (const [path, selector, on] of [
+      ['./components/Sidebar.svelte', '\\.item', 'on'],
+      ['./pages/HostsPage.svelte', '\\.chip', 'on'],
     ] as const) {
       const source = read(path);
       expect(source).toMatch(
@@ -181,7 +186,7 @@ describe('what arrives and what is pressed (4d)', () => {
       );
       expect(source).toMatch(
         new RegExp(
-          `@media \\(hover: hover\\) and \\(pointer: fine\\) \\{\\s*${selector}:not\\(\\.active\\) \\{\\s*transition:[^}]*color var\\(--motion-fast\\) ease`,
+          `@media \\(hover: hover\\) and \\(pointer: fine\\) \\{\\s*${selector}:not\\(\\.${on}\\) \\{\\s*transition:[^}]*color var\\(--motion-fast\\) ease`,
         ),
       );
     }

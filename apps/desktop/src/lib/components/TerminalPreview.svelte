@@ -18,7 +18,7 @@
 </script>
 
 <figure class="preview">
-  <figcaption>LIVE APPEARANCE PREVIEW · NO CONNECTION</figcaption>
+  <figcaption>Live appearance preview · no connection</figcaption>
   <div
     class="screen"
     aria-hidden="true"
@@ -64,17 +64,17 @@
   }
 
   figcaption {
-    padding: var(--termru-space-3) var(--termru-space-4) 0;
+    padding: var(--termru-space-12) var(--termru-space-16) 0;
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     letter-spacing: 0.04em;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     background: var(--termru-terminal);
   }
 
   .screen {
-    padding: var(--termru-space-2) var(--termru-space-4) var(--termru-space-4);
+    padding: var(--termru-space-8) var(--termru-space-16) var(--termru-space-16);
     overflow: hidden;
     white-space: nowrap;
   }

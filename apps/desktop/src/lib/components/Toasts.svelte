@@ -64,16 +64,17 @@
 </section>
 
 <style>
-  /* top: title bar (36) + navigation (64) + 24; right: 24 (Doc C.03). */
+  /* top: the window chrome (a title bar on Windows and macOS) + the page header
+     (56) + 8, so a notice never covers the primary action; right: 24. */
   .viewport {
     position: fixed;
-    top: calc(var(--termru-titlebar-h) + var(--termru-nav-h) + var(--termru-space-5));
-    right: var(--termru-space-5);
+    top: calc(var(--termru-chrome-top, 0px) + var(--termru-header-h) + var(--termru-space-8));
+    right: var(--termru-space-24);
     z-index: 90;
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
-    width: min(21rem, calc(100vw - 2 * var(--termru-space-5)));
+    gap: var(--termru-space-12);
+    width: min(21rem, calc(100vw - 2 * var(--termru-space-24)));
     /* The strip never blocks the page under it; only a notice takes clicks. */
     pointer-events: none;
   }
@@ -81,12 +82,12 @@
   .notice {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-4);
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-16);
     border: var(--termru-border-w) solid var(--termru-border);
     border-radius: var(--termru-radius-lg);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-raised);
+    color: var(--termru-text);
     box-shadow: var(--termru-shadow-float);
     pointer-events: auto;
     /* Enter: up from above, 220 ms. Opacity and transform only. */
@@ -118,27 +119,27 @@
   }
 
   .success .glyph {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .info .glyph {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .warning .glyph {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .error .glyph {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .error {
-    border-color: color-mix(in srgb, var(--termru-danger) 45%, var(--termru-border));
+    border-color: color-mix(in srgb, var(--termru-err-text) 45%, var(--termru-border));
   }
 
   .warning {
-    border-color: color-mix(in srgb, var(--termru-warning) 45%, var(--termru-border));
+    border-color: color-mix(in srgb, var(--termru-warn-text) 45%, var(--termru-border));
   }
 
   .text {
@@ -161,7 +162,7 @@
     margin-top: 2px;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   button {
@@ -177,8 +178,8 @@
 
   .action {
     min-height: 32px;
-    margin-top: var(--termru-space-2);
-    padding: 0 var(--termru-space-3);
+    margin-top: var(--termru-space-8);
+    padding: 0 var(--termru-space-12);
     border-radius: var(--termru-radius-button);
     font-size: var(--termru-text-secondary-size);
   }
@@ -195,13 +196,13 @@
     padding: 0;
     border: none;
     background: none;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .dismiss:hover {
-      background: var(--termru-subtle);
-      color: var(--termru-fg);
+      background: var(--termru-raised-2);
+      color: var(--termru-text);
     }
   }
 </style>

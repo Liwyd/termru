@@ -289,22 +289,22 @@
     border: none;
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     min-width: 0;
   }
 
   legend {
     padding: 0;
-    margin-bottom: var(--termru-space-2);
+    margin-bottom: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: 550;
   }
 
   .optional {
-    margin-left: var(--termru-space-1);
+    margin-left: var(--termru-space-4);
     font-weight: 400;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .mono {
@@ -314,14 +314,14 @@
   .env-row {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     align-items: start;
   }
 
   .cell {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     min-width: 0;
   }
 
@@ -336,11 +336,11 @@
     justify-content: center;
     width: var(--termru-control-h);
     padding: 0;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .icon[aria-disabled='true'] {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     cursor: default;
   }
 
@@ -351,7 +351,7 @@
 
   .field-error {
     margin: 0;
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
   }
@@ -360,14 +360,14 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   .foot button {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 0 var(--termru-space-4);
+    gap: var(--termru-space-8);
+    padding: 0 var(--termru-space-16);
   }
 
   .foot button[aria-disabled='true'] {
@@ -379,21 +379,21 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .note.block {
     display: block;
-    margin-top: var(--termru-space-1);
+    margin-top: var(--termru-space-4);
   }
 
   .check {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-fg);
+    color: var(--termru-text);
     cursor: pointer;
   }
 
@@ -407,21 +407,21 @@
   .choices {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .choice {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-4);
+    padding: 0 var(--termru-space-16);
     border: 1px solid transparent;
     border-radius: var(--termru-radius-button);
     font-size: var(--termru-text-control-size);
     font-weight: var(--termru-text-control-weight);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     cursor: pointer;
     transition:
       transform var(--motion-fast) var(--ease-out),
@@ -432,8 +432,8 @@
 
   .choice.selected {
     border-color: var(--termru-border);
-    background: var(--termru-subtle);
-    color: var(--termru-fg);
+    background: var(--termru-side);
+    color: var(--termru-text);
   }
 
   .choice:active {
@@ -455,7 +455,7 @@
 
   .mark {
     font-size: 11px;
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .order-list {
@@ -471,7 +471,7 @@
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) auto;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     min-height: 44px;
     border-bottom: 1px solid var(--termru-border);
   }
@@ -479,12 +479,12 @@
   .n {
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .tools {
     display: flex;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
   }
 
   .add-auth select {

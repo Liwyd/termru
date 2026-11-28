@@ -26,10 +26,20 @@ export function press(
   return event;
 }
 
-/** The button with exactly this text. */
+/**
+ * What a button says: its text without the decorations that are not part of its
+ * name (a key cap such as the Enter hint, a count, text for screen readers only).
+ */
+function labelOf(button: HTMLButtonElement): string {
+  const clone = button.cloneNode(true) as HTMLButtonElement;
+  clone.querySelectorAll('kbd, .n, .sr-only').forEach((decoration) => decoration.remove());
+  return clone.textContent?.trim() ?? '';
+}
+
+/** The button with exactly this text (decorations aside). */
 export function findButton(root: ParentNode, label: string): HTMLButtonElement {
   const button = Array.from(root.querySelectorAll('button')).find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => labelOf(candidate) === label,
   );
   if (!button) throw new Error(`button "${label}" not found`);
   return button;

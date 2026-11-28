@@ -195,14 +195,14 @@
   .head {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     height: 36px;
     flex: none;
     padding: 0 calc(var(--pane-pad-x) - 8px) 0 var(--pane-pad-x);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .pane.single .head {
@@ -220,7 +220,7 @@
   .pane.focused:not(.single) .path,
   .flag,
   .pane.single .size {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .flag {
@@ -246,13 +246,13 @@
     border: none;
     border-radius: var(--termru-radius-button);
     background: none;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .tool:hover {
-      background: color-mix(in srgb, var(--termru-fg) 7%, transparent);
-      color: var(--termru-fg);
+      background: color-mix(in srgb, var(--termru-text) 7%, transparent);
+      color: var(--termru-text);
       border-color: transparent;
     }
   }
@@ -267,28 +267,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     flex: none;
     height: 30px;
     padding: 0 var(--pane-pad-x);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     letter-spacing: 0.02em;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .foot.busy .state {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .foot.failed .state {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .foot.closed .state {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .foot .state {
@@ -301,14 +301,14 @@
   .empty {
     height: 100%;
     min-height: 0;
-    padding: var(--termru-space-4) 0;
+    padding: var(--termru-space-16) 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--termru-space-3);
-    color: var(--termru-muted);
+    gap: var(--termru-space-12);
+    color: var(--termru-text-2);
     font-size: var(--termru-text-control-size);
   }
 
@@ -322,7 +322,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     width: min(24rem, 90%);
     min-height: 0;
     overflow-y: auto;
@@ -330,10 +330,10 @@
 
   .empty .filter {
     width: min(24rem, 90%);
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: var(--termru-border-w) solid var(--termru-border);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-base);
+    color: var(--termru-text);
   }
 
   .empty .new {
@@ -345,14 +345,14 @@
     width: 100%;
     min-height: 36px;
     text-align: left;
-    background: var(--termru-surface);
+    background: var(--termru-base);
   }
 
   .address {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    margin-left: var(--termru-space-2);
+    margin-left: var(--termru-space-8);
   }
 
   .hint {

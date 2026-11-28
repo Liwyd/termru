@@ -45,6 +45,7 @@
  *                    (implies `approval`)
  *   &menu            the forwards menu of the toolbar opens as soon as a session
  *                    shows one (use with `&demo&v2` on `#sessions`)
+ *   &palette[=text]  the command palette opens on start (with `text` typed in)
  *   &import          the "Import from SSH config" dialog opens on start
  *   &long            the worst realistic data on top of the fixtures: names
  *                    at the 128 character limit, a folder five levels deep with
@@ -134,6 +135,8 @@ export interface MockFlags {
   importConfig: boolean;
   /** The forwards menu of the Sessions toolbar opens once there is one. */
   menu: boolean;
+  /** The command palette opens on start, with this text typed (empty: none), or null. */
+  palette: string | null;
 }
 
 function readFlags(): MockFlags {
@@ -172,6 +175,7 @@ function readFlags(): MockFlags {
     review: params.has('review') ? params.get('review') || 'atlas-prod' : null,
     importConfig: params.has('import'),
     menu: params.has('menu'),
+    palette: params.has('palette') ? (params.get('palette') ?? '') : null,
   };
 }
 
@@ -402,10 +406,10 @@ function fixtureIdentities(): Identity[] {
 
 function defaultPreferences(): Preferences {
   return {
-    theme: 'system',
+    theme: 'dark',
     terminal: {
-      font_family: 'IBM Plex Mono, monospace',
-      font_size: 14,
+      font_family: 'Geist Mono, monospace',
+      font_size: 13,
       scrollback: 10_000,
       cursor_blink: true,
       cursor_style: 'block',
@@ -1289,6 +1293,7 @@ function scheduleStartup(): void {
     flags.connect !== null ||
     flags.review !== null ||
     flags.importConfig ||
+    flags.palette !== null ||
     flags.menu;
   if (startupScheduled || !acts) return;
   startupScheduled = true;
@@ -1301,6 +1306,7 @@ function scheduleStartup(): void {
       if (flags.review !== null) await openReview(flags.review);
       if (flags.importConfig) (await import('../stores/ssh-import.svelte')).sshImport.show();
       if (flags.menu) openForwardsMenu();
+      if (flags.palette !== null) await openPalette(flags.palette);
       await selectEntities();
     })();
   }, 0);
@@ -1370,6 +1376,15 @@ async function selectEntities(): Promise<void> {
     const found = hosts.identities.find((identity) => identity.name === flags.identity);
     if (found) identities.selectedId = found.id;
   }
+}
+
+/** `?palette`: presses the palette chord of the platform, then types the text. */
+async function openPalette(text: string): Promise<void> {
+  const { palette } = await import('../stores/palette.svelte');
+  window.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'P', ctrlKey: true, shiftKey: true, bubbles: true }),
+  );
+  if (text) palette.query = text;
 }
 
 /** `?connect`: starts a connection, which asks for the password of a password host. */
@@ -2146,6 +2161,7 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     review: null,
     importConfig: false,
     menu: false,
+    palette: null,
     ...next,
   };
   state = seed(flags);

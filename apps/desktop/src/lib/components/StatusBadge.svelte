@@ -21,12 +21,12 @@
   .badge {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     height: 28px;
     padding: 0 10px;
     border-radius: var(--termru-radius-input);
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: var(--termru-text-control-weight);
@@ -55,17 +55,17 @@
   }
 
   .reconnecting {
-    background: var(--termru-warning-soft);
-    color: var(--termru-warning);
+    background: var(--termru-warn-soft);
+    color: var(--termru-warn-text);
   }
 
   .failed {
-    background: var(--termru-danger-soft);
-    color: var(--termru-danger);
+    background: var(--termru-err-soft);
+    color: var(--termru-err-text);
   }
 
   .closed {
-    background: var(--termru-canvas);
-    color: var(--termru-muted);
+    background: var(--termru-side);
+    color: var(--termru-text-2);
   }
 </style>

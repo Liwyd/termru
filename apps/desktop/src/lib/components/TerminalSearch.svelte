@@ -140,34 +140,34 @@
 <style>
   .find {
     position: absolute;
-    top: var(--termru-space-2);
-    right: var(--termru-space-4);
+    top: var(--termru-space-8);
+    right: var(--termru-space-16);
     z-index: 5;
     display: flex;
     align-items: center;
     gap: 2px;
-    max-width: calc(100% - 2 * var(--termru-space-4));
-    padding: 4px 4px 4px var(--termru-space-3);
+    max-width: calc(100% - 2 * var(--termru-space-16));
+    padding: 4px 4px 4px var(--termru-space-12);
     border: var(--termru-border-w) solid var(--termru-border);
-    border-radius: 10px;
-    background: var(--termru-surface);
+    border-radius: var(--termru-radius-pane);
+    background: var(--termru-raised);
     box-shadow: var(--termru-shadow-float);
   }
 
   .glyph {
     display: flex;
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
   }
 
   input {
     width: 12rem;
     min-width: 0;
     min-height: 32px;
-    padding: 0 var(--termru-space-2);
+    padding: 0 var(--termru-space-8);
     border: none;
     border-radius: var(--termru-radius-input);
     background: transparent;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-size: var(--termru-text-control-size);
   }
 
@@ -178,8 +178,8 @@
 
   .summary {
     min-width: 4.5rem;
-    padding: 0 var(--termru-space-2);
-    color: var(--termru-muted);
+    padding: 0 var(--termru-space-8);
+    color: var(--termru-text-2);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     white-space: nowrap;
@@ -196,25 +196,25 @@
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-size: var(--termru-text-secondary-size);
     font-weight: 600;
   }
 
   .tool.on {
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .tool:hover {
-      background: var(--termru-subtle);
-      color: var(--termru-fg);
+      background: var(--termru-side);
+      color: var(--termru-text);
       border-color: transparent;
     }
     .tool.on:hover {
       background: var(--termru-accent-soft);
-      color: var(--termru-accent);
+      color: var(--termru-accent-text);
     }
   }
 </style>

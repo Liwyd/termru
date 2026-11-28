@@ -3,15 +3,25 @@
   import { hosts } from '../stores/hosts.svelte';
   import { authLabel } from '../auth-label';
   import { shortenPath } from '../folders';
+  import { hostMenuItems, type HostActionId } from '../host-actions';
   import { formatLastSession } from '../last-session';
+  import Icon from './Icon.svelte';
   import PopMenu from './PopMenu.svelte';
-  import type { MenuEntry } from '../menu';
   import type { Host } from '../types';
 
+  /**
+   * The hosts list: borderless 52 px rows on fixed columns (star, name and
+   * address, folder, sign-in, last session, actions). The row you have
+   * selected is raised; the arrows move the selection and Enter opens it, the
+   * inspector beside the list shows it. The rows are windowed: 10 000 hosts
+   * are a few dozen elements.
+   */
   let {
     rows,
     live,
     recentAt,
+    selectedId = $bindable(null),
+    onselect,
     onconnect,
     onopen,
     onedit,
@@ -19,10 +29,14 @@
     ontogglefavorite,
   }: {
     rows: Host[];
-    /** The host ids that have a session running right now. */
-    live: Set<string>;
+    /** The hosts with a session running right now, and how many panes each has. */
+    live: Map<string, number>;
     /** Last connection time per host id (ms since the epoch). */
     recentAt: Record<string, number>;
+    /** The selected host; null selects the first row. Bindable, so the table also works on its own. */
+    selectedId?: string | null;
+    /** The selection changed; `via` is how (a key never animates the inspector). */
+    onselect: (host: Host, via: 'pointer' | 'keyboard') => void;
     onconnect: (host: Host) => void;
     onopen: (host: Host) => void;
     onedit: (host: Host) => void;
@@ -30,8 +44,8 @@
     ontogglefavorite: (host: Host) => void;
   } = $props();
 
-  /** Fixed row height (frame 1): the windowing is a calculation, not a measurement. */
-  const ROW_HEIGHT = 70;
+  /** Fixed row height: the windowing is a calculation, not a measurement. */
+  const ROW_HEIGHT = 52;
   const OVERSCAN = 6;
   /** Used before the first layout (and where the height is unknown). */
   const FALLBACK_HEIGHT = 600;
@@ -41,9 +55,6 @@
   let viewportHeight = $state(FALLBACK_HEIGHT);
   /** Width of the body's scrollbar, so the header band lines up with the rows. */
   let scrollbarWidth = $state(0);
-  let selectedId = $state<string | null>(null);
-  /** The row that owns the table's single tab stop (roving tabindex). */
-  let activeId = $state<string | null>(null);
 
   let menuOpen = $state(false);
   let menuX = $state(0);
@@ -75,22 +86,29 @@
     );
     return { start, end, slice: rows.slice(start, end) };
   });
+
   /**
-   * The row that is the tab stop: the last one focused, or the first one on
-   * screen. It is always a rendered row, so the table never loses its stop
-   * when the active row is scrolled out of the window.
+   * The row drawn as the selected one: the host that was chosen, else the
+   * first row. It is a fixed row, not the focus, so the raised row does not
+   * jump while the list scrolls.
+   */
+  const currentId = $derived(
+    selectedId !== null && rows.some((host) => host.id === selectedId)
+      ? selectedId
+      : (rows[0]?.id ?? null),
+  );
+
+  /**
+   * The row that owns the table's single tab stop (roving tabindex): the
+   * selected one, or the first one on screen when it is scrolled out of the
+   * window. It is always a rendered row, so the table never loses its stop.
    */
   const rovingId = $derived(
-    visibleRows.slice.some((host) => host.id === activeId)
-      ? activeId
+    visibleRows.slice.some((host) => host.id === currentId)
+      ? currentId
       : (visibleRows.slice[0]?.id ?? null),
   );
-  /**
-   * The row drawn as the current one (frame 1 tints the first): the row the
-   * user clicked, else the first row. It is a fixed row, not the roving
-   * tab stop, so the tint does not jump while the list scrolls.
-   */
-  const currentId = $derived(selectedId ?? rows[0]?.id ?? null);
+
   /** Where the rendered rows start (px), and how tall the whole list is. */
   const offsetTop = $derived(visibleRows.start * ROW_HEIGHT);
   const totalHeight = $derived(rows.length * ROW_HEIGHT);
@@ -122,27 +140,24 @@
     scrollTop = (event.currentTarget as HTMLDivElement).scrollTop;
   }
 
+  /** Selects a host (the inspector shows it) and says how. */
+  function pick(host: Host, via: 'pointer' | 'keyboard'): void {
+    selectedId = host.id;
+    onselect(host, via);
+  }
+
   function activate(host: Host): void {
     if (live.has(host.id)) onopen(host);
     else onconnect(host);
   }
 
-  function menuItems(host: Host): MenuEntry[] {
-    return [
-      { id: 'connect', label: 'Connect' },
-      { id: 'edit', label: 'Edit…' },
-      {
-        id: 'favorite',
-        label: host.favorite ? 'Remove from favorites' : 'Add to favorites',
-      },
-      { id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
-    ];
-  }
-
   function choose(id: string): void {
     const host = menuHost;
     if (!host) return;
-    switch (id) {
+    switch (id as HostActionId) {
+      case 'open':
+        onopen(host);
+        break;
       case 'connect':
         onconnect(host);
         break;
@@ -161,6 +176,7 @@
   function openMenuAtPointer(host: Host, event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
+    pick(host, 'pointer');
     menuHost = host;
     menuX = event.clientX;
     menuY = event.clientY;
@@ -194,17 +210,14 @@
     return authLabel(host, hosts.identities, hosts.passwordStored[host.id] === true);
   }
 
-  function lastSession(host: Host): { live: boolean; text: string } {
-    if (live.has(host.id)) return { live: true, text: 'Connected' };
-    return { live: false, text: formatLastSession(recentAt[host.id] ?? null) };
+  function lastSession(host: Host): { count: number; text: string } {
+    const panes = live.get(host.id);
+    if (panes !== undefined) return { count: Math.max(1, panes), text: 'Live' };
+    return { count: 0, text: formatLastSession(recentAt[host.id] ?? null) };
   }
 
-  function select(host: Host): void {
-    selectedId = host.id;
-  }
-
-  /** Moves the focus to the row at `index` (scrolling it into the window). */
-  async function focusRow(index: number): Promise<void> {
+  /** Moves the selection to the row at `index` (scrolling it into the window) and focuses it. */
+  async function selectRow(index: number): Promise<void> {
     const target = rows[Math.max(0, Math.min(rows.length - 1, index))];
     if (!target || !body) return;
     const top = rows.indexOf(target) * ROW_HEIGHT;
@@ -213,17 +226,18 @@
       body.scrollTop = top + ROW_HEIGHT - viewportHeight;
     }
     scrollTop = body.scrollTop;
-    activeId = target.id;
+    pick(target, 'keyboard');
     await tick();
     Array.from(body.querySelectorAll<HTMLElement>('[data-host-id]'))
       .find((element) => element.dataset.hostId === target.id)
       ?.focus();
   }
 
-  /** Keyboard on a focused row: arrows move, Enter connects, E / F2 edits. */
+  /** Keyboard on a focused row: arrows select, Enter opens, E / F2 edits. */
   function onRowKeyDown(event: KeyboardEvent, host: Host): void {
     if (event.target !== event.currentTarget) return;
     const index = rows.indexOf(host);
+    const page = Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1);
     switch (event.key) {
       case 'Enter':
         event.preventDefault();
@@ -231,34 +245,34 @@
         break;
       case 'ArrowDown':
         event.preventDefault();
-        void focusRow(index + 1);
+        void selectRow(index + 1);
         break;
       case 'ArrowUp':
         event.preventDefault();
-        void focusRow(index - 1);
+        void selectRow(index - 1);
         break;
       case 'Home':
         event.preventDefault();
-        void focusRow(0);
+        void selectRow(0);
         break;
       case 'End':
         event.preventDefault();
-        void focusRow(rows.length - 1);
+        void selectRow(rows.length - 1);
         break;
       case 'PageDown':
         event.preventDefault();
-        void focusRow(index + Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1));
+        void selectRow(index + page);
         break;
       case 'PageUp':
         event.preventDefault();
-        void focusRow(index - Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1));
+        void selectRow(index - page);
         break;
       case 'F2':
       case 'e':
       case 'E':
         if (event.ctrlKey || event.metaKey || event.altKey) return;
         event.preventDefault();
-        select(host);
+        pick(host, 'keyboard');
         onedit(host);
         break;
     }
@@ -267,12 +281,12 @@
 
 <div class="table" role="table" aria-label="Hosts" aria-rowcount={rows.length + 1}>
   <div class="head" role="row" aria-rowindex={1} style:--sbw="{scrollbarWidth}px">
-    <span class="star-cell" role="columnheader">Star</span>
-    <span role="columnheader">Host / address</span>
+    <span role="columnheader"><span class="sr-only">Favorite</span></span>
+    <span role="columnheader">Host</span>
     <span class="col-folder" role="columnheader">Folder</span>
-    <span class="col-auth" role="columnheader">Authentication</span>
+    <span class="col-auth" role="columnheader">Sign-in</span>
     <span role="columnheader">Last session</span>
-    <span class="actions-cell" role="columnheader">Actions</span>
+    <span role="columnheader"><span class="sr-only">Actions</span></span>
   </div>
   <div class="body" bind:this={body} onscroll={onScroll}>
     <!-- The sizer is as tall as every row; the rows on screen sit in a window that
@@ -281,15 +295,16 @@
       <div class="window" style:transform="translateY({offsetTop}px)">
         {#each visibleRows.slice as host, i (host.id)}
           {@const session = lastSession(host)}
+          {@const selected = currentId === host.id}
           <div
             class="row"
-            class:selected={currentId === host.id}
+            class:selected
             role="row"
             tabindex={rovingId === host.id ? 0 : -1}
             data-host-id={host.id}
             aria-rowindex={visibleRows.start + i + 2}
-            onclick={() => select(host)}
-            onfocus={() => (activeId = host.id)}
+            aria-current={selected ? 'true' : undefined}
+            onclick={() => pick(host, 'pointer')}
             ondblclick={() => activate(host)}
             onkeydown={(event) => onRowKeyDown(event, host)}
             oncontextmenu={(event) => openMenuAtPointer(host, event)}
@@ -309,21 +324,7 @@
                   ontogglefavorite(host);
                 }}
               >
-                <svg
-                  viewBox="0 0 20 20"
-                  width="18"
-                  height="18"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path
-                    d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
-                    fill={host.favorite ? 'currentColor' : 'none'}
-                    stroke="currentColor"
-                    stroke-width="1.4"
-                    stroke-linejoin="round"
-                  />
-                </svg>
+                <Icon name="star" size={15} filled={host.favorite} />
               </button>
             </span>
             <span class="host-cell" role="cell">
@@ -335,56 +336,49 @@
             <span class="folder-cell col-folder" role="cell" title={folderLabel(host)}>
               {shortenPath(folderLabel(host))}
             </span>
-            <span class="auth-cell col-auth" role="cell" title={cellAuth(host)}
-              >{cellAuth(host)}</span
-            >
+            <span class="auth-cell col-auth" role="cell" title={cellAuth(host)}>
+              {#if host.auth.type === 'private_key'}<Icon name="key" size={14} />{/if}
+              <span class="auth-text"
+                >{host.auth.type === 'private_key'
+                  ? cellAuth(host).replace(/^Identity · /, '')
+                  : cellAuth(host)}</span
+              >
+            </span>
             <span class="session-cell" role="cell">
-              {#if session.live}
-                <span class="pill"><span class="dot" aria-hidden="true"></span>{session.text}</span>
+              {#if session.count > 0}
+                <span class="live"
+                  ><span class="dot" aria-hidden="true"></span>{session.text}{session.count > 1
+                    ? ` · ${session.count}`
+                    : ''}</span
+                >
               {:else}
                 <span class="date">{session.text}</span>
               {/if}
             </span>
-            <span class="actions actions-cell" role="cell">
+            <span class="actions" role="cell">
               <button
                 type="button"
-                class="act primary-act"
+                class="go"
                 tabindex={rovingId === host.id ? 0 : -1}
                 onclick={(event) => {
                   event.stopPropagation();
+                  pick(host, 'pointer');
                   activate(host);
-                }}>{live.has(host.id) ? 'Open' : 'Connect'}</button
+                }}
+                >{live.has(host.id) ? 'Open' : 'Connect'}{#if selected}<kbd aria-hidden="true"
+                    >↵</kbd
+                  >{/if}</button
               >
               <button
                 type="button"
-                class="act"
-                tabindex={rovingId === host.id ? 0 : -1}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  select(host);
-                  onedit(host);
-                }}>Edit</button
-              >
-              <button
-                type="button"
-                class="act more"
+                class="more"
                 tabindex={rovingId === host.id ? 0 : -1}
                 aria-label="More actions for {host.name}"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen && menuHost?.id === host.id}
                 onclick={(event) => openMenuFromButton(host, event)}
               >
-                <svg
-                  viewBox="0 0 16 16"
-                  width="16"
-                  height="16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <circle cx="3" cy="8" r="1.2" />
-                  <circle cx="8" cy="8" r="1.2" />
-                  <circle cx="13" cy="8" r="1.2" />
-                </svg>
+                <Icon name="more" size={16} />
               </button>
             </span>
           </div>
@@ -401,7 +395,7 @@
   align="right"
   animate={menuAnimate}
   label={menuHost ? `Actions for ${menuHost.name}` : 'Host actions'}
-  items={menuHost ? menuItems(menuHost) : []}
+  items={menuHost ? hostMenuItems(menuHost, live.has(menuHost.id)) : []}
   onchoose={choose}
   onclose={() => (menuOpen = false)}
 />
@@ -410,38 +404,35 @@
   .table {
     display: flex;
     flex-direction: column;
-    /* Frame 1: the table is as tall as its rows, and shrinks to what the
-       page leaves it (the banner and the hint sit under it, not over it). */
+    /* The list is as tall as its rows and shrinks to what the page leaves it
+       (the running-sessions strip sits right under the rows). */
     flex: 0 1 auto;
-    /* Never less than five rows: with the banner and the hint under it, a
-       short window would leave a long list two. The page scrolls instead. */
-    min-height: calc(34px + 5 * 70px);
+    min-height: 0;
     min-width: 0;
+    container: list / inline-size;
   }
 
   .head,
   .row {
     display: grid;
-    /* Frame 1: 26 | host | folder | authentication | last session | actions.
-       The actions column is a fixed width, so the columns of every row line up. */
+    /* star | host | folder | sign-in | last session | actions. The actions
+       column is a fixed width, so the columns of every row line up. */
     grid-template-columns:
-      26px minmax(11rem, 1.4fr) minmax(7rem, 1fr) minmax(9rem, 1fr)
-      minmax(7rem, 1.2fr) 152px;
+      24px minmax(11rem, 1.6fr) minmax(0, 1fr) minmax(0, 1.1fr)
+      104px 122px;
     align-items: center;
-    gap: var(--termru-space-4);
-    padding: 0 var(--termru-space-4);
+    column-gap: var(--termru-space-12);
+    padding: 0 var(--termru-space-12);
   }
 
   .head {
     flex: none;
-    height: 34px;
-    padding-right: calc(var(--termru-space-4) + var(--sbw, 0px));
-    background: var(--termru-subtle);
+    height: 30px;
+    padding-right: calc(var(--termru-space-12) + var(--sbw, 0px));
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
   }
 
   .head > span {
@@ -451,9 +442,13 @@
     white-space: nowrap;
   }
 
-  /* "Star" is wider than its 26 px column; it may run into the gap. */
-  .head > .star-cell {
-    overflow: visible;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .body {
@@ -463,8 +458,8 @@
   }
 
   .row {
-    height: 70px;
-    border-bottom: 1px solid var(--termru-border);
+    height: var(--termru-row-h);
+    border-radius: var(--termru-radius-row);
     cursor: default;
     /* A row is laid out and painted on its own: one row coming into the window
        does not touch the others. */
@@ -472,7 +467,7 @@
   }
 
   .row.selected {
-    background: var(--termru-accent-soft);
+    background: var(--termru-raised);
   }
 
   /* The ring sits inside the row: the scrolling body would clip it outside. */
@@ -486,7 +481,28 @@
     }
 
     .row:hover {
-      background: var(--termru-accent-soft);
+      background: var(--termru-raised);
+    }
+  }
+
+  /* The actions are there for the row you point at, the one you selected, and
+     the one the keyboard is in. */
+  .actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    opacity: 0;
+  }
+
+  .row.selected .actions,
+  .row:focus-within .actions {
+    opacity: 1;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .row:hover .actions {
+      opacity: 1;
     }
   }
 
@@ -502,47 +518,43 @@
   .star-cell {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
   }
 
   .star {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    display: inline-grid;
+    place-items: center;
     min-height: 0;
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
     padding: 0;
-    border: none;
-    border-radius: var(--termru-radius);
+    border-radius: var(--termru-radius-sm);
     background: none;
-    color: var(--termru-muted);
-    cursor: pointer;
-    transition:
-      transform var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) ease;
+    color: var(--termru-text-3);
   }
 
   .star.favorite {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
-  .star:active {
-    transform: scale(var(--press-scale));
+  @media (hover: hover) and (pointer: fine) {
+    .star:hover {
+      background: none;
+      color: var(--termru-accent-text);
+    }
   }
 
   .host-cell {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     min-width: 0;
   }
 
   .name {
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
-    font-weight: var(--termru-text-control-weight);
-    color: var(--termru-fg);
+    font-size: 13.5px;
+    line-height: 20px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    color: var(--termru-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -550,28 +562,38 @@
 
   .target {
     font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    font-size: var(--termru-text-mono-size);
+    line-height: 16px;
+    letter-spacing: -0.01em;
+    color: var(--termru-text-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .folder-cell,
-  .auth-cell,
-  .date {
-    font-size: var(--termru-text-control-size);
-    line-height: var(--termru-text-control-lh);
-    color: var(--termru-muted);
   }
 
   .folder-cell,
   .auth-cell {
     min-width: 0;
+    color: var(--termru-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .auth-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .auth-cell :global(svg) {
+    flex: none;
+  }
+
+  .auth-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .session-cell {
@@ -581,94 +603,91 @@
   }
 
   .date {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font: 500 12px var(--termru-font-mono);
+    color: var(--termru-text-2);
   }
 
-  .pill {
+  .live {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    height: 23px;
-    padding: 0 8px;
-    border-radius: 4px;
-    background: var(--termru-accent-soft);
-    color: var(--termru-accent);
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    font-weight: var(--termru-text-control-weight);
+    gap: 7px;
+    font-weight: 500;
+    color: var(--termru-live-text);
+    white-space: nowrap;
   }
 
-  .pill .dot {
-    width: 5px;
-    height: 5px;
-    background: var(--termru-accent);
+  .dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--termru-live);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--termru-live) 16%, transparent);
   }
 
-  .actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--termru-space-3);
-  }
-
-  .actions-cell {
-    justify-self: end;
-  }
-
-  .act {
-    min-height: 32px;
-    padding: 0 6px;
-    border: none;
-    background: none;
-    color: var(--termru-fg);
-    font-size: var(--termru-text-control-size);
-    line-height: var(--termru-text-control-lh);
-    font-weight: var(--termru-text-control-weight);
-    cursor: pointer;
-    transition:
-      transform var(--motion-fast) var(--ease-out),
-      background-color var(--motion-fast) ease,
-      color var(--motion-fast) ease;
-  }
-
-  .act:active {
-    transform: scale(var(--press-scale));
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .act:hover:not(:disabled) {
-      background: var(--termru-subtle);
-      color: var(--termru-accent);
-    }
-
-    .star:hover {
-      color: var(--termru-accent);
-    }
-  }
-
+  .go,
   .more {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 28px;
+    gap: 7px;
+    height: 28px;
+    min-height: 0;
+    border-radius: var(--termru-radius-button);
+    background: transparent;
+    color: var(--termru-text-2);
+  }
+
+  .go {
+    padding: 0 10px;
+    color: var(--termru-text);
+  }
+
+  .row.selected .go,
+  .go:focus-visible {
+    background: var(--termru-raised-2);
+  }
+
+  .row.selected .go kbd {
+    background: var(--termru-raised);
+  }
+
+  .more {
+    width: 28px;
     padding: 0;
-    color: var(--termru-muted);
   }
 
-  .more svg {
-    fill: currentColor;
+  @media (hover: hover) and (pointer: fine) {
+    .go:hover,
+    .more:hover {
+      background: var(--termru-raised-2);
+      color: var(--termru-text);
+    }
   }
 
-  /* Narrow windows: the folder and the authentication move to the editor. */
-  @media (max-width: 900px) {
+  /* Room is by the width of the list, not of the window: the sidebar and the
+     inspector take their share. The folder goes first, then the sign-in. */
+  @container list (max-width: 760px) {
     .head,
     .row {
-      grid-template-columns: 26px minmax(9rem, 1fr) minmax(6rem, 0.6fr) 152px;
+      grid-template-columns: 24px minmax(9rem, 1.6fr) minmax(0, 1.1fr) 96px 122px;
     }
 
-    .col-folder,
+    .col-folder {
+      display: none;
+    }
+  }
+
+  @container list (max-width: 560px) {
+    .head,
+    .row {
+      grid-template-columns: 24px minmax(8rem, 1fr) 90px 122px;
+    }
+
     .col-auth {
       display: none;
     }

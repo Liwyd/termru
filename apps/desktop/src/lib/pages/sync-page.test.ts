@@ -107,12 +107,13 @@ afterEach(() => {
 });
 
 describe('the page anatomy', () => {
-  it('has the breadcrumb, the title and one line under it', async () => {
+  it('has a one-line header: the title and, signed in, the one primary action', async () => {
     give(status());
     await mountPage();
-    expect(target.querySelector('.crumbs')?.textContent).toMatch(/Workspace\s*\/\s*Cloud sync/);
-    expect(target.querySelector('h1')?.textContent).toBe('Sync');
-    expect(target.querySelector('.description')?.textContent).toContain('Secrets stay here');
+    expect(target.querySelector('.crumbs, nav[aria-label="Breadcrumb"], .description')).toBeNull();
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Sync');
+    const primary = target.querySelectorAll('header.head button.primary');
+    expect(Array.from(primary).map((button) => button.textContent?.trim())).toEqual(['Sync now']);
   });
 
   it('is a work page on the white surface, not a wrapper around a modal', async () => {
@@ -415,8 +416,8 @@ describe('what the page reads', () => {
   it('says what syncs and what stays on the device', async () => {
     give(status());
     await mountPage();
-    expect(text()).toContain('WHAT SYNCS');
+    expect(text()).toContain('What syncs');
     expect(text()).toContain('Passwords and key passphrases');
-    expect(text()).toContain('STAYS ON THIS DEVICE');
+    expect(text()).toContain('Stays on this device');
   });
 });

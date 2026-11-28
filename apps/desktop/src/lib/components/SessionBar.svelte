@@ -59,10 +59,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-height: 42px;
-    padding: 0 var(--termru-space-3) 0 28px;
-    background: var(--termru-surface);
+    padding: 0 var(--termru-space-12) 0 28px;
+    background: var(--termru-base);
     border-top: var(--termru-border-w) solid var(--termru-border);
   }
 
@@ -85,52 +85,52 @@
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     letter-spacing: 0.02em;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .hint {
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     margin-left: auto;
     flex: none;
   }
 
   .group-label {
-    margin-right: var(--termru-space-2);
+    margin-right: var(--termru-space-8);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .action {
     min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-weight: 500;
   }
 
   .action.danger {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .action[aria-disabled='true'] {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     cursor: default;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .action:hover:not([aria-disabled='true']) {
-      background: var(--termru-subtle);
+      background: var(--termru-side);
       border-color: transparent;
     }
   }
@@ -141,7 +141,7 @@
     }
 
     .bar {
-      padding-left: var(--termru-space-4);
+      padding-left: var(--termru-space-16);
     }
   }
 </style>

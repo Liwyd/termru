@@ -260,7 +260,7 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .mono {
@@ -279,7 +279,7 @@
   .summary {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   ul.plain {
@@ -304,9 +304,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     width: 100%;
-    padding: 0 0 var(--termru-space-2);
+    padding: 0 0 var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: 550;
@@ -315,12 +315,12 @@
   .tools {
     display: inline-flex;
     align-items: baseline;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     font-weight: 400;
   }
 
   .count {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .rows {
@@ -335,9 +335,9 @@
   .row {
     display: grid;
     grid-template-columns: 20px minmax(0, 1fr);
-    column-gap: var(--termru-space-3);
-    row-gap: var(--termru-space-1);
-    padding: var(--termru-space-3) 0;
+    column-gap: var(--termru-space-12);
+    row-gap: var(--termru-space-4);
+    padding: var(--termru-space-12) 0;
     border-bottom: 1px solid var(--termru-border);
   }
 
@@ -348,7 +348,7 @@
   }
 
   .row.off .body {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .body {
@@ -366,7 +366,7 @@
   .line {
     display: flex;
     align-items: baseline;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   .alias {
@@ -378,23 +378,23 @@
 
   .chip {
     flex: none;
-    padding: 0 var(--termru-space-2);
+    padding: 0 var(--termru-space-8);
     border: 1px solid var(--termru-border);
     border-radius: 999px;
     font-size: var(--termru-text-meta-size);
     line-height: 18px;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .chip.new {
     border-color: var(--termru-accent);
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .target {
     overflow-wrap: anywhere;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .detail {
@@ -412,12 +412,12 @@
   .why {
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .meta {
     display: flex;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     overflow-wrap: anywhere;
@@ -426,17 +426,17 @@
   .label {
     flex: none;
     width: 2.5rem;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .warning {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .warning :global(svg) {
@@ -447,24 +447,24 @@
   .file-warnings {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
   }
 
   .also {
     display: block;
-    margin-top: var(--termru-space-1);
+    margin-top: var(--termru-space-4);
     font-weight: 550;
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .problem {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .problem :global(svg) {

@@ -111,12 +111,12 @@ afterEach(() => {
 describe('the page', () => {
   it('has the page anatomy and three columns', () => {
     mountPage();
-    expect(target.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toMatch(
-      /Workspace\s*\/\s*Organization/,
+    expect(target.querySelector('nav[aria-label="Breadcrumb"], .description')).toBeNull();
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Folders');
+    expect(target.textContent).not.toContain('Organize connections in a small');
+    expect(target.querySelector('header.head')?.contains(findButton(target, 'New folder'))).toBe(
+      true,
     );
-    expect(target.querySelector('h1')?.textContent).toBe('Folders');
-    expect(target.textContent).toContain('Organize connections in a small, predictable hierarchy.');
-    expect(findButton(target, 'New folder')).toBeTruthy();
     expect(target.querySelector('nav[aria-label="Folders"]')).not.toBeNull();
     expect(target.querySelector('section.detail')).not.toBeNull();
     expect(target.querySelector('aside.rail')).not.toBeNull();

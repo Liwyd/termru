@@ -141,13 +141,13 @@
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: 28px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: 1px solid var(--termru-border);
     border-radius: 999px;
     background: transparent;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
@@ -156,34 +156,34 @@
 
   .glyph {
     font-size: 8px;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .chip.bad {
-    border-color: var(--termru-danger);
-    color: var(--termru-danger);
+    border-color: var(--termru-err-text);
+    color: var(--termru-err-text);
   }
 
   .chip.bad .glyph {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .chip.warn {
-    border-color: var(--termru-warning);
-    color: var(--termru-warning);
+    border-color: var(--termru-warn-text);
+    color: var(--termru-warn-text);
   }
 
   .chip.warn .glyph {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .chip:hover {
-      background: var(--termru-subtle);
+      background: var(--termru-side);
     }
   }
 
   .chip[aria-expanded='true'] {
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 </style>

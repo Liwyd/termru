@@ -22,8 +22,10 @@ pub const DEFAULT_LINE_HEIGHT: f64 = 1.3;
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreference {
     Light,
-    Dark,
+    /// The default: the interface is designed dark first.
     #[default]
+    Dark,
+    /// Follows the operating system.
     System,
 }
 
@@ -55,12 +57,13 @@ pub struct TerminalPreferences {
     pub confirm_multiline_paste: bool,
 }
 
+/// Geist Mono ships with the app (IBM Plex Mono too, as a choice).
 fn default_font_family() -> String {
-    "IBM Plex Mono, monospace".to_string()
+    "Geist Mono, monospace".to_string()
 }
 
 fn default_font_size() -> u32 {
-    14
+    13
 }
 
 fn default_scrollback() -> u32 {

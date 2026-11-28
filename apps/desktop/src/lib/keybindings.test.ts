@@ -3,6 +3,7 @@ import {
   COMMANDS,
   acceleratorFor,
   acceleratorLabel,
+  compactChord,
   matchBinding,
   conflictFor,
   defaultBindings,
@@ -277,5 +278,48 @@ describe('matching a command from the window', () => {
   it('does not match a plain control key of the shell', () => {
     const ctrlW = { key: 'w', ctrlKey: true, shiftKey: false } as KeyboardEvent;
     expect(matchBinding(ctrlW)).toBeNull();
+  });
+});
+
+describe('the actions of the palette and the shell', () => {
+  it('have palette-only commands that never capture a key', () => {
+    const bound = effectiveBindings().map((binding) => binding.commandId);
+    for (const id of [
+      'host.import',
+      'folder.new',
+      'identity.new',
+      'sync.now',
+      'tab.detach',
+      'pane.find',
+      'view.toggleInspector',
+    ] as const) {
+      expect(
+        COMMANDS.some((command) => command.id === id),
+        id,
+      ).toBe(true);
+      expect(bound, id).not.toContain(id);
+    }
+  });
+
+  it('collapse the sidebar with Ctrl+Shift+B on Linux and Windows (Ctrl+B is the shell)', () => {
+    expect(acceleratorFor('view.toggleSidebar', {}, false)).toBe('Mod+Shift+B');
+    expect(acceleratorFor('view.toggleSidebar', {}, true)).toBe('Mod+B');
+  });
+});
+
+describe('compact chords for a key cap', () => {
+  it('writes Shift as its glyph and keeps the parts apart', () => {
+    expect(compactChord('Mod+K', false)).toBe('Ctrl K');
+    expect(compactChord('Mod+Shift+P', false)).toBe('Ctrl ⇧ P');
+    expect(compactChord('Mod+Alt+ArrowLeft', false)).toBe('Ctrl Alt ←');
+  });
+
+  it('joins the glyphs on macOS', () => {
+    expect(compactChord('Mod+K', true)).toBe('⌘K');
+    expect(compactChord('Mod+Shift+P', true)).toBe('⌘⇧P');
+  });
+
+  it('has nothing for an unbound command', () => {
+    expect(compactChord('', false)).toBe('');
   });
 });

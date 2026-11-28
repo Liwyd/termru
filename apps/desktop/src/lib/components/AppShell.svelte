@@ -1,27 +1,46 @@
 <script lang="ts">
-  import AppNav from './AppNav.svelte';
+  import type { Snippet } from 'svelte';
+  import Sidebar from './Sidebar.svelte';
   import StatusBar from './StatusBar.svelte';
   import WindowControls from './WindowControls.svelte';
   import { uiPlatform } from '../platform';
+  import { chrome } from '../stores/chrome.svelte';
 
-  let { children } = $props();
+  let { children, onpalette = () => {} }: { children: Snippet; onpalette?: () => void } = $props();
 
-  // macOS uses the native traffic lights through the overlay titlebar, so
-  // the in-app bar is inset to the right of them (Doc A.01).
+  // Linux keeps the native window decorations, so the app draws no title bar
+  // there. Windows draws its own controls; macOS uses the native traffic lights
+  // through the overlay titlebar, so the strip is inset to the right of them.
   const platform = uiPlatform();
+  const titlebar = platform !== 'linux';
+
+  $effect(() => {
+    chrome.watchViewport();
+  });
+
+  // Fixed layers (notices) start below whatever the window chrome takes.
+  $effect(() => {
+    document.documentElement.style.setProperty(
+      '--termru-chrome-top',
+      titlebar ? 'var(--termru-titlebar-h)' : '0px',
+    );
+  });
 </script>
 
 <div class="shell">
-  <header class="titlebar" class:macos={platform === 'macos'} data-tauri-drag-region>
-    <span class="crumb" data-tauri-drag-region>termru / desktop</span>
-    <WindowControls />
-  </header>
+  {#if titlebar}
+    <header class="titlebar" class:macos={platform === 'macos'} data-tauri-drag-region>
+      <WindowControls />
+    </header>
+  {/if}
 
-  <AppNav />
+  <div class="frame" class:rail={chrome.railed}>
+    <Sidebar {onpalette} />
 
-  <main class="outlet">
-    {@render children()}
-  </main>
+    <main class="outlet">
+      {@render children()}
+    </main>
+  </div>
 
   <StatusBar />
 </div>
@@ -37,12 +56,12 @@
   .titlebar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
+    flex: none;
     height: var(--termru-titlebar-h);
-    padding: 0 var(--termru-space-2) 0 var(--termru-space-4);
-    border-bottom: 1px solid var(--termru-border);
-    /* Window chrome is the canvas; the page below is the surface (Doc A.02). */
-    background: var(--termru-canvas);
+    padding: 0 var(--termru-space-8) 0 var(--termru-space-16);
+    /* Window chrome is the sidebar's colour. */
+    background: var(--termru-side);
     user-select: none;
   }
 
@@ -50,18 +69,22 @@
     padding-left: 78px;
   }
 
-  .crumb {
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    color: var(--termru-muted);
+  .frame {
+    display: grid;
+    grid-template-columns: var(--termru-sidebar-w) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+  }
+
+  .frame.rail {
+    grid-template-columns: var(--termru-rail-w) minmax(0, 1fr);
   }
 
   .outlet {
-    flex: 1;
-    min-height: 0;
     display: flex;
     flex-direction: column;
-    /* White page, as every frame draws it (frames 1, 4, 5, 8). */
-    background: var(--termru-surface);
+    min-width: 0;
+    min-height: 0;
+    background: var(--termru-base);
   }
 </style>

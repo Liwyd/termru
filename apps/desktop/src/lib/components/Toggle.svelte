@@ -38,11 +38,11 @@
   .toggle {
     min-width: 56px;
     min-height: 36px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-secondary-size);
     font-weight: 500;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     /* A switch is flipped with Space as often as with a click: its state
        changes at once. Only the press gives. */
     transition: transform var(--motion-fast) var(--ease-out);
@@ -51,6 +51,6 @@
   .toggle.on {
     border-color: color-mix(in srgb, var(--termru-accent) 55%, var(--termru-border));
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 </style>

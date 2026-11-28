@@ -25,7 +25,17 @@
     | 'info'
     | 'refresh'
     | 'search'
-    | 'arrow-down';
+    | 'arrow-down'
+    | 'server'
+    | 'star'
+    | 'clock'
+    | 'gear'
+    | 'more'
+    | 'panel-left'
+    | 'panel-right'
+    | 'import'
+    | 'sort'
+    | 'arrow-left';
 
   const PATHS: Record<IconName, string> = {
     folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -49,9 +59,26 @@
     refresh: 'M20 11a8 8 0 0 0-14.4-3.6M4.5 4.5v4h4M4 13a8 8 0 0 0 14.4 3.6M19.5 19.5v-4h-4',
     search: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM15.5 15.5 20 20',
     'arrow-down': 'M12 5v14M6 13l6 6 6-6',
+    server:
+      'M5 4h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM5 13h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM7 7.5h.01M7 16.5h.01',
+    star: 'm12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z',
+    clock: 'M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17zM12 7.5V12l3 2',
+    gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3H9.8l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z',
+    more: 'M5 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0M11 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0M17 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0',
+    'panel-left':
+      'M5.5 4.5h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2zM9.5 4.5v15',
+    'panel-right':
+      'M5.5 4.5h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2zM14.5 4.5v15',
+    import: 'M12 4v10M8 10.5l4 4 4-4M5 19h14',
+    'arrow-left': 'M19 12H5M11 6l-6 6 6 6',
+    sort: 'M8 5v14M4.5 15.5 8 19l3.5-3.5M16 19V5M12.5 8.5 16 5l3.5 3.5',
   };
 
-  let { name, size = 16 }: { name: IconName; size?: number } = $props();
+  let {
+    name,
+    size = 16,
+    filled = false,
+  }: { name: IconName; size?: number; filled?: boolean } = $props();
 </script>
 
 <svg
@@ -59,7 +86,7 @@
   width={size}
   height={size}
   viewBox="0 0 24 24"
-  fill="none"
+  fill={filled ? 'currentColor' : 'none'}
   stroke="currentColor"
   stroke-width="1.6"
   stroke-linecap="round"

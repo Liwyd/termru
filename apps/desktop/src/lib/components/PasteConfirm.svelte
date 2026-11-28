@@ -64,7 +64,7 @@
 
 <style>
   .preview {
-    padding: var(--termru-space-3);
+    padding: var(--termru-space-12);
     border: var(--termru-border-w) solid var(--termru-border);
     border-radius: var(--termru-radius-button);
     background: var(--termru-terminal);
@@ -80,16 +80,16 @@
   }
 
   .more {
-    margin-top: var(--termru-space-1);
-    color: var(--termru-muted);
+    margin-top: var(--termru-space-4);
+    color: var(--termru-text-2);
     font-family: var(--termru-font-ui);
   }
 
   .remember {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
-    color: var(--termru-muted);
+    gap: var(--termru-space-8);
+    color: var(--termru-text-2);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     cursor: pointer;
@@ -101,6 +101,6 @@
 
   .note {
     display: block;
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
   }
 </style>

@@ -1,0 +1,19 @@
+/* Self-hosted typefaces (Geist and Geist Mono, SIL OFL 1.1; the licence sits
+   next to the files). The CSP is `font-src 'self'`: Vite copies the files into
+   the bundle and no font is ever fetched from a remote URL. Both are variable
+   fonts, so every weight is one file. */
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./assets/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

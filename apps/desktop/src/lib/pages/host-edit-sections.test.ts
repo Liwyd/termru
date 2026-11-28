@@ -639,7 +639,7 @@ describe('a host whose synced settings this device has not approved', () => {
     open(synced);
     await vi.waitFor(() =>
       expect(target.querySelector('.approval')?.textContent).toContain(
-        'NOT APPROVED ON THIS DEVICE',
+        'Not approved on this device',
       ),
     );
     expect(target.querySelector('.approval')?.textContent).toContain(

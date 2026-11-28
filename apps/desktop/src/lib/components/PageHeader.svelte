@@ -1,169 +1,122 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-
-  /** One step of the breadcrumb; a step with `onclick` is a way back. */
-  export interface Crumb {
-    label: string;
-    onclick?: () => void;
-    /** The full text, when `label` is a shortened form of it (shown on hover). */
-    title?: string;
-  }
+  import Icon from './Icon.svelte';
 
   /**
-   * The head every route has (the page anatomy of the frames): a mono
-   * breadcrumb, the 28/42 title, one muted line under it and the page's
-   * primary action on the right.
+   * The head every page has: ONE line, 56 px. The title and its count, the
+   * view chips or filters, a spacer, the secondary actions and the page's one
+   * primary action (champagne). No breadcrumb, no description: the title says
+   * where you are, the sidebar says how you got there.
    */
   let {
-    crumbs,
     title,
-    description,
+    count = null,
+    back,
+    chips,
     actions,
   }: {
-    crumbs: Crumb[];
     title: string;
-    description: string;
-    /** The primary action (or the page's status), top right. */
+    /** How many things the page lists (shown after the title, in mono). */
+    count?: string | number | null;
+    /** A way back, for a page that is opened from another (the host editor). */
+    back?: { label: string; onclick: () => void };
+    /** View chips and filters, right after the title. */
+    chips?: Snippet;
+    /** Secondary actions, then the primary one, at the right. */
     actions?: Snippet;
   } = $props();
 </script>
 
 <header class="head">
-  <nav aria-label="Breadcrumb">
-    <ol class="crumbs">
-      {#each crumbs as crumb, index (index)}
-        <li>
-          {#if index > 0}<span class="sep" aria-hidden="true">/</span>{/if}
-          {#if crumb.onclick}
-            <button type="button" class="crumb-link" title={crumb.title} onclick={crumb.onclick}
-              >{crumb.label}</button
-            >
-          {:else}
-            <span
-              class="crumb-text"
-              title={crumb.title ?? crumb.label}
-              aria-current={index === crumbs.length - 1 ? 'page' : undefined}>{crumb.label}</span
-            >
-          {/if}
-        </li>
-      {/each}
-    </ol>
-  </nav>
-  <div class="title-row">
-    <div class="titles">
-      <h1>{title}</h1>
-      <p class="description">{description}</p>
-    </div>
-    {#if actions}
-      <div class="actions">{@render actions()}</div>
-    {/if}
-  </div>
+  {#if back}
+    <button
+      type="button"
+      class="back ghost"
+      aria-label={back.label}
+      title={back.label}
+      onclick={back.onclick}
+    >
+      <Icon name="arrow-left" size={16} />
+    </button>
+  {/if}
+  <h1 {title}>{title}</h1>
+  {#if count !== null && count !== ''}<span class="count" title={String(count)}>{count}</span>{/if}
+  {#if chips}<div class="chips">{@render chips()}</div>{/if}
+  <span class="grow"></span>
+  {#if actions}<div class="actions">{@render actions()}</div>{/if}
 </header>
 
 <style>
   .head {
     display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-1);
+    align-items: center;
+    gap: 14px;
+    flex: none;
+    height: var(--termru-header-h);
+    padding: 0 var(--termru-space-24) 0 var(--termru-page-inset-x);
     min-width: 0;
+    /* Pages size their chips and actions against the width of the header. */
+    container: head / inline-size;
   }
 
-  .crumbs {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--termru-space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-meta-size);
-    line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
-  }
-
-  .crumbs li {
-    display: inline-flex;
-    gap: var(--termru-space-2);
-    min-width: 0;
-  }
-
-  /* A crumb is one line, whatever it holds (a 128 character host name, a
-     folder five levels deep): it ends in an ellipsis and its title has the rest. */
-  .crumbs li > .crumb-text,
-  .crumbs li > .crumb-link {
-    max-width: 36ch;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sep {
-    color: var(--termru-faint);
-  }
-
-  /* A step you can go back to: it reads as a link, not as a button. */
-  .crumb-link {
+  .back {
+    flex: none;
+    width: 30px;
+    height: 30px;
     min-height: 0;
     padding: 0;
-    border: none;
-    border-radius: 2px;
-    background: none;
-    color: inherit;
-    font: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .crumb-link:hover {
-      color: var(--termru-accent);
-      text-decoration: underline;
-    }
-  }
-
-  .title-row {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--termru-space-4);
-    min-width: 0;
-  }
-
-  .titles {
-    min-width: 0;
+    margin-left: -8px;
+    display: inline-grid;
+    place-items: center;
   }
 
   h1 {
+    flex: 0 1 auto;
+    min-width: 0;
     margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--termru-text-title-size);
     line-height: var(--termru-text-title-lh);
     font-weight: var(--termru-text-title-weight);
-    color: var(--termru-fg);
-    overflow-wrap: anywhere;
+    letter-spacing: -0.01em;
+    color: var(--termru-text);
   }
 
-  .description {
-    margin: 0;
-    font-size: var(--termru-text-body-size);
-    line-height: var(--termru-text-body-lh);
-    color: var(--termru-muted);
+  .count {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 32ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 500 12px var(--termru-font-mono);
+    color: var(--termru-text-3);
+  }
+
+  .chips {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    margin-left: var(--termru-space-10);
+  }
+
+  .grow {
+    flex: 1;
+    min-width: 0;
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-8);
     flex: none;
   }
 
-  @media (max-width: 720px) {
-    .title-row {
-      flex-direction: column;
-      align-items: flex-start;
-    }
+  /* The header buttons are 30 px, as in the design. */
+  .actions :global(button) {
+    min-height: 30px;
   }
 </style>

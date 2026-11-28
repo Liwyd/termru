@@ -238,8 +238,8 @@
     flex-direction: column;
     padding: 6px;
     border: var(--termru-border-w) solid var(--termru-border);
-    border-radius: 10px;
-    background: var(--termru-surface);
+    border-radius: var(--termru-radius-pane);
+    background: var(--termru-raised);
     box-shadow: var(--termru-shadow-float);
     opacity: 0;
     transform: scale(var(--pop-scale));
@@ -277,14 +277,14 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
     width: 100%;
     min-height: 34px;
     padding: 0 10px;
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
     font-weight: 450;
@@ -295,23 +295,23 @@
 
   /* The ring sits inside the entry so the menu's edge does not clip it. */
   .item:focus-visible {
-    background: var(--termru-accent-soft);
+    background: var(--termru-raised-2);
     outline-offset: -2px;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .item:hover:not([aria-disabled='true']) {
-      background: var(--termru-accent-soft);
+      background: var(--termru-raised-2);
     }
   }
 
   .item[aria-disabled='true'] {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     cursor: default;
   }
 
   .item.danger {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .text {
@@ -330,13 +330,13 @@
     font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .hint {
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     white-space: nowrap;
   }
 

@@ -192,16 +192,16 @@
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) auto;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     min-height: 56px;
-    padding: var(--termru-space-2) 0;
+    padding: var(--termru-space-8) 0;
     border-bottom: 1px solid var(--termru-border);
   }
 
   .n {
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .who {
@@ -220,14 +220,14 @@
   }
 
   .name.missing {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .where {
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -235,7 +235,7 @@
 
   .tools {
     display: flex;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
   }
 
   .icon {
@@ -244,11 +244,11 @@
     justify-content: center;
     width: var(--termru-control-h);
     padding: 0;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .icon[aria-disabled='true'] {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     cursor: default;
   }
 
@@ -265,7 +265,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
@@ -278,13 +278,13 @@
   }
 
   .muted {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .note {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 </style>

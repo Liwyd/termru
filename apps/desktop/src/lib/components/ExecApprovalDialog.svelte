@@ -143,15 +143,15 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .fields {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     margin: 0;
-    padding: var(--termru-space-3) 0;
+    padding: var(--termru-space-12) 0;
     border-top: 1px solid var(--termru-border);
     border-bottom: 1px solid var(--termru-border);
   }
@@ -159,17 +159,16 @@
   .field {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     min-width: 0;
   }
 
   dt {
-    font-family: var(--termru-font-mono);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
+    font-weight: var(--termru-text-meta-weight);
   }
 
   dd {
@@ -181,7 +180,7 @@
 
   dd.why {
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   code {
@@ -192,20 +191,20 @@
 
   code.block {
     display: block;
-    padding: var(--termru-space-2) var(--termru-space-3);
+    padding: var(--termru-space-8) var(--termru-space-12);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
     white-space: pre-wrap;
   }
 
   .problem {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .problem :global(svg) {

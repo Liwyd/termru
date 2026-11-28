@@ -1,8 +1,10 @@
 import { mount } from 'svelte';
 // Self-hosted fonts (SIL OFL): the CSP is `font-src 'self'`, so no font may
-// come from a remote URL. Vite copies them into the bundle. The mono face
-// ships the Latin subsets only (the interface is English, Doc A).
-import '@fontsource-variable/inter';
+// come from a remote URL. Vite copies them into the bundle. Geist and Geist
+// Mono are the interface and the terminal default (`fonts.css`); IBM Plex Mono
+// stays bundled because it is a font the user can choose in Preferences (the
+// Latin subsets only: the interface is English).
+import './fonts.css';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-ext-400.css';

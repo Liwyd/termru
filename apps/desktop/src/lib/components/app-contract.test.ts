@@ -217,8 +217,14 @@ function type(element: HTMLInputElement, value: string): void {
 }
 
 function findButton(root: ParentNode, label: string): HTMLButtonElement {
+  // The text of a button without its decorations: a key cap, a count, screen-reader text.
+  const nameOf = (candidate: Element): string => {
+    const clone = candidate.cloneNode(true) as Element;
+    clone.querySelectorAll('kbd, .n, .sr-only').forEach((part) => part.remove());
+    return clone.textContent?.trim() ?? '';
+  };
   const button = Array.from(root.querySelectorAll('button')).find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => nameOf(candidate) === label,
   );
   if (!button) throw new Error(`button "${label}" not found`);
   return button as HTMLButtonElement;
@@ -262,8 +268,9 @@ describe('desktop UI ↔ Tauri contract', () => {
       unobserve() {}
       disconnect() {}
     };
-    (globalThis as { matchMedia?: unknown }).matchMedia = () => ({
-      matches: true,
+    // The operating system prefers a dark theme; the window is wide.
+    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: !/max-width/.test(query),
       addEventListener() {},
       removeEventListener() {},
     });
@@ -368,7 +375,7 @@ describe('desktop UI ↔ Tauri contract', () => {
     route.route = 'hosts';
     window.location.hash = '#hosts';
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Your sessions are still running');
+      expect(target.textContent).toContain('1 session running');
     });
 
     click(findButton(target, 'Return to web-1'));
@@ -385,7 +392,7 @@ describe('desktop UI ↔ Tauri contract', () => {
 
     click(findButton(target, 'Sync'));
     await vi.waitFor(() => {
-      expect(target.textContent).toContain('Cloud sync');
+      expect(target.querySelector('input[type="url"]')).not.toBeNull();
     });
 
     const inputs = target.querySelectorAll('input');

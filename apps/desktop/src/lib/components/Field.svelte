@@ -61,32 +61,32 @@
   }
 
   label {
-    margin-bottom: var(--termru-space-2);
+    margin-bottom: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     font-weight: 550;
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .optional {
-    margin-left: var(--termru-space-1);
+    margin-left: var(--termru-space-4);
     font-weight: 400;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   /* The live region stays in the page (a region that is created together
      with its message is not announced); empty, it takes no room. */
   .message p {
-    margin: var(--termru-space-2) 0 0;
+    margin: var(--termru-space-8) 0 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
   }
 
   .hint {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .error {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 </style>

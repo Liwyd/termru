@@ -19,6 +19,7 @@
     treeIndent,
   } from '../folders';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
+  import { intents } from '../stores/intents.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { notify } from '../notify.svelte';
   import { afterFirstPaint } from '../settled.svelte';
@@ -178,6 +179,12 @@
     void tick().then(() => document.getElementById('folder-name')?.focus());
   }
 
+  // "New folder" from the palette or the sidebar asks for the form before this
+  // page exists: it is served once the page is there (or at once).
+  $effect(() => {
+    if (intents.take('new-folder')) startCreate();
+  });
+
   function cancelRail(): void {
     mode = 'edit';
     if (folder) {
@@ -331,24 +338,20 @@
 </script>
 
 <div class="workpage folders">
-  <div class="scroll">
-    <PageHeader
-      crumbs={[{ label: 'Workspace' }, { label: 'Organization' }]}
-      title="Folders"
-      description="Organize connections in a small, predictable hierarchy."
-    >
-      {#snippet actions()}
-        <button type="button" class="primary new" onclick={startCreate}>
-          <Icon name="folder-plus" size={17} />
-          New folder
-        </button>
-      {/snippet}
-    </PageHeader>
+  <PageHeader title="Folders" count={formatCount(hosts.groups.length)}>
+    {#snippet actions()}
+      <button type="button" class="primary new" onclick={startCreate}>
+        <Icon name="folder-plus" size={16} />
+        New folder
+      </button>
+    {/snippet}
+  </PageHeader>
 
+  <div class="scroll">
     <div class="columns">
       <!-- Column 1: the tree. -->
       <nav class="tree" aria-label="Folders">
-        <p class="wp-label">FOLDER TREE</p>
+        <p class="wp-label">Folder tree</p>
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <ul onkeydown={onTreeKeyDown} bind:this={treeList}>
           <li>
@@ -370,7 +373,7 @@
                 type="button"
                 class="item"
                 class:active={selection === entry.group.id}
-                style:padding-left="calc(var(--termru-space-3) + {treeIndent(entry.depth)}px)"
+                style:padding-left="calc(var(--termru-space-12) + {treeIndent(entry.depth)}px)"
                 aria-current={selection === entry.group.id ? 'true' : undefined}
                 title={entry.path}
                 onclick={() => select(entry.group.id)}
@@ -641,17 +644,17 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-6);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
   }
 
   .new {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 0 var(--termru-space-5);
+    gap: var(--termru-space-8);
+    padding: 0 var(--termru-space-24);
   }
 
   /* Three columns: tree | detail | edit rail, separated by hairlines. */
@@ -665,8 +668,8 @@
   .tree {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
-    padding-right: var(--termru-space-5);
+    gap: var(--termru-space-16);
+    padding-right: var(--termru-space-24);
     border-right: 1px solid var(--termru-border);
     min-width: 0;
   }
@@ -674,7 +677,7 @@
   .tree ul {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -683,21 +686,21 @@
   .item {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     width: 100%;
     min-height: 42px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: none;
     border-radius: var(--termru-radius-button);
     background: none;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-size: var(--termru-text-body-size);
     font-weight: 450;
     text-align: left;
   }
 
   .item :global(.icon) {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .item .label {
@@ -710,7 +713,7 @@
 
   .count {
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-variant-numeric: tabular-nums;
   }
 
@@ -722,35 +725,35 @@
 
   @media (hover: hover) and (pointer: fine) {
     .item:hover:not(.active) {
-      background-color: var(--termru-subtle);
+      background-color: var(--termru-side);
     }
   }
 
   .item.active {
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
     font-weight: 600;
   }
 
   .item.active :global(.icon),
   .item.active .count {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .footnote {
-    margin: var(--termru-space-3) 0 0;
-    padding-top: var(--termru-space-4);
+    margin: var(--termru-space-12) 0 0;
+    padding-top: var(--termru-space-16);
     border-top: 1px solid var(--termru-border);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .detail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
-    padding: 0 var(--termru-space-6);
+    gap: var(--termru-space-24);
+    padding: 0 var(--termru-space-32);
     min-width: 0;
   }
 
@@ -758,7 +761,7 @@
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
   }
 
   .titles {
@@ -769,7 +772,7 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow-wrap: anywhere;
   }
 
@@ -783,7 +786,7 @@
 
   .count-label {
     flex: none;
-    padding-bottom: var(--termru-space-2);
+    padding-bottom: var(--termru-space-8);
   }
 
   .hostlist {
@@ -791,15 +794,15 @@
     padding: 0;
     list-style: none;
     border: 1px solid var(--termru-border);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   .host {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-height: 72px;
-    padding: 0 var(--termru-space-5);
+    padding: 0 var(--termru-space-24);
   }
 
   .host + .host {
@@ -807,7 +810,7 @@
   }
 
   .prompt {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .who {
@@ -829,7 +832,7 @@
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -840,7 +843,7 @@
   .move {
     width: 88px;
     min-height: 36px;
-    padding: 0 28px 0 var(--termru-space-3);
+    padding: 0 28px 0 var(--termru-space-12);
     border: 1px solid transparent;
     background-color: transparent;
     font-family: inherit;
@@ -857,11 +860,11 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .empty {
-    padding: var(--termru-space-6) 0;
+    padding: var(--termru-space-32) 0;
     border-top: 1px solid var(--termru-border);
     border-bottom: 1px solid var(--termru-border);
     text-align: center;
@@ -871,28 +874,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-4);
-    padding-bottom: var(--termru-space-5);
+    gap: var(--termru-space-16);
+    padding-bottom: var(--termru-space-24);
     border-bottom: 1px solid var(--termru-border);
   }
 
   .pick-bar p {
     margin: 0;
     font-size: var(--termru-text-control-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .pick-bar button {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     flex: none;
   }
 
   .available {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   .pick-list {
@@ -910,7 +913,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     align-items: center;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-height: 48px;
   }
 
@@ -923,23 +926,23 @@
 
   .pick-from {
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .pick-empty {
-    padding: var(--termru-space-4) 0;
+    padding: var(--termru-space-16) 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   /* The global link style underlines; here the arrow says it is a link. */
   .pick .here.here {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     min-height: 32px;
     font-size: var(--termru-text-secondary-size);
     text-decoration: none;
@@ -947,29 +950,29 @@
 
   .problem {
     margin: 0;
-    padding: var(--termru-space-3) var(--termru-space-4);
-    border-left: 2px solid var(--termru-danger);
-    background: var(--termru-danger-soft);
-    color: var(--termru-danger);
+    padding: var(--termru-space-12) var(--termru-space-16);
+    border-left: 2px solid var(--termru-err-text);
+    background: var(--termru-err-soft);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-control-size);
     overflow-wrap: anywhere;
   }
 
   .callout {
-    padding: var(--termru-space-4) var(--termru-space-5);
+    padding: var(--termru-space-16) var(--termru-space-24);
     border-left: 2px solid var(--termru-border);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   .callout p {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .rail .accent {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   /* The callout's title is a sans label, not a mono one (frame 5). */
@@ -978,17 +981,17 @@
     font-size: var(--termru-text-secondary-size);
     font-weight: 600;
     letter-spacing: 0.04em;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .callout .wp-label {
-    margin-bottom: var(--termru-space-2);
+    margin-bottom: var(--termru-space-8);
   }
 
   .rail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     padding-left: 28px;
     border-left: 1px solid var(--termru-border);
     min-width: 0;
@@ -997,14 +1000,14 @@
   .rail form {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
   }
 
   .rule-note {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .rule-note.small {
@@ -1014,22 +1017,22 @@
   .form-error {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .rail-actions {
     display: flex;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     align-items: center;
   }
 
   .rail-actions .primary {
-    padding: 0 var(--termru-space-5);
+    padding: 0 var(--termru-space-24);
   }
 
   hr {
     width: 100%;
-    margin: var(--termru-space-2) 0;
+    margin: var(--termru-space-8) 0;
     border: none;
     border-top: 1px solid var(--termru-border);
   }
@@ -1038,19 +1041,19 @@
     align-self: flex-start;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   /* A narrower window: the rail drops under the other two columns. */
   @media (max-width: 1180px) {
     .columns {
       grid-template-columns: 224px minmax(0, 1fr);
-      row-gap: var(--termru-space-6);
+      row-gap: var(--termru-space-32);
     }
 
     .rail {
       grid-column: 1 / -1;
-      padding: var(--termru-space-5) 0 0;
+      padding: var(--termru-space-24) 0 0;
       border-left: none;
       border-top: 1px solid var(--termru-border);
     }
@@ -1067,7 +1070,7 @@
 
     .tree {
       padding-right: 0;
-      padding-bottom: var(--termru-space-5);
+      padding-bottom: var(--termru-space-24);
       border-right: none;
       border-bottom: 1px solid var(--termru-border);
     }

@@ -318,14 +318,14 @@ describe('the import dialog', () => {
 });
 
 describe('the Hosts page', () => {
-  it('has a secondary "Import from SSH config" action next to New host', async () => {
+  it('has a secondary "Import ~/.ssh/config" action next to New host', async () => {
     hosts.loaded = true;
     hosts.loading = false;
     hosts.error = null;
     route.route = 'hosts';
     component = mount(HostsPage, { target, props: { onconnect: () => {}, onopen: () => {} } });
     flushSync();
-    const importButton = findButton(target, 'Import from SSH config');
+    const importButton = findButton(target, 'Import ~/.ssh/config');
     const newHost = findButton(target, 'New host');
     expect(importButton.classList.contains('primary')).toBe(false);
     expect(newHost.classList.contains('primary')).toBe(true);

@@ -67,7 +67,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [x] Sync page (status, conflicts, this device, sign in, change account, sign out, offline copy), Preferences page (every field, live preview, shortcut table with record / unbind / reset, Restore defaults, About), connect / host-key / sign-in dialogs, the notify facade (ADR 0009) and the opener plugin.
 - [ ] Sync: the other devices of the account. The server has `GET /v1/devices` and `DELETE /v1/devices/{id}`, but the desktop app has no command for them, so the page shows this device only. Needs `sync_devices` / `sync_revoke_device` commands.
 - [ ] Preferences: the frame's "Theme: Chalk" is a terminal palette name; Termru has one light and one dark palette, so the control is System / Light / Dark. The frame's line height of 1.65 is a multiple of the font size; the stored value multiplies xterm's cell height (default 1.3), which gives the same 23 px rows.
-- [ ] Preferences: a font that is not installed falls back silently (the list says only IBM Plex Mono ships with Termru); there is no way to detect that yet.
+- [ ] Preferences: a font that is not installed falls back silently (the list says Geist Mono and IBM Plex Mono ship with Termru); there is no way to detect that yet.
 - [ ] Notices: the specification suggests a Sileo toast through a React island; the facade draws native Svelte notices instead. Adopting a library needs the maintainer's approval (second UI runtime) and changes only `components/Toasts.svelte`.
 - [ ] Notices: a notice shows in the window that raised it only; there is no notification centre or history.
 - [ ] Look at the new pages and dialogs on a real desktop session (WebKitGTK, WebView2, WKWebView): focus rings, the select arrow, the shortcut recorder and the notice position have only been checked in headless Chrome.
@@ -76,10 +76,20 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [x] Hosts page body rebuilt to frame 1: `PageHeader`, filter row, plain tabs, band header, 70 px rows on fixed columns, the running-sessions banner under the rows, the row menu on `PopMenu`. With this the redesign items R4 (Sessions), R5 (editor), R6 (Folders and Identities), R7 (Hosts), R8 and R9 (Sync, Preferences, dialogs, notices) are built to their frames; what is still open for each is listed under its own heading above, and none of it has been seen in a real webview.
 - [x] axe-core over every route and dialog (jsdom), form errors wired with `aria-invalid` / `aria-describedby`, `docs/accessibility.md` with the keyboard checklist.
 - [x] Motion pass (press feedback, hover gate, arriving blocks, the row menu) and the stress pass (10 000 hosts, long names, empty and error states, 760 px, dark): see the CHANGELOG.
-- [ ] Hosts table: the Folder and Authentication columns are hidden under 900 px; a narrow window loses them (they are in the editor). Showing the folder under the name there would keep it.
+- [ ] Hosts table: the Folder column is hidden when the list is under 760 px wide and the Sign-in column under 560 px (the inspector and the editor have them); a narrow window loses them. Showing the folder under the name there would keep it.
 - [ ] Hosts table scroll: measured at 54 fps in a headless, software-rendered Chrome against the mock (`scripts/scroll-perf.mjs`, `docs/performance.md`); not measured on WebKitGTK, WebView2 or WKWebView, nor against the real keyring (a lookup per row at rest).
 - [ ] Accessibility, see `docs/accessibility.md` (Known gaps): no run with a real screen reader (Orca, NVDA, VoiceOver); the terminal output is not announced (xterm screen reader mode is off); session tabs can only be reordered by dragging; the session toolbar has no arrow-key roving; no skip link; contrast and target size are not measured in a browser; Windows forced colours and 200 % zoom are untried.
 - [ ] Whether an arriving block moves depends on the last input (a key press or a pointer), not on what caused it: a session started with a key whose banner appears after the user touched the mouse still moves. Decide whether that is right or whether the cause should be passed along.
+
+### Obsidian redesign (O1 of 4: foundation, shell, Hosts)
+- [x] Tokens (dark default, light, "System"), Geist and Geist Mono bundled (Inter removed), terminal palettes, the left sidebar with Live, Library and Folders and an icon rail, the 28 px status bar, the one-line page header on every page, the command palette with every action of the app, the Hosts page with rows, sort chips, search and the 340 px inspector. See the CHANGELOG.
+- [ ] O2: the Sessions page to the brief (one 46 px row of tabs and tools, rounded panes with 6 px gaps, focused pane outline, find bar, menus, paste and close confirmations). Today it runs on the new tokens with its old layout.
+- [ ] O3: the host editor (a full-width page with a left section index and a sticky footer), Folders, Identities, Sync and Preferences as list plus inspector pages; dialogs, menus and notices on one raised surface. Their section labels are sentence case already; their layouts, numbered editor sections and the `section-label` / `wp-label` classes (written in capitals in the markup of Folders and the editor, shown as sentences by a CSS rule) are still the old ones.
+- [ ] Hosts inspector: no **Files** action (there is no SFTP) and no **host key** row (no command reads `known_hosts` for one host: add `host_key_info(id)` to show the fingerprint the engine would check).
+- [ ] The light theme's text colours (`text-3`, `accent-text`, `live-text`, `warn-text`, `err-text`) are darker than the approved light palette so every text pair holds 4.5:1; fills are as approved. Decide whether to keep that or lighten the surfaces.
+- [ ] Look at the sidebar, the rail, the palette and the inspector on a real desktop session (WebKitGTK, WebView2, WKWebView): `@container` queries, `color-mix()` and variable fonts have only been checked in headless Chrome and jsdom.
+- [ ] The sidebar is a list of buttons, not a roving tree: with many folders it is many Tab stops (the folders scroll inside it). An arrow-key roving would make the nav one stop.
+- [ ] A stored terminal font of "IBM Plex Mono" (the old default) is kept; only new installs get Geist Mono at 13 px.
 
 ### Dependency maintenance
 - [ ] Evaluate migrating `chrono` (RUSTSEC-2026-0543, unmaintained, ignored in `deny.toml`) to `jiff` or `time` before 2027-03-01; keep the stored epoch-ms / RFC 3339 wire formats and the `tokio-postgres` mapping working (see `docs/security/dependency-review.md`).
@@ -98,7 +108,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
    - No secret synchronization: secrets live exclusively in the OS Keyring (`keyring` crate).
    - Parameterized SQL queries only; strict authorization checks per user/device.
    - Strict Content Security Policy (CSP), least-privilege Tauri capabilities (`core:default` + specific window/dialog permissions).
-   - No remote font loading (bundled fontsource assets).
+   - No remote font loading (bundled fonts: Geist and Geist Mono in `src/assets/fonts/`, IBM Plex Mono through fontsource).
 
 3. **Code Quality & Testing:**
    - Zero compiler warnings (`-D warnings` for clippy).

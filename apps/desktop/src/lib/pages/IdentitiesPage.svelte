@@ -2,11 +2,13 @@
   import { onMount, tick, untrack } from 'svelte';
   import { appear } from '../actions/appear';
   import Field from '../components/Field.svelte';
+  import { formatCount } from '../count-line';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import SessionDialog from '../components/SessionDialog.svelte';
   import { openFile } from '../ipc-backend';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
+  import { intents } from '../stores/intents.svelte';
   import { identities } from '../stores/identities.svelte';
   import { route } from '../stores/route.svelte';
   import { notify } from '../notify.svelte';
@@ -145,6 +147,12 @@
     formError = null;
     void tick().then(() => document.getElementById('identity-name')?.focus());
   }
+
+  // "New identity" from the palette asks for the form before this page exists:
+  // it is served once the page is there (or at once).
+  $effect(() => {
+    if (intents.take('new-identity')) startCreate();
+  });
 
   function cancelRail(): void {
     mode = 'edit';
@@ -292,27 +300,23 @@
 </script>
 
 <div class="workpage identities">
-  <div class="scroll">
-    <PageHeader
-      crumbs={[{ label: 'Workspace' }, { label: 'Credentials' }]}
-      title="Identities"
-      description="Named keys for signing in. The key files stay on this device."
-    >
-      {#snippet actions()}
-        {#if hasBack}
-          <button type="button" onclick={() => route.back()}>Back to host</button>
-        {/if}
-        <button type="button" class="primary new" onclick={startCreate}>
-          <Icon name="plus" size={17} />
-          New identity
-        </button>
-      {/snippet}
-    </PageHeader>
+  <PageHeader title="Identities" count={formatCount(hosts.identities.length)}>
+    {#snippet actions()}
+      {#if hasBack}
+        <button type="button" class="ghost" onclick={() => route.back()}>Back to host</button>
+      {/if}
+      <button type="button" class="primary new" onclick={startCreate}>
+        <Icon name="plus" size={16} />
+        New identity
+      </button>
+    {/snippet}
+  </PageHeader>
 
+  <div class="scroll">
     <div class="columns">
       <!-- Column 1: the identities. -->
       <nav class="list" aria-label="Identities">
-        <p class="wp-label">IDENTITIES</p>
+        <p class="wp-label">Identities</p>
         {#if sorted.length === 0}
           <p class="empty-list">
             No identity yet. Generate a key or add an existing one to sign in without a password.
@@ -371,7 +375,7 @@
           </header>
 
           <section class="block" aria-labelledby="key-file-label">
-            <p class="wp-label" id="key-file-label">KEY FILE</p>
+            <p class="wp-label" id="key-file-label">Key file</p>
             {#if keyPath}
               <code class="path">{keyPath}</code>
             {:else}
@@ -395,7 +399,7 @@
             <p class="problem" role="alert">{keyState.message}</p>
           {:else if keyState?.status === 'ready'}
             <section class="block" aria-labelledby="fingerprint-label">
-              <p class="wp-label" id="fingerprint-label">FINGERPRINT</p>
+              <p class="wp-label" id="fingerprint-label">Fingerprint</p>
               <div class="copyline">
                 <code class="value">{keyState.info.fingerprint}</code>
                 <button
@@ -416,7 +420,7 @@
             </section>
 
             <section class="block" aria-labelledby="public-label">
-              <p class="wp-label" id="public-label">PUBLIC KEY</p>
+              <p class="wp-label" id="public-label">Public key</p>
               <div class="copyline top">
                 <code class="value public">{keyState.info.public_key}</code>
                 <button
@@ -436,7 +440,7 @@
           {/if}
 
           <section class="block" aria-labelledby="users-label">
-            <p class="wp-label" id="users-label">HOSTS USING THIS IDENTITY</p>
+            <p class="wp-label" id="users-label">Hosts using this identity</p>
             {#if users.length === 0}
               <p class="muted">No host signs in with this identity yet.</p>
             {:else}
@@ -622,17 +626,17 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-6);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
   }
 
   .new {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 0 var(--termru-space-5);
+    gap: var(--termru-space-8);
+    padding: 0 var(--termru-space-24);
   }
 
   .columns {
@@ -645,8 +649,8 @@
   .list {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
-    padding-right: var(--termru-space-5);
+    gap: var(--termru-space-16);
+    padding-right: var(--termru-space-24);
     border-right: 1px solid var(--termru-border);
     min-width: 0;
   }
@@ -654,7 +658,7 @@
   .list ul {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -663,19 +667,19 @@
   .item {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     width: 100%;
     min-height: 54px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: none;
     border-radius: var(--termru-radius-button);
     background: none;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     text-align: left;
   }
 
   .item :global(.icon) {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .who {
@@ -699,12 +703,12 @@
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     font-weight: 400;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .count {
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-variant-numeric: tabular-nums;
   }
 
@@ -716,19 +720,19 @@
 
   @media (hover: hover) and (pointer: fine) {
     .item:hover:not(.active) {
-      background-color: var(--termru-subtle);
+      background-color: var(--termru-side);
     }
   }
 
   .item.active {
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .item.active :global(.icon),
   .item.active .count,
   .item.active .item-sub {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .empty-list,
@@ -736,19 +740,19 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .footnote {
-    padding-top: var(--termru-space-4);
+    padding-top: var(--termru-space-16);
     border-top: 1px solid var(--termru-border);
   }
 
   .detail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
-    padding: 0 var(--termru-space-6);
+    gap: var(--termru-space-24);
+    padding: 0 var(--termru-space-32);
     min-width: 0;
   }
 
@@ -756,7 +760,7 @@
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
   }
 
   .titles {
@@ -767,7 +771,7 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow-wrap: anywhere;
   }
 
@@ -781,14 +785,14 @@
 
   .count-label {
     flex: none;
-    padding-bottom: var(--termru-space-2);
+    padding-bottom: var(--termru-space-8);
   }
 
   .block {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
-    padding-top: var(--termru-space-5);
+    gap: var(--termru-space-12);
+    padding-top: var(--termru-space-24);
     border-top: 1px solid var(--termru-border);
     min-width: 0;
   }
@@ -802,7 +806,7 @@
     margin: 0;
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .muted.small {
@@ -812,10 +816,10 @@
 
   .problem {
     margin: 0;
-    padding: var(--termru-space-3) var(--termru-space-4);
-    border-left: 2px solid var(--termru-danger);
-    background: var(--termru-danger-soft);
-    color: var(--termru-danger);
+    padding: var(--termru-space-12) var(--termru-space-16);
+    border-left: 2px solid var(--termru-err-text);
+    background: var(--termru-err-soft);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-control-size);
     overflow-wrap: anywhere;
   }
@@ -832,14 +836,14 @@
 
   .inline {
     display: flex;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     flex-wrap: wrap;
   }
 
   .copyline {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     min-width: 0;
   }
 
@@ -850,10 +854,10 @@
   .value {
     flex: 1;
     min-width: 0;
-    padding: var(--termru-space-3);
+    padding: var(--termru-space-12);
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-input);
-    background: var(--wp-field);
+    background: var(--termru-field);
     line-height: 20px;
     overflow-wrap: anywhere;
   }
@@ -867,7 +871,7 @@
   .copy {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     flex: none;
     min-width: 88px;
     justify-content: center;
@@ -883,7 +887,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
     align-items: center;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-height: 48px;
     border-bottom: 1px solid var(--termru-border);
   }
@@ -898,7 +902,7 @@
   .target {
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -924,40 +928,40 @@
   .rail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     padding-left: 28px;
     border-left: 1px solid var(--termru-border);
     min-width: 0;
   }
 
   .rail .accent {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .rail form {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
   }
 
   .choices {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   .choice {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: 36px;
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: 1px solid transparent;
     border-radius: var(--termru-radius-button);
     font-size: var(--termru-text-control-size);
     font-weight: var(--termru-text-control-weight);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     cursor: pointer;
     transition:
       transform var(--motion-fast) var(--ease-out),
@@ -968,8 +972,8 @@
 
   .choice.selected {
     border-color: var(--termru-border);
-    background: var(--termru-subtle);
-    color: var(--termru-fg);
+    background: var(--termru-side);
+    color: var(--termru-text);
   }
 
   .choice:active {
@@ -992,7 +996,7 @@
   .check {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     cursor: pointer;
@@ -1008,29 +1012,29 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .form-error {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
     overflow-wrap: anywhere;
   }
 
   .rail-actions {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   .rail-actions .primary {
-    padding: 0 var(--termru-space-5);
+    padding: 0 var(--termru-space-24);
   }
 
   hr {
     width: 100%;
-    margin: var(--termru-space-2) 0;
+    margin: var(--termru-space-8) 0;
     border: none;
     border-top: 1px solid var(--termru-border);
   }
@@ -1039,18 +1043,18 @@
     align-self: flex-start;
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   @media (max-width: 1180px) {
     .columns {
       grid-template-columns: 240px minmax(0, 1fr);
-      row-gap: var(--termru-space-6);
+      row-gap: var(--termru-space-32);
     }
 
     .rail {
       grid-column: 1 / -1;
-      padding: var(--termru-space-5) 0 0;
+      padding: var(--termru-space-24) 0 0;
       border-left: none;
       border-top: 1px solid var(--termru-border);
     }
@@ -1067,7 +1071,7 @@
 
     .list {
       padding-right: 0;
-      padding-bottom: var(--termru-space-5);
+      padding-bottom: var(--termru-space-24);
       border-right: none;
       border-bottom: 1px solid var(--termru-border);
     }

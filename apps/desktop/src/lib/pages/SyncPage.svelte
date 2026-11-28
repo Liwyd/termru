@@ -217,35 +217,29 @@
 </script>
 
 <div class="workpage syncpage">
-  <div class="scroll">
-    <PageHeader
-      crumbs={[{ label: 'Workspace' }, { label: 'Cloud sync' }]}
-      title="Sync"
-      description={sync.signedIn
-        ? 'Keep hosts, folders and preferences the same on every device. Secrets stay here.'
-        : 'Optional. Without it, everything stays on this device.'}
-    >
-      {#snippet actions()}
-        {#if sync.signedIn}
-          <button
-            type="button"
-            class="primary sync-now"
-            disabled={sync.busy || offline}
-            title={syncTitle}
-            onclick={() => void sync.syncNow()}
-          >
-            <Icon name="refresh" size={17} />
-            {sync.busy ? 'Syncing…' : 'Sync now'}
-          </button>
-        {/if}
-      {/snippet}
-    </PageHeader>
+  <PageHeader title="Sync">
+    {#snippet actions()}
+      {#if sync.signedIn}
+        <button
+          type="button"
+          class="primary sync-now"
+          disabled={sync.busy || offline}
+          title={syncTitle}
+          onclick={() => void sync.syncNow()}
+        >
+          <Icon name="refresh" size={16} />
+          {sync.busy ? 'Syncing…' : 'Sync now'}
+        </button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
+  <div class="scroll">
     <div class="columns">
       <div class="main">
         {#if sync.signedIn}
           <section aria-labelledby="status-label">
-            <p class="wp-label" id="status-label">STATUS</p>
+            <p class="wp-label" id="status-label">Status</p>
             <div class="status {line.tone}" role="status" aria-live="polite">
               <p class="state"><span class="glyph" aria-hidden="true"></span>{line.label}</p>
               <p class="state-detail">{line.detail}</p>
@@ -276,7 +270,7 @@
 
           {#if sync.conflicts.length > 0}
             <section aria-labelledby="conflicts-label" class="conflicts">
-              <p class="wp-label" id="conflicts-label">CONFLICTS</p>
+              <p class="wp-label" id="conflicts-label">Conflicts</p>
               <p class="note">
                 Choose which copy to keep. The other one is replaced; nothing is overwritten until
                 you choose.
@@ -346,7 +340,7 @@
           {/if}
 
           <section aria-labelledby="devices-label">
-            <p class="wp-label" id="devices-label">DEVICES</p>
+            <p class="wp-label" id="devices-label">Devices</p>
             <ul class="devices">
               <li>
                 <span class="device-name">
@@ -451,7 +445,7 @@
 
       <aside class="rail" aria-label="About sync">
         {#if sync.signedIn}
-          <p class="wp-label">ACCOUNT</p>
+          <p class="wp-label">Account</p>
           <div class="account-actions">
             <button
               type="button"
@@ -471,21 +465,21 @@
           <hr />
         {:else}
           <div class="callout">
-            <p class="wp-label accent">LOCAL WORKSPACE</p>
+            <p class="wp-label accent">Local workspace</p>
             <p>
               Sync is off. Hosts, folders, identities and preferences are saved on this device only.
             </p>
           </div>
         {/if}
 
-        <p class="wp-label">WHAT SYNCS</p>
+        <p class="wp-label">What syncs</p>
         <ul class="plain">
           <li>Hosts and folders</li>
           <li>Identities (names, comments, fingerprints)</li>
           <li>Preferences</li>
         </ul>
 
-        <p class="wp-label">STAYS ON THIS DEVICE</p>
+        <p class="wp-label">Stays on this device</p>
         <ul class="plain">
           <li>Passwords and key passphrases</li>
           <li>Private keys and their paths</li>
@@ -503,17 +497,17 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-6);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
   }
 
   .sync-now {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
-    padding: 0 var(--termru-space-5);
+    gap: var(--termru-space-8);
+    padding: 0 var(--termru-space-24);
   }
 
   /* Main column | hairline | rail. */
@@ -527,27 +521,27 @@
   .main {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-6);
-    padding-right: var(--termru-space-8);
+    gap: var(--termru-space-32);
+    padding-right: var(--termru-space-48);
     min-width: 0;
   }
 
   .rail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
-    padding-left: var(--termru-space-6);
+    gap: var(--termru-space-12);
+    padding-left: var(--termru-space-32);
     border-left: 1px solid var(--termru-border);
     min-width: 0;
     align-self: start;
   }
 
   .wp-label {
-    margin-bottom: var(--termru-space-3);
+    margin-bottom: var(--termru-space-12);
   }
 
   .rail .wp-label {
-    margin: var(--termru-space-3) 0 0;
+    margin: var(--termru-space-12) 0 0;
   }
 
   .rail .wp-label:first-child {
@@ -555,7 +549,7 @@
   }
 
   h2 {
-    margin: 0 0 var(--termru-space-2);
+    margin: 0 0 var(--termru-space-8);
     font-size: var(--termru-text-heading-size);
     line-height: var(--termru-text-heading-lh);
     font-weight: var(--termru-text-heading-weight);
@@ -565,15 +559,15 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .conflicts .note {
-    margin-bottom: var(--termru-space-3);
+    margin-bottom: var(--termru-space-12);
   }
 
   .note.lead {
-    margin-bottom: var(--termru-space-4);
+    margin-bottom: var(--termru-space-16);
     max-width: 52ch;
   }
 
@@ -586,31 +580,31 @@
   /* ---- status ---- */
 
   .status {
-    padding: var(--termru-space-4);
+    padding: var(--termru-space-16);
     border-left: 2px solid var(--termru-accent);
     background: var(--termru-accent-soft);
   }
 
   .status.working {
-    border-left-color: var(--termru-muted);
-    background: var(--termru-subtle);
+    border-left-color: var(--termru-text-2);
+    background: var(--termru-side);
   }
 
   .status.attention,
   .status.offline {
-    border-left-color: var(--termru-warning);
-    background: var(--termru-warning-soft);
+    border-left-color: var(--termru-warn-text);
+    background: var(--termru-warn-soft);
   }
 
   .status.failed {
-    border-left-color: var(--termru-danger);
-    background: var(--termru-danger-soft);
+    border-left-color: var(--termru-err-text);
+    background: var(--termru-err-soft);
   }
 
   .state {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     margin: 0;
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
@@ -618,23 +612,23 @@
   }
 
   .ok .state {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .attention .state,
   .offline .state {
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
   }
 
   .failed .state {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .state-detail {
-    margin: var(--termru-space-1) 0 0;
+    margin: var(--termru-space-4) 0 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     overflow-wrap: anywhere;
   }
 
@@ -663,21 +657,21 @@
   }
 
   .facts {
-    margin: var(--termru-space-4) 0 0;
+    margin: var(--termru-space-16) 0 0;
   }
 
   .facts > div {
     display: grid;
     grid-template-columns: 160px minmax(0, 1fr);
-    gap: var(--termru-space-4);
-    padding: var(--termru-space-3) 0;
+    gap: var(--termru-space-16);
+    padding: var(--termru-space-12) 0;
     border-bottom: 1px solid var(--termru-border);
   }
 
   dt {
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   dd {
@@ -697,8 +691,8 @@
   .devices {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
-    margin: 0 0 var(--termru-space-3);
+    gap: var(--termru-space-12);
+    margin: 0 0 var(--termru-space-12);
     padding: 0;
     list-style: none;
   }
@@ -706,8 +700,8 @@
   .conflicts li {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-4);
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-16);
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-input);
   }
@@ -716,7 +710,7 @@
     display: flex;
     align-items: baseline;
     flex-wrap: wrap;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     margin: 0;
   }
 
@@ -726,11 +720,9 @@
   }
 
   .kind {
-    font-family: var(--termru-font-mono);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .diff {
@@ -743,19 +735,17 @@
 
   .diff th,
   .diff td {
-    padding: var(--termru-space-2) var(--termru-space-3) var(--termru-space-2) 0;
+    padding: var(--termru-space-8) var(--termru-space-12) var(--termru-space-8) 0;
     text-align: left;
     vertical-align: top;
     overflow-wrap: anywhere;
   }
 
   .diff thead th {
-    font-family: var(--termru-font-mono);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
-    font-weight: 400;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-2);
     border-bottom: 1px solid var(--termru-border);
   }
 
@@ -771,7 +761,7 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   /* ---- devices ---- */
@@ -781,15 +771,15 @@
     align-items: baseline;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-3) 0;
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-12) 0;
     border-bottom: 1px solid var(--termru-border);
   }
 
   .device-name {
     display: inline-flex;
     align-items: baseline;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     font-weight: 550;
   }
 
@@ -797,14 +787,14 @@
     padding: 2px 8px;
     border-radius: var(--termru-radius-input);
     background: var(--termru-accent-soft);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
     font-weight: 550;
   }
 
   .device-id {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   /* ---- form ---- */
@@ -812,22 +802,22 @@
   .form {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     max-width: 640px;
   }
 
   .pair {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
   }
 
   .problem {
     margin: 0;
-    padding: var(--termru-space-3) var(--termru-space-4);
-    border-left: 2px solid var(--termru-danger);
-    background: var(--termru-danger-soft);
-    color: var(--termru-danger);
+    padding: var(--termru-space-12) var(--termru-space-16);
+    border-left: 2px solid var(--termru-err-text);
+    background: var(--termru-err-soft);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     overflow-wrap: anywhere;
@@ -836,8 +826,8 @@
   .form-actions {
     display: flex;
     justify-content: flex-end;
-    gap: var(--termru-space-3);
-    padding-top: var(--termru-space-3);
+    gap: var(--termru-space-12);
+    padding-top: var(--termru-space-12);
   }
 
   /* ---- rail ---- */
@@ -846,32 +836,32 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   hr {
     width: 100%;
-    margin: var(--termru-space-3) 0 0;
+    margin: var(--termru-space-12) 0 0;
     border: none;
     border-top: 1px solid var(--termru-border);
   }
 
   .callout {
-    padding: var(--termru-space-4);
+    padding: var(--termru-space-16);
     border-left: 2px solid var(--termru-accent);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   .callout p {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .callout .wp-label.accent {
-    margin-bottom: var(--termru-space-1);
-    color: var(--termru-accent);
+    margin-bottom: var(--termru-space-4);
+    color: var(--termru-accent-text);
   }
 
   .plain {
@@ -880,13 +870,13 @@
     list-style: none;
     font-size: var(--termru-text-secondary-size);
     line-height: 26px;
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   @media (max-width: 960px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--termru-space-6);
+      gap: var(--termru-space-32);
     }
 
     .main {
@@ -895,7 +885,7 @@
 
     .rail {
       padding-left: 0;
-      padding-top: var(--termru-space-5);
+      padding-top: var(--termru-space-24);
       border-left: none;
       border-top: 1px solid var(--termru-border);
     }
@@ -906,7 +896,7 @@
 
     .facts > div {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--termru-space-1);
+      gap: var(--termru-space-4);
     }
   }
 </style>

@@ -209,7 +209,7 @@
   .question {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   /* Text the server sent: keep its line breaks, never let it overflow. */
@@ -217,17 +217,17 @@
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 
   .retry {
     margin: 0;
-    padding: var(--termru-space-3) var(--termru-space-4);
-    border-left: 2px solid var(--termru-danger);
-    background: var(--termru-danger-soft);
-    color: var(--termru-danger);
+    padding: var(--termru-space-12) var(--termru-space-16);
+    border-left: 2px solid var(--termru-err-text);
+    background: var(--termru-err-soft);
+    color: var(--termru-err-text);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
   }
@@ -235,7 +235,7 @@
   .remember {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     cursor: pointer;
@@ -244,6 +244,6 @@
   .more {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 </style>

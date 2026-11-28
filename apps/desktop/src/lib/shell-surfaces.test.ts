@@ -2,10 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The surfaces of the shell, as every frame draws them (frames 1, 4, 5, 8):
- * the window chrome (title bar) is the canvas, the navigation and the page are
- * the white surface, and the status bar is the secondary surface. The Hosts
- * page used to sit on the grey canvas while the work pages were white.
+ * The surfaces of the shell ("Obsidian"): the page is the base, the sidebar,
+ * the inspector, the window chrome and the status bar are the side surface, and
+ * what is raised (a selected row, a field, a menu) is one step above.
  */
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -23,25 +22,37 @@ function rule(source: string, selector: string): string {
 describe('the shell surfaces', () => {
   const shell = read('components/AppShell.svelte');
 
-  it('puts the page on the white surface, so Hosts matches the work pages', () => {
-    expect(rule(shell, '.outlet')).toMatch(/background:\s*var\(--termru-surface\)/);
+  it('puts the page on the base surface, so every page sits on the same ground', () => {
+    expect(rule(shell, '.outlet')).toMatch(/background:\s*var\(--termru-base\)/);
   });
 
-  it('keeps the window chrome on the canvas', () => {
-    expect(rule(shell, '.titlebar')).toMatch(/background:\s*var\(--termru-canvas\)/);
+  it('keeps the window chrome on the sidebar surface', () => {
+    expect(rule(shell, '.titlebar')).toMatch(/background:\s*var\(--termru-side\)/);
   });
 
-  it('draws the status bar on the secondary surface', () => {
-    const bar = read('components/StatusBar.svelte');
-    expect(rule(bar, '.statusbar')).toMatch(/background:\s*var\(--termru-subtle\)/);
+  it('draws the sidebar and the status bar on the side surface', () => {
+    expect(rule(read('components/Sidebar.svelte'), '.side')).toMatch(
+      /background:\s*var\(--termru-side\)/,
+    );
+    expect(rule(read('components/StatusBar.svelte'), '.status')).toMatch(
+      /background:\s*var\(--termru-side\)/,
+    );
   });
 
-  it('gives the Hosts page the same field fill as the work pages', () => {
-    const hosts = read('pages/HostsPage.svelte');
-    // No field of the page is filled with the canvas any more.
-    expect(hosts).not.toMatch(/background:\s*var\(--termru-bg\)/);
-    expect(hosts).toContain('var(--wp-field, var(--termru-surface))');
+  it('raises the selected row, and sets the inspector on the side surface', () => {
+    expect(rule(read('components/HostTable.svelte'), '.row.selected')).toMatch(
+      /background:\s*var\(--termru-raised\)/,
+    );
+    expect(rule(read('components/HostInspector.svelte'), '.insp')).toMatch(
+      /background:\s*var\(--termru-side\)/,
+    );
+  });
+
+  it('gives every field of a page and of a dialog its own fill', () => {
     const css = read('../app.css');
-    expect(css).toMatch(/\.outlet\s*\{\s*--wp-field:\s*var\(--termru-surface\)/);
+    // A page: a well one step above the base. A dialog is raised itself, so
+    // its fields sit one step down.
+    expect(css).toMatch(/--termru-field:\s*var\(--termru-raised\)/);
+    expect(css).toMatch(/\.sx-dialog\s*\{\s*--termru-field:\s*var\(--termru-base\)/);
   });
 });

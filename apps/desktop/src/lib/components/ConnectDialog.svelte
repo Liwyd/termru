@@ -186,7 +186,7 @@
   .remember {
     display: flex;
     align-items: flex-start;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     cursor: pointer;
@@ -198,12 +198,12 @@
 
   .note {
     display: block;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .connect {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 </style>

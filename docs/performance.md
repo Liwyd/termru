@@ -64,7 +64,7 @@ holds a constant number of rows.
 
 ### Scrolling 10,000 rows (a real browser)
 
-The rows are 70 px (frame 1), windowed with 6 rows of overscan. The rendered
+The rows are 52 px (the Obsidian redesign; 70 px when the measurements below were taken), windowed with 6 rows of overscan. The rendered
 rows sit in one window that is moved with a `transform`, inside a sizer as tall
 as the whole list, so a scroll does not lay the other rows out again; a row is
 `contain: layout style`. Password lookups (a keyring call per row) wait until

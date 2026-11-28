@@ -42,7 +42,7 @@
     display: grid;
     grid-template-columns: 208px minmax(0, 1fr);
     column-gap: 30px;
-    padding: var(--termru-space-5) 0;
+    padding: var(--termru-space-24) 0;
     border-top: 1px solid var(--termru-border);
   }
 
@@ -54,16 +54,16 @@
   .meta {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-width: 0;
   }
 
   .step span {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .step {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   h2 {
@@ -77,20 +77,20 @@
     margin: 0;
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .fields {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-width: 0;
   }
 
   @media (max-width: 860px) {
     .section {
       grid-template-columns: minmax(0, 1fr);
-      row-gap: var(--termru-space-4);
+      row-gap: var(--termru-space-16);
     }
   }
 </style>

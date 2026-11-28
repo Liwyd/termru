@@ -144,14 +144,14 @@
     list-style: none;
     display: flex;
     align-items: center;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     min-width: 0;
     max-width: 300px;
     height: 100%;
     /* The 2px rule sits in the tab; it only shows on the active one. */
-    padding: 0 var(--termru-space-3) 0 var(--termru-space-4);
+    padding: 0 var(--termru-space-12) 0 var(--termru-space-16);
     border-top: var(--termru-pane-rule-w) solid transparent;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     /* No transition: switching tabs is often a keyboard action. */
   }
 
@@ -160,8 +160,8 @@
     margin-bottom: -1px;
     padding-bottom: 1px;
     border-top-color: var(--termru-accent);
-    background: var(--termru-surface);
-    color: var(--termru-accent);
+    background: var(--termru-base);
+    color: var(--termru-accent-text);
   }
 
   .tab.drop-target {
@@ -170,8 +170,8 @@
 
   @media (hover: hover) and (pointer: fine) {
     .tab:not(.active):hover {
-      background: color-mix(in srgb, var(--termru-surface) 60%, transparent);
-      color: var(--termru-fg);
+      background: color-mix(in srgb, var(--termru-base) 60%, transparent);
+      color: var(--termru-text);
     }
   }
 
@@ -228,7 +228,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--termru-faint);
+    background: var(--termru-text-3);
   }
 
   .tab.active .dot.ready {
@@ -241,22 +241,22 @@
   }
 
   .dot.failed {
-    background: var(--termru-danger);
+    background: var(--termru-err-text);
   }
 
   .dot.closed {
     background: transparent;
-    border: 1.5px solid var(--termru-faint);
+    border: 1.5px solid var(--termru-text-3);
   }
 
   .rename {
     width: 10rem;
     min-height: 32px;
-    padding: 0 var(--termru-space-2);
+    padding: 0 var(--termru-space-8);
     border: var(--termru-border-w) solid var(--termru-accent);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-base);
+    color: var(--termru-text);
     font: inherit;
     font-size: var(--termru-text-control-size);
   }
@@ -273,13 +273,13 @@
     border: none;
     border-radius: var(--termru-radius-button);
     background: none;
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
   }
 
   @media (hover: hover) and (pointer: fine) {
     .close:hover {
-      background: color-mix(in srgb, var(--termru-fg) 7%, transparent);
-      color: var(--termru-fg);
+      background: color-mix(in srgb, var(--termru-text) 7%, transparent);
+      color: var(--termru-text);
     }
   }
 </style>

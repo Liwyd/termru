@@ -62,20 +62,21 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--termru-fg) 35%, transparent);
+    background: var(--termru-scrim);
     z-index: 60;
   }
 
   .dialog {
     width: min(24rem, calc(100vw - 2rem));
-    padding: var(--termru-space-5);
+    padding: var(--termru-space-24);
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-lg);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-raised);
+    color: var(--termru-text);
+    box-shadow: var(--termru-shadow-float);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   h2 {
@@ -89,23 +90,23 @@
     margin: 0;
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: var(--termru-space-3);
-    margin-top: var(--termru-space-2);
+    gap: var(--termru-space-12);
+    margin-top: var(--termru-space-8);
   }
 
   button {
     min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-4);
-    border: 1px solid var(--termru-border);
+    padding: 0 var(--termru-space-16);
+    border: none;
     border-radius: var(--termru-radius-button);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-raised-2);
+    color: var(--termru-text);
     font-family: inherit;
     font-size: var(--termru-text-control-size);
     font-weight: var(--termru-text-control-weight);
@@ -113,8 +114,7 @@
   }
 
   button.destructive {
-    border-color: var(--termru-danger);
-    background: var(--termru-danger);
-    color: var(--termru-on-danger);
+    background: var(--termru-err-text);
+    color: var(--termru-on-err);
   }
 </style>

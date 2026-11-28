@@ -65,8 +65,8 @@
 
 <style>
   button.danger-fill {
-    border-color: var(--termru-danger);
-    background: var(--termru-danger);
-    color: var(--termru-on-danger);
+    border-color: var(--termru-err-text);
+    background: var(--termru-err-text);
+    color: var(--termru-on-err);
   }
 </style>

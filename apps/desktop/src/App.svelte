@@ -2,22 +2,22 @@
   import { onMount } from 'svelte';
   import { api } from './lib/ipc';
   import { listen } from './lib/ipc-backend';
-  import { commandEntries, palette } from './lib/stores/palette.svelte';
-  import {
-    acceleratorFor,
-    expandAccelerator,
-    matchBinding,
-    type CommandId,
-  } from './lib/keybindings';
+  import { palette } from './lib/stores/palette.svelte';
+  import { buildPaletteEntries } from './lib/palette-entries';
+  import { matchBinding, type CommandId } from './lib/keybindings';
   import { shortcutAllowed } from './lib/shortcut-guard';
+  import { chrome } from './lib/stores/chrome.svelte';
   import { connectFlow } from './lib/stores/connect.svelte';
   import { execApproval } from './lib/stores/exec-approval.svelte';
   import { errorMessage, hosts } from './lib/stores/hosts.svelte';
+  import { intents } from './lib/stores/intents.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
   import { route } from './lib/stores/route.svelte';
   import { sessions } from './lib/stores/sessions.svelte';
   import { shortcuts } from './lib/stores/shortcuts.svelte';
+  import { sshImport } from './lib/stores/ssh-import.svelte';
   import { sync } from './lib/stores/sync.svelte';
+  import { terminalUi } from './lib/stores/terminal-ui.svelte';
   import { notify, notices } from './lib/notify.svelte';
   import AppShell from './lib/components/AppShell.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
@@ -34,7 +34,7 @@
   import PreferencesPage from './lib/pages/PreferencesPage.svelte';
   import SessionsPage from './lib/pages/SessionsPage.svelte';
   import SyncPage from './lib/pages/SyncPage.svelte';
-  import type { Host } from './lib/types';
+  import type { Host, ThemePreference } from './lib/types';
 
   // Apply the preferred theme to the document (design tokens follow it).
   // The motion and focus preferences drive the token overrides of Doc B.05
@@ -143,6 +143,9 @@
       case 'tab.duplicate':
         if (active) sessions.duplicate(active);
         break;
+      case 'tab.detach':
+        if (active) void sessions.moveToNewWindow(active);
+        break;
       case 'host.new':
         route.edit(null);
         break;
@@ -156,6 +159,36 @@
         // From "system" the toggle goes to the opposite of what is shown.
         const next = prefs.isDark ? 'light' : 'dark';
         void updatePrefs({ ...prefs.prefs, theme: next });
+        break;
+      }
+      case 'view.toggleSidebar':
+        chrome.toggleSidebar();
+        break;
+      case 'view.toggleInspector':
+        // The inspector belongs to the hosts page: show it there.
+        if (route.route !== 'hosts') route.go('hosts');
+        chrome.toggleInspector();
+        break;
+      case 'host.import':
+        void sshImport.show();
+        break;
+      case 'folder.new':
+        // The page may not exist yet: it consumes the request when it mounts.
+        intents.request({ kind: 'new-folder' });
+        route.go('folders');
+        break;
+      case 'identity.new':
+        intents.request({ kind: 'new-identity' });
+        route.go('identities');
+        break;
+      case 'sync.now':
+        void sync.syncNow();
+        break;
+      case 'pane.find': {
+        const pane = sessions.activePane;
+        if (!pane) break;
+        route.go('sessions');
+        terminalUi.openSearch(pane.id);
         break;
       }
       case 'view.increaseFont': {
@@ -218,25 +251,22 @@
     }
   }
 
-  /** Opens the command palette with the current commands and hosts. */
+  /** Opens the command palette: the running sessions, the hosts, the pages and the actions. */
   function openPalette(scope: 'all' | 'hosts' = 'all'): void {
-    const overrides = prefs.prefs.keybindings;
-    const entries =
+    const entries = buildPaletteEntries({
+      run: runCommand,
+      connect: (host) => void connectFlow.request(host),
+      openRunning: openHost,
+      setTheme: (theme: ThemePreference) => void updatePrefs({ ...prefs.prefs, theme }),
+    });
+    // "New tab" asks for a host: the palette with the hosts only, all of them in the list.
+    palette.show(
       scope === 'hosts'
-        ? []
-        : commandEntries(runCommand, (command) =>
-            expandAccelerator(acceleratorFor(command.id, overrides)),
-          );
-    // Every host, not only the ones the hosts page currently filters to.
-    for (const host of hosts.sortedAll) {
-      entries.push({
-        id: `host:${host.id}`,
-        title: `Connect to ${host.name}`,
-        group: 'Hosts',
-        run: () => void connectFlow.request(host),
-      });
-    }
-    palette.show(entries);
+        ? entries
+            .filter((entry) => entry.id.startsWith('host:'))
+            .map((entry) => ({ ...entry, searchOnly: false }))
+        : entries,
+    );
   }
 
   /** Attaches this window to a session that another window moved here. */
@@ -273,7 +303,7 @@
   }
 </script>
 
-<AppShell>
+<AppShell onpalette={() => openPalette()}>
   {#if route.route === 'hosts'}
     <HostsPage onconnect={(host) => void connectFlow.request(host)} onopen={openHost} />
   {:else if route.route === 'sessions'}

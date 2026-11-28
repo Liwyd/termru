@@ -1,62 +1,67 @@
 import type { ITheme } from '@xterm/xterm';
 
 /**
- * Terminal colour slots (Doc A.06).
+ * Terminal colour slots ("Obsidian" palette).
  *
- * The light set is the specification exactly: ANSI 0–7 / 8–15 as listed,
- * background `#FDFEFB`, selection `#D7E9E0`, cursor `#17665E`. Bright
- * colours deliberately keep dark hues on a light terminal, so a `ls` in
- * bright white stays readable instead of vanishing into the background.
+ * Both sets are built on the colours of the interface: the terminal surface,
+ * the ink and the champagne cursor come from `app.css` (`--termru-terminal`,
+ * `--termru-text`, `--termru-accent`), and the hues are the ones the design
+ * draws terminal output with (green prompts, blue directories, amber
+ * warnings, violet hashes). The remaining slots are filled to a full ANSI
+ * palette.
  *
- * The dark set is the same slot mapping with the hues opened up for a dark
- * background (a light-terminal red is unreadable on `#101413`).
+ * Every colour that is meant to be read (everything but the dark set's
+ * `black`, which is a background colour there) holds 4.5:1 on the terminal
+ * surface; `design-tokens.test.ts` checks it. The light set keeps its bright
+ * colours as dark as the normal ones, so a `ls` in bright white stays
+ * readable instead of vanishing into the background.
  */
-export const LIGHT_TERMINAL_THEME = {
-  background: '#FDFEFB',
-  foreground: '#202925',
-  cursor: '#17665E',
-  cursorAccent: '#FDFEFB',
-  selectionBackground: '#D7E9E0',
-  black: '#202925',
-  red: '#A3333D',
-  green: '#276440',
-  yellow: '#825713',
-  blue: '#315D99',
-  magenta: '#78518C',
-  cyan: '#17665E',
-  white: '#626D67',
-  brightBlack: '#626D67',
-  brightRed: '#A3333D',
-  brightGreen: '#276440',
-  brightYellow: '#825713',
-  brightBlue: '#315D99',
-  brightMagenta: '#78518C',
-  brightCyan: '#17665E',
-  brightWhite: '#202925',
+export const DARK_TERMINAL_THEME = {
+  background: '#0B0C0D',
+  foreground: '#ECEBE7',
+  cursor: '#CBB68C',
+  cursorAccent: '#0B0C0D',
+  selectionBackground: '#3A3424',
+  black: '#2A2B30',
+  red: '#E7796F',
+  green: '#8FD6A8',
+  yellow: '#E2B46C',
+  blue: '#8FB5E6',
+  magenta: '#C3A2E6',
+  cyan: '#84CFD0',
+  white: '#A3A199',
+  brightBlack: '#7D7C76',
+  brightRed: '#F19088',
+  brightGreen: '#A6E3BB',
+  brightYellow: '#EFC787',
+  brightBlue: '#A8C8EE',
+  brightMagenta: '#D3B8EE',
+  brightCyan: '#A0DFE0',
+  brightWhite: '#ECEBE7',
 } as const satisfies ITheme;
 
-export const DARK_TERMINAL_THEME = {
-  background: '#101413',
-  foreground: '#EEF1EE',
-  cursor: '#63C2B1',
-  cursorAccent: '#101413',
-  selectionBackground: '#26443C',
-  black: '#242A27',
-  red: '#F08F8A',
-  green: '#5FBC8D',
-  yellow: '#D9A552',
-  blue: '#7FA4DD',
-  magenta: '#B394D1',
-  cyan: '#63C2B1',
-  white: '#A7B0AB',
-  brightBlack: '#A7B0AB',
-  brightRed: '#F08F8A',
-  brightGreen: '#5FBC8D',
-  brightYellow: '#D9A552',
-  brightBlue: '#7FA4DD',
-  brightMagenta: '#B394D1',
-  brightCyan: '#63C2B1',
-  brightWhite: '#EEF1EE',
+export const LIGHT_TERMINAL_THEME = {
+  background: '#FCFBF8',
+  foreground: '#17161A',
+  cursor: '#8A7142',
+  cursorAccent: '#FCFBF8',
+  selectionBackground: '#E6DCC4',
+  black: '#17161A',
+  red: '#C4473D',
+  green: '#2D8052',
+  yellow: '#9A6A14',
+  blue: '#2F63A8',
+  magenta: '#7A4FB0',
+  cyan: '#1C7474',
+  white: '#5F5D57',
+  brightBlack: '#68665F',
+  brightRed: '#C4473D',
+  brightGreen: '#2D8052',
+  brightYellow: '#9A6A14',
+  brightBlue: '#2F63A8',
+  brightMagenta: '#7A4FB0',
+  brightCyan: '#1C7474',
+  brightWhite: '#17161A',
 } as const satisfies ITheme;
 
 /** xterm colour theme for the current app theme. */

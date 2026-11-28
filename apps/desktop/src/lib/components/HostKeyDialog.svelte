@@ -168,25 +168,24 @@
   .facts {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     margin: 0;
   }
 
   dt {
-    margin-bottom: var(--termru-space-1);
-    font-family: var(--termru-font-mono);
+    margin-bottom: var(--termru-space-4);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
+    font-weight: var(--termru-text-meta-weight);
   }
 
   .type {
-    margin-left: var(--termru-space-2);
+    margin-left: var(--termru-space-8);
     letter-spacing: 0;
     text-transform: none;
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
   }
 
   dd {
@@ -199,39 +198,39 @@
 
   /* The text to compare: boxed, so it reads as one unit. */
   .fingerprint {
-    padding: var(--termru-space-3);
+    padding: var(--termru-space-12);
     border: var(--termru-border-w) solid var(--termru-border);
     border-radius: var(--termru-radius-input);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
     user-select: all;
   }
 
   .fingerprint.new {
-    border-color: color-mix(in srgb, var(--termru-danger) 50%, var(--termru-border));
-    background: var(--termru-danger-soft);
+    border-color: color-mix(in srgb, var(--termru-err-text) 50%, var(--termru-border));
+    background: var(--termru-err-soft);
   }
 
   .how {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   code {
     font-family: var(--termru-font-mono);
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .callout {
-    padding: var(--termru-space-3) var(--termru-space-4);
-    border-left: 2px solid var(--termru-warning);
-    background: var(--termru-warning-soft);
+    padding: var(--termru-space-12) var(--termru-space-16);
+    border-left: 2px solid var(--termru-warn-text);
+    background: var(--termru-warn-soft);
   }
 
   .callout.danger {
-    border-left-color: var(--termru-danger);
-    background: var(--termru-danger-soft);
+    border-left-color: var(--termru-err-text);
+    background: var(--termru-err-soft);
   }
 
   .callout p {
@@ -242,34 +241,33 @@
   }
 
   .callout .label {
-    margin-bottom: var(--termru-space-1);
-    font-family: var(--termru-font-mono);
+    margin-bottom: var(--termru-space-4);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
+    font-weight: var(--termru-text-meta-weight);
   }
 
   .callout.danger .label {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .more {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .verify {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
   }
 
   /* A changed key is not a button to press lightly: filled, in danger. */
   :global(.sx-dialog) .verify.danger {
-    background: var(--termru-danger);
-    border-color: var(--termru-danger);
-    color: var(--termru-on-danger);
+    background: var(--termru-err-text);
+    border-color: var(--termru-err-text);
+    color: var(--termru-on-err);
   }
 </style>

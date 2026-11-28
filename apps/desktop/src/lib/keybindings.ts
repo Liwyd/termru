@@ -25,16 +25,24 @@ export type CommandId =
   | 'tab.next'
   | 'tab.previous'
   | 'tab.duplicate'
+  | 'tab.detach'
   | 'host.new'
   | 'host.search'
   | 'view.toggleTheme'
   | 'view.increaseFont'
   | 'view.decreaseFont'
+  | 'view.toggleSidebar'
+  | 'view.toggleInspector'
+  | 'host.import'
+  | 'folder.new'
+  | 'identity.new'
   | 'sync.open'
+  | 'sync.now'
   | 'settings.open'
   | 'pane.splitRight'
   | 'pane.splitDown'
   | 'pane.close'
+  | 'pane.find'
   | 'pane.next'
   | 'pane.previous'
   | 'route.hosts'
@@ -167,6 +175,12 @@ export const COMMANDS: Command[] = [
     group: 'Tabs',
   },
   {
+    id: 'tab.detach',
+    title: 'Move the session to a new window',
+    accelerator: '',
+    group: 'Tabs',
+  },
+  {
     id: 'host.new',
     title: 'Add host',
     accelerator: 'Mod+N',
@@ -180,10 +194,28 @@ export const COMMANDS: Command[] = [
     pcAccelerator: 'Mod+Shift+F',
     group: 'Hosts',
   },
+  { id: 'host.import', title: 'Import hosts from ~/.ssh/config', accelerator: '', group: 'Hosts' },
+  { id: 'folder.new', title: 'New folder', accelerator: '', group: 'Hosts' },
+  {
+    id: 'identity.new',
+    title: 'New identity (generate a key)',
+    accelerator: '',
+    group: 'Hosts',
+  },
   { id: 'view.toggleTheme', title: 'Toggle theme', accelerator: 'Mod+Shift+L', group: 'View' },
   { id: 'view.increaseFont', title: 'Increase font size', accelerator: 'Mod+Plus', group: 'View' },
   { id: 'view.decreaseFont', title: 'Decrease font size', accelerator: 'Mod+Minus', group: 'View' },
+  {
+    id: 'view.toggleSidebar',
+    title: 'Toggle sidebar',
+    accelerator: 'Mod+B',
+    // Ctrl+B is the shell's "back one character".
+    pcAccelerator: 'Mod+Shift+B',
+    group: 'View',
+  },
+  { id: 'view.toggleInspector', title: 'Toggle host inspector', accelerator: '', group: 'View' },
   { id: 'sync.open', title: 'Cloud sync', accelerator: 'Mod+Shift+S', group: 'Sync' },
+  { id: 'sync.now', title: 'Sync now', accelerator: '', group: 'Sync' },
   { id: 'settings.open', title: 'Settings', accelerator: 'Mod+,', group: 'View' },
   {
     id: 'pane.splitRight',
@@ -205,6 +237,7 @@ export const COMMANDS: Command[] = [
     pcAccelerator: 'Mod+Shift+Q',
     group: 'Panes',
   },
+  { id: 'pane.find', title: 'Find in the terminal', accelerator: '', group: 'Panes' },
   { id: 'pane.next', title: 'Next pane', accelerator: 'Mod+Alt+ArrowRight', group: 'Panes' },
   { id: 'pane.previous', title: 'Previous pane', accelerator: 'Mod+Alt+ArrowLeft', group: 'Panes' },
   // Route commands are reachable from the palette; they carry no default
@@ -281,6 +314,22 @@ export function acceleratorFor(
 ): string {
   const command = COMMANDS.find((entry) => entry.id === commandId);
   return overrides[commandId] ?? (command ? defaultAccelerator(command, mac) : '');
+}
+
+/**
+ * A chord for a small key cap (`Ctrl K`, `Ctrl ⇧ P`, `⌘K`): the parts apart,
+ * Shift as its glyph. The full text (`Ctrl+Shift+P`) is `acceleratorLabel`.
+ */
+export function compactChord(accelerator: string, mac: boolean = isMac()): string {
+  const glyphs: Record<string, string> = {
+    Shift: '⇧',
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+  };
+  const parts = acceleratorParts(accelerator, mac).map((part) => glyphs[part] ?? part);
+  return mac ? parts.join('') : parts.join(' ');
 }
 
 /**

@@ -107,8 +107,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: var(--termru-space-4);
-    background: color-mix(in srgb, var(--termru-fg) 32%, transparent);
+    padding: var(--termru-space-16);
+    background: var(--termru-scrim);
     opacity: 0;
     pointer-events: none;
     transition: opacity var(--motion-fast) var(--ease-out);
@@ -122,17 +122,17 @@
 
   .dialog {
     width: min(26rem, 100%);
-    max-height: calc(100vh - 2 * var(--termru-space-4));
+    max-height: calc(100vh - 2 * var(--termru-space-16));
     overflow: auto;
-    padding: var(--termru-space-5);
+    padding: var(--termru-space-24);
     border: var(--termru-border-w) solid var(--termru-border);
     border-radius: var(--termru-radius-lg);
-    background: var(--termru-surface);
-    color: var(--termru-fg);
+    background: var(--termru-raised);
+    color: var(--termru-text);
     box-shadow: var(--termru-shadow-float);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     transform: scale(var(--dialog-scale));
     transition: transform var(--motion-fast) var(--ease-out);
   }
@@ -151,18 +151,18 @@
   }
 
   .dialog.danger {
-    border-color: color-mix(in srgb, var(--termru-danger) 50%, var(--termru-border));
+    border-color: color-mix(in srgb, var(--termru-err-text) 50%, var(--termru-border));
   }
 
   .dialog.danger h2 {
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   /* The body is the dialog's own column, form or not. */
   form {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
   }
 
   h2 {
@@ -174,7 +174,7 @@
 
   .description {
     margin: 0;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
   }
@@ -190,7 +190,7 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: var(--termru-space-3);
-    margin-top: var(--termru-space-2);
+    gap: var(--termru-space-12);
+    margin-top: var(--termru-space-8);
   }
 </style>

@@ -82,12 +82,14 @@ afterEach(() => {
 });
 
 describe('the page', () => {
-  it('has the anatomy of a page: breadcrumb, title, one line, Restore defaults', async () => {
+  it('has the anatomy of a page: one header line with the title and Restore defaults', async () => {
     await mountPage();
-    expect(target.querySelector('.crumbs')?.textContent).toMatch(/Workspace\s*\/\s*This device/);
-    expect(target.querySelector('h1')?.textContent).toBe('Preferences');
-    expect(target.querySelector('.description')?.textContent).toContain('accessibility');
-    expect(findButton(target, 'Restore defaults')).toBeTruthy();
+    // No breadcrumb and no sentence under the title.
+    expect(target.querySelector('.crumbs, nav[aria-label="Breadcrumb"], .description')).toBeNull();
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Preferences');
+    expect(
+      target.querySelector('header.head')?.contains(findButton(target, 'Restore defaults')),
+    ).toBe(true);
     expect(target.querySelector('.workpage')).not.toBeNull();
   });
 
@@ -208,7 +210,7 @@ describe('saving', () => {
   it('shows the live preview with the chosen font, size and cursor', async () => {
     await mountPage();
     const screen = () => target.querySelector<HTMLElement>('[data-testid="preview-screen"]');
-    expect(screen()?.style.fontSize).toBe('14px');
+    expect(screen()?.style.fontSize).toBe('13px');
     type(field('pref-size'), '20');
     await vi.waitFor(() => expect(screen()?.style.fontSize).toBe('20px'));
     choose(select('Cursor'), 'underline');
@@ -225,7 +227,7 @@ describe('saving', () => {
     await vi.waitFor(() => expect(notices.visible.length).toBeGreaterThan(0));
     expect(notices.visible[0].kind).toBe('error');
     expect(notices.visible[0].description).toContain('disk full');
-    await vi.waitFor(() => expect(prefs.prefs.terminal.font_size).toBe(14));
+    await vi.waitFor(() => expect(prefs.prefs.terminal.font_size).toBe(13));
   });
 });
 

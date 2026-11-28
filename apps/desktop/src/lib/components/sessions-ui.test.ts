@@ -362,19 +362,22 @@ describe('StatusBar', () => {
     flushSync();
   }
 
-  it('does not claim there are no hosts when they could not be read, and counts a big library', () => {
+  it('says when the hosts could not be read, and offers the list keys only when it can be used', () => {
     hosts.hosts = [];
     hosts.error = 'the store is locked';
     route.route = 'hosts';
     mountBar();
     expect(target.textContent).toContain('Could not read the hosts');
-    expect(target.textContent).not.toContain('No saved hosts');
+    expect(target.textContent).not.toContain('↑↓ select');
     hosts.error = null;
     flushSync();
-    expect(target.textContent).toContain('No saved hosts');
-    hosts.hosts = Array.from({ length: 10_005 }, (_, i) => host(`h-${i}`));
+    expect(target.textContent).not.toContain('Could not read the hosts');
+    // Nothing to select yet.
+    expect(target.textContent).not.toContain('↑↓ select');
+    hosts.hosts = [host('web-1')];
     flushSync();
-    expect(target.textContent).toContain('10,005 hosts');
+    expect(target.textContent).toContain('↑↓ select');
+    expect(target.textContent).toContain('↵ open');
     hosts.hosts = [];
   });
 
@@ -410,12 +413,12 @@ describe('StatusBar', () => {
   it('advertises the palette chord the platform uses, and follows a rebinding', () => {
     mountBar();
     // Linux/Windows: Ctrl+K belongs to the shell.
-    expect(target.textContent).toContain('Ctrl+Shift+P');
+    expect(target.textContent).toContain('Ctrl ⇧ P command');
     expect(target.textContent).not.toContain('Ctrl K');
 
     prefs.prefs = { ...prefs.prefs, keybindings: { 'palette.open': 'Ctrl+Alt+Space' } };
     flushSync();
-    expect(target.textContent).toContain('Ctrl+Alt+Space');
+    expect(target.textContent).toContain('Ctrl Alt Space command');
     prefs.prefs = { ...prefs.prefs, keybindings: {} };
   });
 });
@@ -429,24 +432,23 @@ describe('HostsPage', () => {
     flushSync();
   }
 
-  it('hides the count line, the filters and the tabs in the error state', () => {
+  it('hides the count, the order chips and the search in the error state', () => {
     hosts.hosts = [];
     hosts.error = 'database is locked';
     mountPage();
     expect(target.textContent).toContain('database is locked');
-    expect(target.textContent).not.toContain('No saved connections');
-    expect(target.textContent).not.toContain('No sessions running');
-    expect(target.querySelector('[aria-label="Filter hosts"]')).toBeNull();
+    expect(target.querySelector('.count')).toBeNull();
+    expect(target.querySelector('[aria-label="Order the hosts"]')).toBeNull();
     expect(target.querySelector('input[type="search"]')).toBeNull();
     expect(target.querySelector('[role="table"]')).toBeNull();
     expect(findButton(target, 'Retry')).toBeTruthy();
   });
 
-  it('shows the count line and the tabs when there is no error', () => {
+  it('shows the count and the order chips when there is no error', () => {
     hosts.hosts = [host('web-1')];
     mountPage();
-    expect(target.textContent).toContain('One saved connection.');
-    expect(target.querySelector('[aria-label="Filter hosts"]')).not.toBeNull();
+    expect(target.querySelector('.count')?.textContent).toBe('1');
+    expect(target.querySelector('[aria-label="Order the hosts"]')).not.toBeNull();
   });
 
   it('does not announce a deletion that failed', async () => {

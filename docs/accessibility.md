@@ -33,7 +33,7 @@ canvas there, so these rules are switched off in `src/lib/test-support/axe.ts`
 | Rule | Why it is off | What covers it instead |
 |---|---|---|
 | `color-contrast`, `color-contrast-enhanced` | needs rendered colours | `design-tokens.test.ts` computes the WCAG ratio of every text and background pair of both palettes |
-| `target-size` | needs element rectangles | by hand: row actions are 32 px high, the More button 28 px wide (WCAG 2.2 asks for 24); buttons are 40 px |
+| `target-size` | needs element rectangles | by hand: row actions are 28 px high, the More button 28 px wide (WCAG 2.2 asks for 24); buttons are 32 px, the sidebar items 30 px |
 | `scrollable-region-focusable` | needs scroll sizes | by hand: the scrolling regions (the hosts table, the folder tree) hold focusable rows and buttons |
 | `link-in-text-block` | needs computed colours | there are no inline links in running text; links are buttons |
 
@@ -42,9 +42,12 @@ Run it with `npx vitest run src/lib/a11y.test.ts --maxWorkers=1` in
 
 ## Conventions
 
-- **Landmarks.** The title bar is the banner; `nav` "Primary" holds the six
-  pages; the page is `main`; the status bar is a `status` region; notices are
-  the region "Notices". Every page has one `h1` (the page title).
+- **Landmarks.** The sidebar is the `aside` "Sidebar"; its `nav` "Primary" holds
+  the running sessions, the library and the folders, and the group "Workspace"
+  holds Identities, Sync and Preferences; the page is `main`; the status bar is
+  the `footer` "Status" (it is not a live region: the time since the last sync
+  would be read out every half minute); notices are the region "Notices". Every
+  page has one `h1` (the page title, in the one-line header).
 - **Names.** Every control has a visible label or an `aria-label`; an icon
   button says what it does and, for rows, to which host ("More actions for
   atlas-prod"). A toggle is a `switch` with the name of its setting.
@@ -60,7 +63,9 @@ Run it with `npx vitest run src/lib/a11y.test.ts --maxWorkers=1` in
   focuses its first control (the safe answer where there is one: Cancel, or the
   host key question's Cancel) and gives the focus back to what opened it.
 - **Status is never colour alone.** A connected session is a square glyph plus
-  the word "Connected"; the active page, tab and filter also change weight.
+  the word "Connected", a live host says "Live", the sync dot of the sidebar has
+  text for screen readers ("signed in", "offline", "needs attention"); the
+  current page of the sidebar carries `aria-current="page"` and a raised item.
 - **Motion.** Nothing a key starts is animated (palette, tab and route
   switches, pane focus, menus opened with the keyboard). Reduced motion (the
   operating system setting or Preferences, Reduce motion) removes every move
@@ -69,13 +74,15 @@ Run it with `npx vitest run src/lib/a11y.test.ts --maxWorkers=1` in
 
 ## Keyboard checklist
 
-Every page is reached from the nav (Tab to its item; Enter or Space opens it;
-each page is one Tab stop) or with the command palette (`Ctrl+Shift+P`, type
-"Go to Folders"). From anywhere:
+Every page is reached from the sidebar (Tab to its item; Enter or Space opens
+it; each item is one Tab stop) or with the command palette (`Ctrl+Shift+P`, type
+"Go to Folders"). The sidebar collapses to an icon rail (`Ctrl+Shift+B` or its
+button); the items keep their names. From anywhere:
 
 | Key | Does |
 |---|---|
-| `Ctrl+Shift+P` | Command palette: type, Up and Down choose, Enter runs, Escape closes |
+| `Ctrl+Shift+P` | Command palette: type, Up and Down choose, Enter runs, `Shift+Enter` runs the second action (edit a host), Escape closes |
+| `Ctrl+Shift+B` | Collapse or expand the sidebar |
 | `Ctrl+Shift+N` | Add a host |
 | `Ctrl+Shift+F` | Search hosts (Hosts page; focuses and selects the field) |
 | `Ctrl+Shift+S` / `Ctrl+,` | Sync / Preferences |
@@ -88,26 +95,30 @@ Shortcuts do not fire while a text field has the focus (except the palette
 chord) or while a dialog is open.
 
 The tab order of every page starts in the shell: the window buttons (Windows
-only: Linux keeps the native title bar, macOS the traffic lights), the six nav items, then the page, then the notices (a notice's
-buttons come last, in the order the notices appeared). The status bar has no
-focusable controls.
+only: Linux keeps the native title bar, macOS the traffic lights), the sidebar
+(collapse, "Search or run", the live sessions, the library, the folders with
+their New folder button, then Identities, Sync, Preferences), then the page,
+then the notices (a notice's buttons come last, in the order the notices
+appeared). The status bar has no focusable controls.
 
 ### Hosts
 
-Order: New host, Search hosts, Folder, the filter group (All hosts, Favorites,
-Recent, Unfiled), the table, the running-sessions banner.
+Order: the order chips (Recent activity, Name, Folder), Search hosts, Import
+~/.ssh/config, the inspector toggle, New host, the table, the running-sessions
+strip, then the inspector. The view (All hosts, Favorites, Recent, a folder,
+Unfiled) is chosen in the sidebar.
 
 | Control | How | Operate |
 |---|---|---|
+| Order chips | Tab through three toggle buttons | Enter or Space; the pressed one says `aria-pressed` and is raised. Their names are the full labels also where the header shows the short ones |
 | Search | `Ctrl+Shift+F` or Tab | Type; the table filters as you type. The clear button of the search field empties it |
-| Folder | Tab | Arrow keys change the folder (a native select) |
-| Filter group | Tab through four toggle buttons | Enter or Space; the pressed one says `aria-pressed` and is weightier |
-| Table | Tab once: the table has one stop, the current row | Up, Down, Home, End, PageUp, PageDown move between rows (a row scrolls into view); Enter connects (or opens the running session); `E` or `F2` edits; the Menu key or `Shift+F10` opens the row menu |
-| Buttons of a row | Tab from the row: Star, Connect or Open, Edit, More (only the current row's buttons are tab stops) | Enter or Space. Star toggles the favorite (`aria-pressed`). More opens a menu |
-| Row menu | Opens on the first entry | Up, Down, Home, End move; Enter chooses; Escape closes and returns to the button; Tab leaves |
+| Table | Tab once: the table has one stop, the selected row | Up, Down, Home, End, PageUp, PageDown move the selection (a row scrolls into view; the inspector follows without any motion); Enter connects (or opens the running session); `E` or `F2` edits; the Menu key or `Shift+F10` opens the row menu |
+| Buttons of a row | Tab from the row: Star, Connect or Open, More (only the selected row's buttons are tab stops; they show for the row you point at, the selected row and the row the keyboard is in) | Enter or Space. Star toggles the favorite (`aria-pressed`). More opens a menu |
+| Row menu | Opens on the first entry | Open running session (when live), Connect, Edit…, favorite, Delete. Up, Down, Home, End move; Enter chooses; Escape closes and returns to the button; Tab leaves |
 | Delete | row menu, then a confirmation | The confirmation focuses Cancel; Tab to Delete |
-| Banner | Tab after the table | "Return to …" opens the first running session |
-| Empty, filtered-empty, error | the state's button | New host, Clear filters, Retry |
+| Strip | Tab after the table | "Return to …" opens the first running session |
+| Inspector | Tab after the strip; the toggle in the header hides it (it is also left out below about 820 px of room) | Connect or Open session, Edit and More work as the row's; Review… opens the approval of synced settings. Its content changes with the selection, with a 120 ms fade only for a click |
+| Empty, filtered-empty, error | the state's buttons | New host and Import ~/.ssh/config, Clear filters, Retry |
 
 ### Sessions
 
@@ -129,8 +140,8 @@ bar (Reconnect, Close session).
 
 ### Host editor
 
-Order: the "Hosts" crumb, then the six sections top to bottom, the rail, the
-footer.
+Order: the back button of the header ("Back to hosts"), then the six sections
+top to bottom, the rail, the footer.
 
 | Section | Controls |
 |---|---|
@@ -151,7 +162,7 @@ control points at.
 
 A field is checked when you leave it. Save host with a problem focuses the
 first field that has one and announces "Fix N fields before saving". Leaving
-with unsaved changes (the Hosts crumb, a nav item, Cancel, closing the window)
+with unsaved changes (the back button, a sidebar item, Cancel, closing the window)
 asks first: the question focuses Keep editing; Escape keeps editing.
 
 ### Forwards menu, approval review and SSH config import
@@ -256,8 +267,8 @@ submits a form dialog. The focus returns to the control that opened it.
 - **`role="toolbar"` without arrow keys.** The session toolbar and every
   button in it is a tab stop (about five); the toolbar pattern would make it
   one stop with Left and Right inside.
-- **No skip link.** Six nav items (and the window buttons on Windows) come
-  before the page content.
+- **No skip link.** The sidebar's items (a dozen, more with many folders) and
+  the window buttons on Windows come before the page content.
 - **Contrast and target size are not measured in a browser.** The palette
   pairs are computed from the tokens; hover and selection tints (the accent
   tint of a selected row under muted text) are not.

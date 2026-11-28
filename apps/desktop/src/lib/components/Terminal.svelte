@@ -217,7 +217,7 @@
      (24px in a split, 28px alone, to line up with the toolbar). */
   .terminal {
     height: 100%;
-    padding: var(--termru-space-3) var(--pane-pad-x, 24px) var(--termru-space-3);
+    padding: var(--termru-space-12) var(--pane-pad-x, 24px) var(--termru-space-12);
     background: var(--termru-terminal);
     overflow: hidden;
   }
@@ -229,16 +229,16 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--termru-space-3);
-    padding: var(--termru-space-4);
+    gap: var(--termru-space-12);
+    padding: var(--termru-space-16);
     background: color-mix(in srgb, var(--termru-terminal) 88%, transparent);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     font-size: var(--termru-text-body-size);
     line-height: var(--termru-text-body-lh);
   }
 
   .overlay.dead {
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .dead-title {
@@ -248,7 +248,7 @@
 
   .dead-detail {
     margin: 0;
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
     max-width: 40rem;
     text-align: center;
     font-size: var(--termru-text-secondary-size);
@@ -256,7 +256,7 @@
   }
 
   .dead-detail.muted {
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .spinner {

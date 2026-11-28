@@ -514,11 +514,13 @@ describe('the adapter (Toasts.svelte)', () => {
     expect(items()[0].classList.contains('leaving')).toBe(true);
   });
 
-  it('is at the top right, under the title bar and the navigation, above the page', () => {
+  it('is at the top right, under the page header, above the page', () => {
     // jsdom has no layout: the placement is in the stylesheet of the component.
     const source = readSource('components/Toasts.svelte');
-    expect(source).toMatch(/top:\s*calc\(var\(--termru-titlebar-h\)\s*\+\s*var\(--termru-nav-h\)/);
-    expect(source).toMatch(/right:\s*var\(--termru-space-5\)/);
+    expect(source).toMatch(
+      /top:\s*calc\(var\(--termru-chrome-top, 0px\)\s*\+\s*var\(--termru-header-h\)/,
+    );
+    expect(source).toMatch(/right:\s*var\(--termru-space-24\)/);
     expect(source).toMatch(/position:\s*fixed/);
     // The strip does not block the page; only a notice takes clicks.
     expect(source).toMatch(/pointer-events:\s*none/);

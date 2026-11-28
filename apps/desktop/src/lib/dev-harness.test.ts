@@ -270,7 +270,7 @@ describe('mock backend: fixtures', () => {
 
   it('starts signed out of sync with the default preferences', async () => {
     expect((await api.syncStatus()).signed_in).toBe(false);
-    expect((await api.prefsGet()).terminal.font_size).toBe(14);
+    expect((await api.prefsGet()).terminal.font_size).toBe(13);
   });
 
   it('mutates the in-memory state', async () => {

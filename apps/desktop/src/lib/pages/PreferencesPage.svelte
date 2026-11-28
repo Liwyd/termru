@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -18,6 +18,7 @@
   } from '../keybindings';
   import { notify } from '../notify.svelte';
   import { errorMessage } from '../stores/hosts.svelte';
+  import { intents } from '../stores/intents.svelte';
   import { defaultPrefs, prefs } from '../stores/prefs.svelte';
   import { shortcuts } from '../stores/shortcuts.svelte';
   import type {
@@ -60,8 +61,9 @@
 
   const CUSTOM = '__custom__';
 
-  /** Fonts a terminal can use. Only IBM Plex Mono is bundled. */
+  /** Fonts a terminal can use. Geist Mono (the default) and IBM Plex Mono are bundled. */
   const FONTS: { value: string; label: string }[] = [
+    { value: 'Geist Mono, monospace', label: 'Geist Mono' },
     { value: 'IBM Plex Mono, monospace', label: 'IBM Plex Mono' },
     {
       value: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -284,32 +286,40 @@
       .then((result) => (info = result))
       .catch(() => (infoFailed = true));
   });
+
+  // "Preferences: Keyboard shortcuts" from the palette: the section comes into
+  // view (the request may arrive before this page exists).
+  $effect(() => {
+    const intent = intents.take('preferences-section');
+    if (!intent) return;
+    void tick().then(() => {
+      const heading = document.getElementById(intent.id);
+      heading?.scrollIntoView?.({ block: 'start' });
+      heading?.focus({ preventScroll: true });
+    });
+  });
 </script>
 
 <div class="workpage prefs">
-  <div class="scroll">
-    <PageHeader
-      crumbs={[{ label: 'Workspace' }, { label: 'This device' }]}
-      title="Preferences"
-      description="Terminal appearance, keyboard behavior and accessibility."
-    >
-      {#snippet actions()}
-        <button type="button" class="quiet restore" onclick={() => (restoreOpen = true)}>
-          Restore defaults
-        </button>
-      {/snippet}
-    </PageHeader>
+  <PageHeader title="Preferences">
+    {#snippet actions()}
+      <button type="button" class="quiet restore" onclick={() => (restoreOpen = true)}>
+        Restore defaults
+      </button>
+    {/snippet}
+  </PageHeader>
 
+  <div class="scroll">
     <div class="columns">
       <div class="main">
         <section aria-labelledby="appearance-label">
-          <p class="section-label" id="appearance-label">TERMINAL / APPEARANCE</p>
+          <p class="section-label" id="appearance-label" tabindex="-1">Terminal appearance</p>
 
           <div class="fields">
             <Field
               label="Font family"
               id="pref-font"
-              hint="Only IBM Plex Mono ships with Termru. Others need to be installed."
+              hint="Geist Mono and IBM Plex Mono ship with Termru. Others need to be installed."
             >
               {#snippet control(attrs)}
                 <select {...attrs} value={fontChoice} onchange={chooseFont}>
@@ -496,7 +506,7 @@
         </section>
 
         <section class="shortcuts" aria-labelledby="shortcuts-label">
-          <p class="section-label" id="shortcuts-label">KEYBOARD SHORTCUTS</p>
+          <p class="section-label" id="shortcuts-label" tabindex="-1">Keyboard shortcuts</p>
 
           <table>
             <thead>
@@ -612,7 +622,7 @@
 
       <aside class="rail" aria-label="Accessibility, notices and about">
         <section aria-labelledby="motion-label">
-          <p class="section-label" id="motion-label">MOTION / ACCESSIBILITY</p>
+          <p class="section-label" id="motion-label" tabindex="-1">Motion and accessibility</p>
           <div class="row">
             <div class="text">
               <p class="name" id="pref-motion-name">Reduce motion</p>
@@ -652,7 +662,7 @@
         <hr />
 
         <section aria-labelledby="notices-label">
-          <p class="section-label" id="notices-label">NOTIFICATIONS</p>
+          <p class="section-label" id="notices-label" tabindex="-1">Notifications</p>
           <div class="row">
             <div class="text">
               <p class="name" id="pref-notices-name">Routine notices</p>
@@ -681,7 +691,7 @@
           </div>
 
           <div class="callout">
-            <p class="callout-label">QUIET FEEDBACK</p>
+            <p class="callout-label">Quiet feedback</p>
             <p>
               Routine notices never take focus. Important connection errors stay next to the session
               so you can act when ready.
@@ -692,7 +702,7 @@
         <hr />
 
         <section aria-labelledby="about-label">
-          <p class="section-label" id="about-label">ABOUT</p>
+          <p class="section-label" id="about-label" tabindex="-1">About</p>
           {#if info}
             <p class="about-name">Termru</p>
             <p class="about-meta">
@@ -732,10 +742,10 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-6);
+    padding: var(--termru-page-inset-top) var(--termru-page-inset-x) var(--termru-space-32);
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
+    gap: var(--termru-space-24);
   }
 
   .restore {
@@ -753,29 +763,28 @@
   .main {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-6);
-    padding-right: var(--termru-space-8);
+    gap: var(--termru-space-32);
+    padding-right: var(--termru-space-48);
     min-width: 0;
   }
 
   .rail {
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-5);
-    padding-left: var(--termru-space-8);
+    gap: var(--termru-space-24);
+    padding-left: var(--termru-space-48);
     border-left: 1px solid var(--termru-border);
     min-width: 0;
     align-self: start;
   }
 
   .section-label {
-    margin: 0 0 var(--termru-space-4);
-    font-family: var(--termru-font-mono);
+    margin: 0 0 var(--termru-space-16);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
+    font-weight: var(--termru-text-meta-weight);
   }
 
   hr {
@@ -790,13 +799,13 @@
   .fields {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 112px 112px 172px;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     align-items: start;
-    margin-bottom: var(--termru-space-4);
+    margin-bottom: var(--termru-space-16);
   }
 
   .custom {
-    margin-bottom: var(--termru-space-4);
+    margin-bottom: var(--termru-space-16);
   }
 
   .unit {
@@ -810,11 +819,11 @@
   .unit .suffix {
     position: absolute;
     top: 50%;
-    right: var(--termru-space-3);
+    right: var(--termru-space-12);
     transform: translateY(-50%);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-secondary-size);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     pointer-events: none;
   }
 
@@ -838,8 +847,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-5);
-    padding: var(--termru-space-4) 0;
+    gap: var(--termru-space-24);
+    padding: var(--termru-space-16) 0;
   }
 
   .text {
@@ -857,25 +866,25 @@
     margin: 2px 0 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .error {
-    margin: var(--termru-space-1) 0 0;
+    margin: var(--termru-space-4) 0 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-danger);
+    color: var(--termru-err-text);
   }
 
   .error.conflict {
-    margin-top: var(--termru-space-3);
+    margin-top: var(--termru-space-12);
   }
 
   .note {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   /* A compact select, as the frame's small mono "Block ▾". */
@@ -884,7 +893,7 @@
     width: auto;
     min-width: 132px;
     min-height: 36px;
-    padding-left: var(--termru-space-3);
+    padding-left: var(--termru-space-12);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-secondary-size);
   }
@@ -892,7 +901,7 @@
   /* ---- shortcuts ---- */
 
   .shortcuts {
-    padding-top: var(--termru-space-5);
+    padding-top: var(--termru-space-24);
     border-top: 1px solid var(--termru-border);
   }
 
@@ -904,10 +913,10 @@
   }
 
   thead th {
-    padding: 0 var(--termru-space-3) var(--termru-space-2) 0;
+    padding: 0 var(--termru-space-12) var(--termru-space-8) 0;
     text-align: left;
     font-weight: 400;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   tbody th[scope='row'] {
@@ -918,21 +927,19 @@
 
   td,
   tbody th[scope='row'] {
-    padding: var(--termru-space-2) var(--termru-space-3) var(--termru-space-2) 0;
+    padding: var(--termru-space-8) var(--termru-space-12) var(--termru-space-8) 0;
     border-top: 1px solid color-mix(in srgb, var(--termru-border) 55%, transparent);
     vertical-align: middle;
   }
 
   tr.group th {
-    padding: var(--termru-space-4) 0 var(--termru-space-1);
+    padding: var(--termru-space-16) 0 var(--termru-space-4);
     border-top: none;
     text-align: left;
-    font-family: var(--termru-font-mono);
+    font-family: var(--termru-font-ui);
     font-size: var(--termru-text-meta-size);
-    font-weight: 400;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--termru-muted);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-2);
   }
 
   .keys {
@@ -949,12 +956,12 @@
 
   .recording {
     font-family: var(--termru-font-mono);
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .unbound,
   .fixed {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     font-family: var(--termru-font-mono);
   }
 
@@ -966,7 +973,7 @@
 
   button.small {
     min-height: 32px;
-    padding: 0 var(--termru-space-2);
+    padding: 0 var(--termru-space-8);
     font-size: var(--termru-text-secondary-size);
   }
 
@@ -975,18 +982,18 @@
   .specimen {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     max-width: 330px;
-    margin: var(--termru-space-3) 0 var(--termru-space-4);
-    padding: var(--termru-space-4);
+    margin: var(--termru-space-12) 0 var(--termru-space-16);
+    padding: var(--termru-space-16);
     border: 1px solid var(--termru-border);
     border-radius: var(--termru-radius-lg);
-    background: var(--termru-surface);
+    background: var(--termru-base);
   }
 
   .specimen-glyph {
     display: inline-flex;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .specimen-text {
@@ -1004,35 +1011,35 @@
   .specimen-desc {
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .preview-row {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-4);
-    margin-bottom: var(--termru-space-4);
+    gap: var(--termru-space-16);
+    margin-bottom: var(--termru-space-16);
   }
 
   .callout {
-    padding: var(--termru-space-4);
+    padding: var(--termru-space-16);
     border-left: 2px solid var(--termru-border);
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   .callout p {
     margin: 0;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .callout .callout-label {
-    margin-bottom: var(--termru-space-1);
+    margin-bottom: var(--termru-space-4);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     letter-spacing: 0.08em;
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
 
   .about-name {
@@ -1042,10 +1049,10 @@
   }
 
   .about-meta {
-    margin: 0 0 var(--termru-space-3);
+    margin: 0 0 var(--termru-space-12);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .mono {
@@ -1063,7 +1070,7 @@
   @media (max-width: 1100px) {
     .columns {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--termru-space-6);
+      gap: var(--termru-space-32);
     }
 
     .main {
@@ -1072,7 +1079,7 @@
 
     .rail {
       padding-left: 0;
-      padding-top: var(--termru-space-5);
+      padding-top: var(--termru-space-24);
       border-left: none;
       border-top: 1px solid var(--termru-border);
     }

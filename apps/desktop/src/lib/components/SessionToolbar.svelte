@@ -235,16 +235,16 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--termru-space-4);
+    gap: var(--termru-space-16);
     min-height: var(--termru-toolbar-h);
-    padding: 0 var(--termru-space-3) 0 28px;
-    background: var(--termru-surface);
+    padding: 0 var(--termru-space-12) 0 28px;
+    background: var(--termru-base);
   }
 
   .where {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-3);
+    gap: var(--termru-space-12);
     min-width: 0;
   }
 
@@ -256,7 +256,7 @@
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-fg);
+    color: var(--termru-text);
   }
 
   .folder {
@@ -266,19 +266,19 @@
     white-space: nowrap;
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
   }
 
   .approval {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: 28px;
-    padding: 0 var(--termru-space-3);
-    border: 1px solid var(--termru-warning);
+    padding: 0 var(--termru-space-12);
+    border: 1px solid var(--termru-warn-text);
     border-radius: 999px;
     background: transparent;
-    color: var(--termru-warning);
+    color: var(--termru-warn-text);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
@@ -291,43 +291,43 @@
 
   @media (hover: hover) and (pointer: fine) {
     .approval:hover {
-      background: var(--termru-subtle);
+      background: var(--termru-side);
     }
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-1);
+    gap: var(--termru-space-4);
     flex: none;
   }
 
   .action {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-2);
+    gap: var(--termru-space-8);
     min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-3);
+    padding: 0 var(--termru-space-12);
     border: none;
     border-radius: var(--termru-radius-button);
     background: transparent;
-    color: var(--termru-fg);
+    color: var(--termru-text);
     font-weight: 500;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .action:hover:not([aria-disabled='true']) {
-      background: var(--termru-subtle);
+      background: var(--termru-side);
       border-color: transparent;
     }
   }
 
   .action[aria-expanded='true'] {
-    background: var(--termru-subtle);
+    background: var(--termru-side);
   }
 
   .action[aria-disabled='true'] {
-    color: var(--termru-faint);
+    color: var(--termru-text-3);
     cursor: default;
   }
 
@@ -348,7 +348,7 @@
     }
 
     .toolbar {
-      padding-left: var(--termru-space-4);
+      padding-left: var(--termru-space-16);
     }
   }
 </style>

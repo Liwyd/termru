@@ -101,18 +101,24 @@ distributable under Apache-2.0 without copyleft obligations.
 
 ### Fonts (runtime assets)
 
-| Package | Version | Licence | Why |
+| Font | Source | Licence | Why |
 |---|---|---|---|
-| `@fontsource-variable/inter` | 5.3.0 | SIL OFL 1.1 | The UI typeface (Doc A.03), self-hosted |
-| `@fontsource/ibm-plex-mono` | 5.3.0 | SIL OFL 1.1 | The terminal typeface (Doc A.03), self-hosted |
+| Geist (variable) | `Geist-Variable.woff2`, copied from the `geist` package 1.9.2 (Vercel, in collaboration with basement.studio) into `apps/desktop/src/assets/fonts/`; the package itself is not a dependency | SIL OFL 1.1 (`OFL-Geist.txt` sits next to the files) | The interface typeface ("Obsidian" redesign), self-hosted |
+| Geist Mono (variable) | `GeistMono-Variable.woff2`, same package and folder | SIL OFL 1.1 | Addresses, data, and the terminal default, self-hosted |
+| `@fontsource/ibm-plex-mono` | npm 5.3.0 | SIL OFL 1.1 | A terminal font the user can still choose in Preferences (it was the default before Geist Mono), self-hosted |
 
-Both are **bundled into the app**, not fetched at run time: the webview CSP
-is `font-src 'self'`, and the hardening test fails the build when any
-`src`/`href` points at a remote origin. The fontsource packages ship the
-`@font-face` declarations plus the `.woff2` files and nothing else (no
-JavaScript); they are MIT/OFL build inputs reviewed like any other
-dependency. The SIL OFL licence allows embedding and redistribution
-without modification of the font itself.
+`@fontsource-variable/inter` (the previous interface typeface) was removed
+with the redesign: nothing uses it any more.
+
+All of them are **bundled into the app**, not fetched at run time: the webview
+CSP is `font-src 'self'`, and the hardening test fails the build when any
+`src`/`href` points at a remote origin. The Geist files are two variable
+`.woff2` files declared in `src/fonts.css` with relative `url()`s, which Vite
+copies into the bundle (no JavaScript, nothing downloaded at build time); the
+fontsource package ships the `@font-face` declarations plus the `.woff2` files
+and nothing else. The SIL OFL licence allows embedding and redistribution
+without modification of the font itself; the Geist licence text, with its
+copyright line, is kept beside the files and must stay with them.
 
 ## Update strategy
 

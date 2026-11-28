@@ -7,13 +7,16 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
+import { chrome } from '../stores/chrome.svelte';
 import { connectFlow } from '../stores/connect.svelte';
 import { hosts } from '../stores/hosts.svelte';
+import { intents } from '../stores/intents.svelte';
 import { palette } from '../stores/palette.svelte';
 import { prefs } from '../stores/prefs.svelte';
 import { route } from '../stores/route.svelte';
 import { sessions } from '../stores/sessions.svelte';
 import { shortcuts } from '../stores/shortcuts.svelte';
+import { sshImport } from '../stores/ssh-import.svelte';
 import { notices } from '../notify.svelte';
 import { noticeText } from '../test-support/notices';
 import { unsaved } from '../stores/unsaved.svelte';
@@ -113,20 +116,27 @@ beforeEach(() => {
   pruneTerminals(new Set());
   stubBrowserApis();
   // The operating system prefers a dark theme.
-  (globalThis as { matchMedia?: unknown }).matchMedia = () => ({
-    matches: true,
+  (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+    matches: !/max-width/.test(query),
     addEventListener() {},
     removeEventListener() {},
   });
   bus.handlers.clear();
   connectFlow.cancel();
   palette.hide();
+  sshImport.close();
+  chrome.sidebarCollapsed = false;
+  chrome.narrow = false;
+  chrome.inspectorOpen = true;
+  intents.pending = null;
   shortcuts.cancel();
   notices.reset();
   hosts.hosts = [];
   hosts.loaded = false;
   hosts.searchFocus = false;
   hosts.query = '';
+  hosts.showLibrary('all');
+  hosts.selectedId = null;
   hosts.passwordStored = {};
   sessions.tabs = [];
   sessions.activeId = null;
@@ -374,7 +384,7 @@ describe('pages in flow', () => {
     // The navigation is there and clickable.
     const nav = target.querySelector('nav[aria-label="Primary"]');
     expect(nav).not.toBeNull();
-    click(findButton(nav as HTMLElement, 'Hosts'));
+    click(findButton(nav as HTMLElement, 'All hosts'));
     expect(route.route).toBe('hosts');
   });
 
@@ -480,5 +490,97 @@ describe('after a sync', () => {
     bus.handlers.get('sync-applied')?.({ payload: null });
     await vi.waitFor(() => expect(callsOf('host_list').length).toBeGreaterThan(before.hosts));
     expect(callsOf('prefs_get').length).toBeGreaterThan(before.prefs);
+  });
+});
+
+describe('the shell: sidebar and palette', () => {
+  /** Opens the palette with its chord and runs one entry, as Enter on it would. */
+  function runFromPalette(id: string): void {
+    chord('P', { shiftKey: true });
+    expect(palette.open).toBe(true);
+    const entry = palette.entries.find((candidate) => candidate.id === id);
+    if (!entry) throw new Error(`the palette has no entry ${id}`);
+    entry.run();
+    palette.hide();
+    flushSync();
+  }
+
+  it('collapses the sidebar to an icon rail with its chord and button, and brings it back', async () => {
+    await start();
+    expect(target.querySelector('aside.side.rail')).toBeNull();
+    chord('B', { shiftKey: true });
+    expect(chrome.sidebarCollapsed).toBe(true);
+    expect(target.querySelector('aside.side.rail')).not.toBeNull();
+    // The items keep their names as icons.
+    expect(target.querySelector('[aria-label="Preferences"]')).not.toBeNull();
+
+    click(target.querySelector('[aria-label="Expand the sidebar"]') as Element);
+    flushSync();
+    expect(chrome.sidebarCollapsed).toBe(false);
+    expect(target.querySelector('aside.side.rail')).toBeNull();
+  });
+
+  it('opens the palette from the pill in the sidebar', async () => {
+    await start();
+    click(target.querySelector('[aria-label="Search or run a command"]') as Element);
+    expect(palette.open).toBe(true);
+    // Running sessions, hosts, pages and actions are all in it.
+    const groups = new Set(palette.entries.map((entry) => entry.group));
+    for (const group of ['Hosts', 'Go to', 'Create', 'View', 'Preferences', 'Sync']) {
+      expect(groups, group).toContain(group);
+    }
+  });
+
+  it('starts a new folder from the palette on a page that does not exist yet', async () => {
+    await start();
+    runFromPalette('folder.new');
+    expect(route.route).toBe('folders');
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('folder-name'));
+    expect(intents.pending).toBeNull();
+  });
+
+  it('starts a new identity from the palette', async () => {
+    await start();
+    runFromPalette('identity.new');
+    expect(route.route).toBe('identities');
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('identity-name'));
+  });
+
+  it('imports ~/.ssh/config from the palette', async () => {
+    await start();
+    runFromPalette('host.import');
+    await vi.waitFor(() => expect(callsOf('ssh_config_preview')).toHaveLength(1));
+  });
+
+  it('brings a section of Preferences into view from the palette', async () => {
+    await start();
+    runFromPalette('preferences:shortcuts-label');
+    expect(route.route).toBe('preferences');
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('shortcuts-label'));
+  });
+
+  it('shows the library views of the sidebar on the hosts page', async () => {
+    await start();
+    route.go('preferences');
+    flushSync();
+    click(findButton(target, 'Favorites'));
+    flushSync();
+    expect(route.route).toBe('hosts');
+    expect(target.querySelector('header.head h1')?.textContent).toBe('Favorites');
+  });
+
+  it('hides and shows the inspector from the palette', async () => {
+    await start();
+    expect(target.querySelector('aside[aria-label="Host details"]')).not.toBeNull();
+    runFromPalette('view.toggleInspector');
+    expect(chrome.inspectorOpen).toBe(false);
+    expect(target.querySelector('aside[aria-label="Host details"]')).toBeNull();
+  });
+
+  it('sets the theme from the palette', async () => {
+    await start('system');
+    runFromPalette('theme:light');
+    await vi.waitFor(() => expect(callsOf('prefs_set')).toHaveLength(1));
+    expect((callsOf('prefs_set')[0].args?.prefs as Preferences).theme).toBe('light');
   });
 });

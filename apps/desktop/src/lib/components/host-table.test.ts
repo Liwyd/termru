@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The hosts table (frame 1): the row cells, the row actions and the
+ * The hosts table: the row cells, the selection, the row actions and the
  * windowed rendering of a very large list.
  */
 
@@ -54,6 +54,7 @@ function identity(id: string, name: string): Identity {
 }
 
 interface Handlers {
+  onselect: (host: Host, via: 'pointer' | 'keyboard') => void;
   onconnect: (host: Host) => void;
   onopen: (host: Host) => void;
   onedit: (host: Host) => void;
@@ -63,7 +64,7 @@ interface Handlers {
 
 function render(
   rows: Host[],
-  extra: { live?: Set<string>; recentAt?: Record<string, number> } = {},
+  extra: { live?: Map<string, number>; recentAt?: Record<string, number> } = {},
 ): {
   target: HTMLElement;
   handlers: Handlers;
@@ -71,6 +72,7 @@ function render(
   const target = document.createElement('div');
   document.body.appendChild(target);
   const handlers = {
+    onselect: vi.fn<(host: Host, via: 'pointer' | 'keyboard') => void>(),
     onconnect: vi.fn<(host: Host) => void>(),
     onopen: vi.fn<(host: Host) => void>(),
     onedit: vi.fn<(host: Host) => void>(),
@@ -81,7 +83,7 @@ function render(
     target,
     props: {
       rows,
-      live: extra.live ?? new Set<string>(),
+      live: extra.live ?? new Map<string, number>(),
       recentAt: extra.recentAt ?? {},
       ...handlers,
     },
@@ -91,8 +93,9 @@ function render(
 }
 
 function findButton(root: ParentNode, label: string): HTMLButtonElement {
+  // The selected row's button carries the Enter key cap: "Connect ↵".
   const button = Array.from(root.querySelectorAll('button')).find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => candidate.textContent?.replace('↵', '').trim() === label,
   );
   if (!button) throw new Error(`button "${label}" not found`);
   return button;
@@ -113,7 +116,7 @@ afterEach(() => {
 });
 
 describe('HostTable rows', () => {
-  it('renders the cells of the frame: host, folder, authentication, last session', () => {
+  it('renders the cells: host, folder, sign-in, last session', () => {
     const web = host('web', { auth: { type: 'private_key', identity_id: 'identity-1' } });
     hosts.identities = [identity('identity-1', 'work-ed25519')];
     const rendered = render([web], {
@@ -124,9 +127,14 @@ describe('HostTable rows', () => {
     expect(target.textContent).toContain('web');
     expect(target.textContent).toContain('deploy@web.test:22');
     expect(target.textContent).toContain('Unfiled');
-    expect(target.textContent).toContain('Identity · work-ed25519');
+    // A key icon says it is an identity; the cell shows its name, the title all of it.
+    expect(target.querySelector('.auth-text')?.textContent).toBe('work-ed25519');
+    expect((target.querySelector('.auth-cell') as HTMLElement).title).toBe(
+      'Identity · work-ed25519',
+    );
     expect(target.textContent).toContain('18 Oct');
     expect(target.textContent).toContain('Last session');
+    expect(target.textContent).toContain('Sign-in');
   });
 
   it('shows the folder path of a filed host', () => {
@@ -149,16 +157,22 @@ describe('HostTable rows', () => {
     expect(target.textContent).not.toContain('Unfiled');
   });
 
-  it('shows Connected for a running session and the date otherwise', () => {
+  it('shows Live (and the pane count) for a running session and the date otherwise', () => {
     const live = host('atlas');
+    const two = host('relay');
     const idle = host('archive');
-    const rendered = render([live, idle], {
-      live: new Set(['host-atlas']),
+    const rendered = render([live, two, idle], {
+      live: new Map([
+        ['host-atlas', 1],
+        ['host-relay', 2],
+      ]),
       recentAt: { 'host-archive': new Date(2026, 9, 18, 8, 0).getTime() },
     });
     target = rendered.target;
-    expect(target.textContent).toContain('Connected');
-    expect(target.textContent).toContain('18 Oct');
+    const cells = Array.from(target.querySelectorAll('.session-cell')).map((cell) =>
+      cell.textContent?.trim(),
+    );
+    expect(cells).toEqual(['Live', 'Live · 2', '18 Oct']);
   });
 
   it('shows the last two folders of a deep path, and the whole path as the tooltip', () => {
@@ -224,7 +238,7 @@ describe('HostTable actions', () => {
 
   it('opens the running session of a live host', () => {
     const web = host('web');
-    const rendered = render([web], { live: new Set(['host-web']) });
+    const rendered = render([web], { live: new Map([['host-web', 1]]) });
     target = rendered.target;
 
     click(findButton(target, 'Open'));
@@ -232,13 +246,53 @@ describe('HostTable actions', () => {
     expect(rendered.handlers.onconnect).not.toHaveBeenCalled();
   });
 
-  it('edits with the Edit button', () => {
+  it('edits from the More menu', () => {
     const web = host('web');
     const rendered = render([web]);
     target = rendered.target;
 
-    click(findButton(target, 'Edit'));
+    (target.querySelector('.more') as HTMLButtonElement).click();
+    flushSync();
+    const edit = Array.from(document.body.querySelectorAll('.menu button')).find(
+      (button) => button.textContent?.trim() === 'Edit…',
+    ) as HTMLButtonElement;
+    edit.click();
     expect(rendered.handlers.onedit).toHaveBeenCalledWith(web);
+  });
+
+  it('offers Open running session first for a host that is live', () => {
+    const web = host('web');
+    const rendered = render([web], { live: new Map([['host-web', 1]]) });
+    target = rendered.target;
+
+    (target.querySelector('.more') as HTMLButtonElement).click();
+    flushSync();
+    const labels = Array.from(document.body.querySelectorAll('.menu button')).map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).toEqual([
+      'Open running session',
+      'Connect',
+      'Edit…',
+      'Add to favorites',
+      'Delete',
+    ]);
+  });
+
+  it('selects a row by click and says it was a pointer', () => {
+    const [a, b] = [host('a'), host('b')];
+    const rendered = render([a, b]);
+    target = rendered.target;
+
+    const second = Array.from(target.querySelectorAll<HTMLElement>('.row'))[1];
+    click(second);
+    flushSync();
+    expect(rendered.handlers.onselect).toHaveBeenCalledWith(b, 'pointer');
+    expect(second.classList.contains('selected')).toBe(true);
+    expect(second.getAttribute('aria-current')).toBe('true');
+    // The Enter hint is on the selected row only.
+    expect(second.querySelector('.go kbd')).not.toBeNull();
+    expect(target.querySelectorAll('.go kbd')).toHaveLength(1);
   });
 
   it('toggles the favorite with the star', () => {
@@ -272,6 +326,14 @@ describe('HostTable actions', () => {
     );
     deleteButton?.click();
     expect(rendered.handlers.ondelete).toHaveBeenCalledWith(web);
+  });
+
+  it('shows no Edit button on the row: it is in the menu, the inspector and on the E key', () => {
+    const rendered = render([host('web')]);
+    target = rendered.target;
+    expect(
+      Array.from(target.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Edit'),
+    ).toBe(false);
   });
 
   it('opens the More menu of a row on right-click', () => {
@@ -424,13 +486,15 @@ describe('HostTable keyboard', () => {
     target = rendered.target;
     const rows = Array.from(target.querySelectorAll<HTMLElement>('.row'));
     expect(rows.map((row) => row.tabIndex)).toEqual([0, -1, -1]);
+    // The first row is the selected one until another is chosen.
+    expect(rows.map((row) => row.classList.contains('selected'))).toEqual([true, false, false]);
     // The buttons of the other rows are not tab stops.
     expect(rows[0].querySelector('button')?.tabIndex).toBe(0);
     expect(rows[1].querySelector('button')?.tabIndex).toBe(-1);
     expect(rows[2].querySelector('button')?.tabIndex).toBe(-1);
   });
 
-  it('moves the focus and the tab stop with the arrow keys', async () => {
+  it('moves the selection, the focus and the tab stop with the arrow keys', async () => {
     const rendered = render([host('a'), host('b'), host('c')]);
     target = rendered.target;
     const first = rowOf(target, 'a.test');
@@ -442,6 +506,12 @@ describe('HostTable keyboard', () => {
     expect(document.activeElement).toBe(second);
     expect(second.tabIndex).toBe(0);
     expect(first.tabIndex).toBe(-1);
+    // The arrow drives the selection, and a key never animates what follows it.
+    expect(second.classList.contains('selected')).toBe(true);
+    expect(rendered.handlers.onselect).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'b' }),
+      'keyboard',
+    );
 
     key(second, 'End');
     await settle();

@@ -1,157 +1,249 @@
 /* Design tokens: the single place where UI colour, geometry, type and motion
-   live. Values follow the design specification (Doc A.02 colour, A.03 type +
-   space, Doc B motion); the dark set is re-derived from the same semantic
-   slots and every normal-text pair is contrast-checked in
-   `lib/design-tokens.test.ts`. */
+   live ("Obsidian", docs/design: the redesign brief). Dark is the default
+   theme; Preferences > Theme "System" follows the operating system and
+   "Light" forces the light set. Every text pair is contrast-checked in
+   `lib/design-tokens.test.ts`.
+
+   Semantic roles, not colours:
+   - surfaces   base (the page) < side (sidebar, inspector, status bar)
+                < raised (selected row, field, menu) < raised-2 (key caps)
+                and terminal (the terminal pane);
+   - ink        text, text-2 (secondary), text-3 (labels, hints);
+   - lines      line is the hairline between groups, border is the edge of
+                a control (an input, a floating panel);
+   - accent     champagne: the primary action and the focused/selected thing.
+                `accent` is a fill, `accent-text` the same hue as text;
+   - state      live, warn, err: a fill (a dot) and `-text` (a label).
+   In the dark set a `-text` colour is its fill; in the light set it is the
+   same hue darkened until it reads at 4.5:1 on every surface. */
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 
-  /* A.02 palette — light. */
-  --termru-surface: #ffffff;
-  --termru-canvas: #f4f5f2;
-  --termru-bg: var(--termru-canvas);
-  --termru-subtle: #fafbf8;
-  --termru-terminal: #fdfefb;
-  --termru-fg: #202925;
-  --termru-muted: #626d67;
-  --termru-faint: #87928b;
-  --termru-border: #dbe0da;
-  --termru-accent: #17665e;
-  --termru-accent-soft: #eaf3ef;
-  --termru-success: #276440;
-  --termru-danger: #a3333d;
-  --termru-danger-soft: #fbf0ef;
-  --termru-warning: #825713;
-  --termru-warning-soft: #faf3e4;
-  --termru-selection: #d7e9e0;
-  /* Text colour on filled controls: light fills take ink-free white text. */
-  --termru-on-accent: #ffffff;
-  --termru-on-success: #ffffff;
-  --termru-on-danger: #ffffff;
+  /* Surfaces. */
+  --termru-base: #0e0f11;
+  --termru-side: #121316;
+  --termru-raised: #1a1b1f;
+  --termru-raised-2: #212227;
+  --termru-terminal: #0b0c0d;
 
-  /* A.03 geometry. */
-  --termru-space-1: 4px;
-  --termru-space-2: 8px;
-  --termru-space-3: 12px;
-  --termru-space-4: 16px;
-  --termru-space-5: 24px;
-  --termru-space-6: 32px;
-  --termru-space-7: 40px;
-  --termru-space-8: 48px;
-  --termru-space-9: 56px;
-  --termru-control-h: 40px;
-  --termru-input-h: 42px;
-  --termru-radius-input: 4px;
-  --termru-radius-button: 6px;
-  --termru-radius: var(--termru-radius-button);
-  --termru-radius-lg: 16px;
-  --termru-radius-pane: 0px;
+  /* Ink. */
+  --termru-text: #ecebe7;
+  --termru-text-2: #a3a199;
+  --termru-text-3: #86857f;
+
+  /* Lines. */
+  --termru-line: rgba(255, 255, 255, 0.055);
+  --termru-border: rgba(255, 255, 255, 0.14);
+
+  /* Accent: champagne. */
+  --termru-accent: #cbb68c;
+  --termru-accent-text: #cbb68c;
+  --termru-accent-ink: #17140e;
+  --termru-accent-soft: rgba(203, 182, 140, 0.11);
+
+  /* State. */
+  --termru-live: #74cfa2;
+  --termru-live-text: #74cfa2;
+  --termru-live-soft: rgba(116, 207, 162, 0.12);
+  --termru-warn: #e2a85c;
+  --termru-warn-text: #e2a85c;
+  --termru-warn-soft: rgba(226, 168, 92, 0.12);
+  --termru-err: #e7796f;
+  --termru-err-text: #e7796f;
+  --termru-err-soft: rgba(231, 121, 111, 0.12);
+  /* Text on a filled danger control. */
+  --termru-on-err: #17140e;
+
+  /* A floating layer: a menu, a dialog, the palette. One soft shadow. */
+  --termru-shadow-float: 0 14px 36px rgba(0, 0, 0, 0.42), 0 1px 3px rgba(0, 0, 0, 0.32);
+  --termru-scrim: rgba(0, 0, 0, 0.55);
+
+  /* The fill of an input: a well one step above the page. A dialog (which is
+     itself raised) puts its fields one step down (see `.sx-dialog`). */
+  --termru-field: var(--termru-raised);
+
+  /* Geometry: radii (controls 7-8, rows 10, panes and cards 12, panels 14). */
+  --termru-radius-sm: 7px;
+  --termru-radius-input: 8px;
+  --termru-radius-button: 8px;
+  --termru-radius: 8px;
+  --termru-radius-row: 10px;
+  --termru-radius-pane: 12px;
+  --termru-radius-lg: 14px;
   --termru-border-w: 1px;
   --termru-focus-w: 2px;
   --termru-focus-offset: 2px;
-  --termru-page-inset-x: 48px;
-  --termru-page-inset-top: 32px;
-  --termru-titlebar-h: 36px;
-  --termru-nav-h: 64px;
 
-  /* A.03 type scale (px / line-height / weight). Mono is for addresses,
-     paths and shortcuts — not for the whole interface. */
-  --termru-font-ui: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Geometry: the spacing scale is named by its pixels. */
+  --termru-space-4: 4px;
+  --termru-space-6: 6px;
+  --termru-space-8: 8px;
+  --termru-space-10: 10px;
+  --termru-space-12: 12px;
+  --termru-space-16: 16px;
+  --termru-space-20: 20px;
+  --termru-space-24: 24px;
+  --termru-space-28: 28px;
+  /* Larger steps, for the pages that have not been rebuilt yet. */
+  --termru-space-32: 32px;
+  --termru-space-40: 40px;
+  --termru-space-48: 48px;
+  --termru-space-56: 56px;
+
+  /* Geometry: the frame of the app. */
+  --termru-control-h: 32px;
+  --termru-input-h: 36px;
+  --termru-row-h: 52px;
+  --termru-header-h: 56px;
+  --termru-sidebar-w: 236px;
+  --termru-rail-w: 56px;
+  --termru-inspector-w: 340px;
+  --termru-status-h: 28px;
+  --termru-titlebar-h: 36px;
+  --termru-page-inset-x: 28px;
+  --termru-page-inset-top: 4px;
+
+  /* Geometry: the Sessions page. */
+  --termru-pane-rule-w: 2px;
+  --termru-divider-w: 4px;
+  --termru-tabstrip-h: 46px;
+  --termru-toolbar-h: 58px;
+
+  /* Type. Geist for the interface (13/20, 12 secondary, 11 labels), Geist
+     Mono for addresses, data and the terminal. Labels are sentence case. */
+  --termru-font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --termru-font-mono:
-    'IBM Plex Mono', 'IBM Plex Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
-  --termru-text-title-size: 28px;
-  --termru-text-title-lh: 42px;
-  --termru-text-title-weight: 550;
-  --termru-text-heading-size: 20px;
-  --termru-text-heading-lh: 30px;
-  --termru-text-heading-weight: 560;
-  --termru-text-body-size: 14px;
-  --termru-text-body-lh: 21px;
+    'Geist Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --termru-text-title-size: 15px;
+  --termru-text-title-lh: 20px;
+  --termru-text-title-weight: 600;
+  --termru-text-heading-size: 17px;
+  --termru-text-heading-lh: 24px;
+  --termru-text-heading-weight: 600;
+  --termru-text-body-size: 13px;
+  --termru-text-body-lh: 20px;
   --termru-text-control-size: 13px;
-  --termru-text-control-lh: 19.5px;
-  --termru-text-control-weight: 550;
+  --termru-text-control-lh: 20px;
+  --termru-text-control-weight: 500;
   --termru-text-secondary-size: 12px;
   --termru-text-secondary-lh: 18px;
   --termru-text-meta-size: 11px;
-  --termru-text-meta-lh: 16.5px;
-  --termru-text-terminal-size: 14px;
-  --termru-text-terminal-lh: 23.1px;
+  --termru-text-meta-lh: 16px;
+  --termru-text-meta-weight: 500;
+  --termru-text-mono-size: 12px;
+  --termru-text-terminal-size: 13px;
+  --termru-text-terminal-lh: 20px;
 
-  /* Doc B motion: one duration per class of change, one easing. */
+  /* Motion: fast, one curve. A press gives by 2 %, a popover starts at 97 %.
+     Nothing a key triggers moves, and the terminal never animates. */
   --motion-fast: 100ms;
-  --motion-context: 160ms;
-  --motion-structure: 220ms;
-  --ease-quiet: cubic-bezier(0.2, 0, 0, 1);
+  --motion-context: 120ms;
+  --motion-structure: 140ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --press-scale: 0.98;
+  --pop-scale: 0.97;
+  --dialog-scale: 0.98;
+  /* How far a notice travels in and out, and how far a block that arrives on a
+     page rises (`actions/appear.ts`). */
+  --notice-shift: -8px;
+  --appear-shift: 4px;
+  --appear-duration: var(--motion-context);
 
   font-family: var(--termru-font-ui);
   font-size: var(--termru-text-body-size);
   line-height: var(--termru-text-body-lh);
 }
 
-/* A.02 palette — dark: the same slots, re-derived. Filled controls take
-   dark text because the fills are bright on a dark canvas. */
-:root[data-theme='dark'] {
-  color-scheme: dark;
+/* The light set: the same slots. */
+:root[data-theme='light'] {
+  color-scheme: light;
 
-  --termru-surface: #1b211e;
-  --termru-canvas: #141816;
-  --termru-bg: var(--termru-canvas);
-  --termru-subtle: #212724;
-  --termru-terminal: #101413;
-  --termru-fg: #eef1ee;
-  --termru-muted: #a7b0ab;
-  --termru-faint: #7b857f;
-  --termru-border: #39413c;
-  --termru-accent: #63c2b1;
-  --termru-accent-soft: #173a34;
-  --termru-success: #5fbc8d;
-  --termru-danger: #f08f8a;
-  --termru-danger-soft: #3a1f1e;
-  --termru-warning: #d9a552;
-  --termru-warning-soft: #362a15;
-  --termru-selection: #26443c;
-  --termru-on-accent: #0f1a17;
-  --termru-on-success: #0f1a17;
-  --termru-on-danger: #0f1a17;
+  --termru-base: #f8f7f4;
+  --termru-side: #f0eee9;
+  --termru-raised: #e8e5de;
+  --termru-raised-2: #dfdbd2;
+  --termru-terminal: #fcfbf8;
+
+  --termru-text: #17161a;
+  --termru-text-2: #5f5d57;
+  --termru-text-3: #686660;
+
+  --termru-line: rgba(20, 18, 12, 0.07);
+  --termru-border: rgba(20, 18, 12, 0.2);
+
+  --termru-accent: #8a7142;
+  --termru-accent-text: #72592c;
+  --termru-accent-ink: #ffffff;
+  --termru-accent-soft: rgba(138, 113, 66, 0.1);
+
+  --termru-live: #2f9a67;
+  --termru-live-text: #186a42;
+  --termru-live-soft: rgba(47, 154, 103, 0.12);
+  --termru-warn: #b9741f;
+  --termru-warn-text: #80500c;
+  --termru-warn-soft: rgba(185, 116, 31, 0.12);
+  --termru-err: #c4473d;
+  --termru-err-text: #a5362c;
+  --termru-err-soft: rgba(196, 71, 61, 0.1);
+  --termru-on-err: #ffffff;
+
+  --termru-shadow-float: 0 14px 36px rgba(20, 18, 12, 0.16), 0 1px 3px rgba(20, 18, 12, 0.1);
+  --termru-scrim: rgba(23, 22, 26, 0.32);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
+/* "System" with a light operating system: the same set as above. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
 
-    --termru-surface: #1b211e;
-    --termru-canvas: #141816;
-    --termru-bg: var(--termru-canvas);
-    --termru-subtle: #212724;
-    --termru-terminal: #101413;
-    --termru-fg: #eef1ee;
-    --termru-muted: #a7b0ab;
-    --termru-faint: #7b857f;
-    --termru-border: #39413c;
-    --termru-accent: #63c2b1;
-    --termru-accent-soft: #173a34;
-    --termru-success: #5fbc8d;
-    --termru-danger: #f08f8a;
-    --termru-danger-soft: #3a1f1e;
-    --termru-warning: #d9a552;
-    --termru-warning-soft: #362a15;
-    --termru-selection: #26443c;
-    --termru-on-accent: #0f1a17;
-    --termru-on-success: #0f1a17;
-    --termru-on-danger: #0f1a17;
+    --termru-base: #f8f7f4;
+    --termru-side: #f0eee9;
+    --termru-raised: #e8e5de;
+    --termru-raised-2: #dfdbd2;
+    --termru-terminal: #fcfbf8;
+
+    --termru-text: #17161a;
+    --termru-text-2: #5f5d57;
+    --termru-text-3: #686660;
+
+    --termru-line: rgba(20, 18, 12, 0.07);
+    --termru-border: rgba(20, 18, 12, 0.2);
+
+    --termru-accent: #8a7142;
+    --termru-accent-text: #72592c;
+    --termru-accent-ink: #ffffff;
+    --termru-accent-soft: rgba(138, 113, 66, 0.1);
+
+    --termru-live: #2f9a67;
+    --termru-live-text: #186a42;
+    --termru-live-soft: rgba(47, 154, 103, 0.12);
+    --termru-warn: #b9741f;
+    --termru-warn-text: #80500c;
+    --termru-warn-soft: rgba(185, 116, 31, 0.12);
+    --termru-err: #c4473d;
+    --termru-err-text: #a5362c;
+    --termru-err-soft: rgba(196, 71, 61, 0.1);
+    --termru-on-err: #ffffff;
+
+    --termru-shadow-float: 0 14px 36px rgba(20, 18, 12, 0.16), 0 1px 3px rgba(20, 18, 12, 0.1);
+    --termru-scrim: rgba(23, 22, 26, 0.32);
   }
 }
 
-/* Doc B.05 reduced motion: everything collapses to instant (structure
-   changes keep at most 80 ms of opacity). The preference (`on`/`off`)
-   overrides the operating-system setting. */
+/* Reduced motion: no scale or travel, only opacity (at most 80 ms). The
+   preference (`on`/`off`) overrides the operating-system setting. */
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-reduced-motion='off']) {
     --motion-fast: 0ms;
     --motion-context: 0ms;
     --motion-structure: 80ms;
+    --press-scale: 1;
+    --pop-scale: 1;
+    --dialog-scale: 1;
+    --notice-shift: 0px;
+    --appear-shift: 0px;
+    --appear-duration: 80ms;
   }
 }
 
@@ -159,6 +251,12 @@
   --motion-fast: 0ms;
   --motion-context: 0ms;
   --motion-structure: 80ms;
+  --press-scale: 1;
+  --pop-scale: 1;
+  --dialog-scale: 1;
+  --notice-shift: 0px;
+  --appear-shift: 0px;
+  --appear-duration: 80ms;
 }
 
 /* The high-visibility focus preference widens the ring everywhere. */
@@ -171,22 +269,35 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #app {
   height: 100%;
   margin: 0;
-  background: var(--termru-bg);
-  color: var(--termru-fg);
+  background: var(--termru-base);
+  color: var(--termru-text);
 }
 
+body {
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings:
+    'ss01' 1,
+    'cv11' 1;
+}
+
+/* Buttons are quiet: a raised fill, no edge. Lines belong to inputs and to
+   floating panels. */
 button {
   min-height: var(--termru-control-h);
-  padding: 0 var(--termru-space-3);
+  padding: 0 var(--termru-space-12);
   border-radius: var(--termru-radius-button);
-  border: var(--termru-border-w) solid var(--termru-border);
-  background: var(--termru-surface);
-  color: var(--termru-fg);
+  border: 0;
+  background: var(--termru-raised);
+  color: var(--termru-text);
   font: inherit;
   font-size: var(--termru-text-control-size);
   line-height: var(--termru-text-control-lh);
@@ -197,12 +308,12 @@ button {
 /* Hover only where a pointer can hover: a touch screen fires a false hover on
    every tap. */
 @media (hover: hover) and (pointer: fine) {
-  button:hover:not(:disabled) {
-    border-color: var(--termru-accent);
+  button:hover:not(:disabled):not(.primary) {
+    background-color: var(--termru-raised-2);
   }
 
   button.primary:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--termru-accent) 88%, black);
+    background-color: color-mix(in srgb, var(--termru-accent) 88%, var(--termru-text));
   }
 }
 
@@ -213,17 +324,23 @@ button:disabled {
 
 button.primary {
   background: var(--termru-accent);
-  border-color: var(--termru-accent);
-  color: var(--termru-on-accent);
+  color: var(--termru-accent-ink);
+  font-weight: 550;
+}
+
+/* A button with no fill until the pointer is on it (header and bar actions). */
+button.ghost {
+  background: transparent;
+  color: var(--termru-text-2);
 }
 
 button.danger {
-  border-color: var(--termru-danger);
-  color: var(--termru-danger);
+  color: var(--termru-err-text);
 }
 
 input,
-select {
+select,
+textarea {
   font: inherit;
   font-size: var(--termru-text-control-size);
   border-radius: var(--termru-radius-input);
@@ -235,47 +352,39 @@ select {
 }
 
 :focus-visible {
-  outline: var(--termru-focus-w) solid var(--termru-accent);
+  outline: var(--termru-focus-w) solid var(--termru-accent-text);
   outline-offset: var(--termru-focus-offset);
 }
 
-/* sessions (4a) — the Sessions page: terminal chrome, menus and dialogs.
-   Only additions: nothing above is restyled. The selectors carry an `html`
-   prefix so the token blocks above stay the first (and only) `:root` rules. */
-html:root {
-  /* Enter curve (Doc B: ease-out for things that appear). */
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  /* How far a pressed control, a popover and a dialog start from. */
-  --press-scale: 0.97;
-  --pop-scale: 0.97;
-  --dialog-scale: 0.98;
-  /* Terminal chrome geometry (frames 2 and 3). */
-  --termru-pane-rule-w: 2px;
-  --termru-divider-w: 4px;
-  --termru-tabstrip-h: 46px;
-  --termru-toolbar-h: 58px;
-  /* The one shadow of a floating layer (menu, dialog). */
-  --termru-shadow-float: 0 10px 28px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.1);
+/* A key cap: a shortcut, a hint. */
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--termru-raised-2);
+  color: var(--termru-text-2);
+  font-family: var(--termru-font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
 }
 
-/* Reduced motion: no scale or travel, only opacity (the duration tokens
-   above already collapse to 0 / 80 ms). */
-@media (prefers-reduced-motion: reduce) {
-  html:root:not([data-reduced-motion='off']) {
-    --press-scale: 1;
-    --pop-scale: 1;
-    --dialog-scale: 1;
-  }
+/* Every pressable gives under the finger (100 ms, transform only). Specificity
+   0 (`:where`): a component that sets its own transition or transform wins.
+   Menu entries do not press: they are a list, not buttons. Rows and the
+   terminal are not buttons either. */
+:where(button:not([role='menuitem'])) {
+  transition:
+    transform var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
 }
 
-html:root[data-reduced-motion='on'] {
-  --press-scale: 1;
-  --pop-scale: 1;
-  --dialog-scale: 1;
+:where(button:not([role='menuitem']):active:not(:disabled):not([aria-disabled='true'])) {
+  transform: scale(var(--press-scale, 0.98));
 }
 
-/* Every pressable of the Sessions page: it gives under the finger.
-   Hover only where there is a pointer that can hover. */
+/* sessions: every pressable of the Sessions page. */
 .sx-press {
   transition:
     transform var(--motion-fast) var(--ease-out),
@@ -288,13 +397,11 @@ html:root[data-reduced-motion='on'] {
   transform: scale(var(--press-scale));
 }
 
-/* editor/folders/identities (4b) — the work pages: the host editor, the
-   folders page and the identities page. White page (frames 4 and 5), mono
-   fields, one set of pressables. Additions only; every selector is under
-   `.workpage`, and the tokens come from the blocks above. */
-.workpage,
+/* The work pages (host editor, folders, identities, sync, preferences) and the
+   dialogs: fields with an edge, buttons without one. */
+/* A dialog is raised itself: its fields sit one step down. */
 .sx-dialog {
-  --wp-field: var(--termru-surface);
+  --termru-field: var(--termru-base);
 }
 
 .workpage {
@@ -302,22 +409,8 @@ html:root[data-reduced-motion='on'] {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background: var(--termru-surface);
-  color: var(--termru-fg);
-}
-
-/* Dark: a field is a well, one step below the page, so it still reads where
-   its hairline border all but vanishes. */
-:root[data-theme='dark'] .workpage,
-:root[data-theme='dark'] .sx-dialog {
-  --wp-field: var(--termru-canvas);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .workpage,
-  :root:not([data-theme='light']) .sx-dialog {
-    --wp-field: var(--termru-canvas);
-  }
+  background: var(--termru-base);
+  color: var(--termru-text);
 }
 
 :is(.workpage, .sx-dialog) input:not([type='checkbox']):not([type='radio']),
@@ -325,11 +418,11 @@ html:root[data-reduced-motion='on'] {
 :is(.workpage, .sx-dialog) textarea {
   width: 100%;
   min-height: var(--termru-input-h);
-  padding: 0 var(--termru-space-3);
+  padding: 0 var(--termru-space-12);
   border: 1px solid var(--termru-border);
   border-radius: var(--termru-radius-input);
-  background-color: var(--wp-field);
-  color: var(--termru-fg);
+  background-color: var(--termru-field);
+  color: var(--termru-text);
   font-family: var(--termru-font-mono);
   font-size: var(--termru-text-control-size);
   line-height: var(--termru-text-control-lh);
@@ -339,13 +432,13 @@ html:root[data-reduced-motion='on'] {
 }
 
 :is(.workpage, .sx-dialog) input::placeholder {
-  color: var(--termru-faint);
+  color: var(--termru-text-3);
 }
 
 :is(.workpage, .sx-dialog) select {
   padding-right: 36px;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%2387928b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23868580' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 14px center;
   background-size: 11px 7px;
@@ -354,7 +447,7 @@ html:root[data-reduced-motion='on'] {
 
 :is(.workpage, .sx-dialog) input[aria-invalid='true'],
 :is(.workpage, .sx-dialog) select[aria-invalid='true'] {
-  border-color: var(--termru-danger);
+  border-color: var(--termru-err-text);
 }
 
 :is(.workpage, .sx-dialog) input[type='checkbox'],
@@ -362,54 +455,20 @@ html:root[data-reduced-motion='on'] {
   accent-color: var(--termru-accent);
 }
 
-:is(.workpage, .sx-dialog) button {
-  transition:
-    transform var(--motion-fast) var(--ease-out, ease-out),
-    background-color var(--motion-fast) ease,
-    border-color var(--motion-fast) ease,
-    color var(--motion-fast) ease;
-}
-
 @media (hover: hover) and (pointer: fine) {
-  /* The global hover is an accent border; the work pages and dialogs keep
-     the colour each kind of button has at rest. */
-  :is(.workpage, .sx-dialog) button:hover:not(:disabled) {
-    border-color: var(--termru-border);
-  }
-
-  :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
-    border-color: transparent;
-  }
-
-  :is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
-    border-color: var(--termru-accent);
-  }
-
-  :is(.workpage, .sx-dialog) button.danger:hover:not(:disabled) {
-    border-color: var(--termru-danger);
-  }
-
   :is(.workpage, .sx-dialog) input:hover:not(:disabled):not([aria-invalid='true']),
   :is(.workpage, .sx-dialog) select:hover:not(:disabled):not([aria-invalid='true']) {
-    border-color: var(--termru-faint);
-  }
-
-  :is(.workpage, .sx-dialog) button:hover:not(:disabled):not(.primary):not(.danger):not(.quiet) {
-    border-color: var(--termru-accent);
-  }
-
-  :is(.workpage, .sx-dialog) button.primary:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--termru-accent) 88%, black);
+    border-color: var(--termru-text-3);
   }
 
   :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled),
   :is(.workpage, .sx-dialog) button.link:hover:not(:disabled) {
-    color: var(--termru-accent);
+    color: var(--termru-accent-text);
   }
-}
 
-:is(.workpage, .sx-dialog) button:active:not(:disabled) {
-  transform: scale(var(--press-scale, 0.97));
+  :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
+    background: var(--termru-raised);
+  }
 }
 
 :is(.workpage, .sx-dialog) button:disabled {
@@ -417,10 +476,10 @@ html:root[data-reduced-motion='on'] {
   cursor: not-allowed;
 }
 
-/* No border, no fill: the frame's "Cancel". */
+/* No fill: the frame's "Cancel". */
 :is(.workpage, .sx-dialog) button.quiet {
-  border-color: transparent;
   background: none;
+  color: var(--termru-text-2);
 }
 
 /* Text that acts: inline, underlined, no box. */
@@ -429,86 +488,32 @@ html:root[data-reduced-motion='on'] {
   padding: 0;
   border: none;
   background: none;
-  color: var(--termru-accent);
+  color: var(--termru-accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
   border-radius: 2px;
 }
 
 :is(.workpage, .sx-dialog) button.danger.quiet {
-  color: var(--termru-danger);
+  color: var(--termru-err-text);
 }
 
-/* A mono section label: `FOLDER TREE`, `LOCAL CREDENTIAL`. */
-:is(.workpage, .sx-dialog) .wp-label {
+/* A section label: sentence case, 11 px, medium. The pages that have not been
+   rebuilt yet still write theirs in capitals (`FOLDER TREE`); the label shows
+   them as a sentence until their markup is rewritten. */
+:is(.workpage, .sx-dialog) :is(.wp-label, .section-label) {
   margin: 0;
-  font-family: var(--termru-font-mono);
+  font-family: var(--termru-font-ui);
   font-size: var(--termru-text-meta-size);
   line-height: var(--termru-text-meta-lh);
-  letter-spacing: 0.08em;
+  font-weight: var(--termru-text-meta-weight);
+  letter-spacing: 0;
+  text-transform: lowercase;
+  color: var(--termru-text-3);
+}
+
+:is(.workpage, .sx-dialog) :is(.wp-label, .section-label)::first-letter {
   text-transform: uppercase;
-  color: var(--termru-muted);
-}
-
-/* sync/preferences/dialogs/notices (4c) — the Sync and Preferences pages,
-   the connect, host-key and sign-in dialogs (they share the work-page field
-   and button rules above through `.sx-dialog`) and the notices. Additions
-   only. */
-/* A page that is not a `.workpage` (Hosts) takes the same field fill from the
-   * outlet: white on the white page, a well in dark. */
-.outlet {
-  --wp-field: var(--termru-surface);
-}
-
-:root[data-theme='dark'] .outlet {
-  --wp-field: var(--termru-canvas);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .outlet {
-    --wp-field: var(--termru-canvas);
-  }
-}
-
-html:root {
-  /* How far a notice travels in and out (Doc B: 8 px, transform and opacity). */
-  --notice-shift: -8px;
-  /* How far a block that arrives on a page rises, and how long it takes
-     (`actions/appear.ts`). */
-  --appear-shift: 4px;
-  --appear-duration: var(--motion-context);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html:root:not([data-reduced-motion='off']) {
-    --notice-shift: 0px;
-    --appear-shift: 0px;
-    --appear-duration: 80ms;
-  }
-}
-
-html:root[data-reduced-motion='on'] {
-  --notice-shift: 0px;
-  --appear-shift: 0px;
-  --appear-duration: 80ms;
-}
-
-/* motion (4d) — what every pressable and every arriving block does. */
-
-/* Every button gives under the finger (100 ms, transform only). Specificity 0
-   (`:where`): a component that sets its own transition or transform wins.
-   Menu entries do not press: they are a list, not buttons. Rows and the
-   terminal are not buttons either. */
-:where(button:not([role='menuitem'])) {
-  transition:
-    transform var(--motion-fast) var(--ease-out),
-    background-color var(--motion-fast) ease,
-    border-color var(--motion-fast) ease,
-    color var(--motion-fast) ease;
-}
-
-:where(button:not([role='menuitem']):active:not(:disabled):not([aria-disabled='true'])) {
-  transform: scale(var(--press-scale, 0.97));
 }
 
 /* A block that arrives on a page (`actions/appear.ts`): opacity and a 4 px

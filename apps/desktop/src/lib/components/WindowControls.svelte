@@ -73,17 +73,17 @@
     width: 44px;
     border: none;
     background: none;
-    color: var(--termru-muted);
+    color: var(--termru-text-2);
     cursor: default;
   }
 
   .control:hover {
-    background: var(--termru-subtle);
-    color: var(--termru-fg);
+    background: var(--termru-side);
+    color: var(--termru-text);
   }
 
   .control.close:hover {
-    background: var(--termru-danger);
-    color: var(--termru-on-danger);
+    background: var(--termru-err-text);
+    color: var(--termru-on-err);
   }
 </style>

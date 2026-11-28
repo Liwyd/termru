@@ -221,4 +221,62 @@ describe('HostsStore', () => {
     expect(store.lastUsed(used)).toBe(1_760_000_000_000);
     expect(store.lastUsed(fresh)).toBeNull();
   });
+
+  it('orders by recent activity, by name, or by folder', () => {
+    const store = new HostsStore();
+    store.groups = [group('g1', 'Beta'), group('g2', 'Alpha')];
+    const [a, b, c, d] = [
+      { ...host('zulu'), group_id: 'g1' },
+      { ...host('yankee'), group_id: 'g2' },
+      host('x-ray'),
+      { ...host('whiskey'), group_id: 'g2' },
+    ];
+    store.hosts = [a, b, c, d];
+    store.recentAt = { 'host-x-ray': 300, 'host-zulu': 100 };
+    const names = () => store.sortedAll.map((entry) => entry.name);
+
+    expect(names()).toEqual(['x-ray', 'zulu', 'whiskey', 'yankee']);
+
+    store.setSort('name');
+    expect(names()).toEqual(['whiskey', 'x-ray', 'yankee', 'zulu']);
+
+    // By folder path; the hosts without a folder come last.
+    store.setSort('folder');
+    expect(names()).toEqual(['whiskey', 'yankee', 'zulu', 'x-ray']);
+  });
+
+  it('counts the library over every host, whatever the search says', () => {
+    const store = new HostsStore();
+    store.groups = [group('g1', 'Production'), group('g2', 'Europe', 'g1')];
+    store.hosts = [
+      { ...host('a', true), group_id: 'g2' },
+      { ...host('b', true), group_id: 'g1' },
+      host('c'),
+    ];
+    store.recentAt = { 'host-a': 10 };
+    store.query = 'zzz';
+    expect(store.libraryCounts).toEqual({ all: 3, favorites: 2, recent: 1, unfiled: 1 });
+    const production = store.folderTree.nodes.find((node) => node.group.id === 'g1');
+    // A folder counts the hosts of the folders under it.
+    expect(production?.count).toBe(2);
+    expect(production?.directCount).toBe(1);
+  });
+
+  it('shows a library view or a folder, one at a time', () => {
+    const store = new HostsStore();
+    store.groups = [group('g1', 'Production')];
+    store.hosts = [{ ...host('a', true), group_id: 'g1' }, host('b')];
+
+    store.showLibrary('favorites');
+    expect(store.rows.map((entry) => entry.name)).toEqual(['a']);
+    store.showLibrary('unfiled');
+    expect(store.rows.map((entry) => entry.name)).toEqual(['b']);
+    store.showFolder('g1');
+    expect(store.filterTab).toBe('all');
+    expect(store.rows.map((entry) => entry.name)).toEqual(['a']);
+    // Choosing a library view leaves the folder.
+    store.showLibrary('all');
+    expect(store.folderFilter).toBe('');
+    expect(store.rows).toHaveLength(2);
+  });
 });
