@@ -21,7 +21,7 @@ termru-core = { workspace = true }
 axum = { version = "0.8", features = ["json", "macros", "http1", "http2", "tokio"] }
 tokio = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["timeout", "trace"] }
+tower-http = { version = "0.7", features = ["timeout", "trace"] }
 # `sqlx` can not be used here: its optional sqlite driver links the native
 # library `sqlite3`, which the desktop app already links through `rusqlite`,
 # and cargo allows only one package per `links` value. `tokio-postgres` plus
