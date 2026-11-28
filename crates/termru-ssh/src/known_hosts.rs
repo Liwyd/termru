@@ -117,6 +117,8 @@ impl From<KnownHostsError> for SshError {
 /// external edits (e.g. `ssh-keygen -R`) are picked up immediately.
 pub struct KnownHosts {
     path: PathBuf,
+    /// Extra files that are only ever read (the user's `~/.ssh/known_hosts`).
+    readonly: Vec<PathBuf>,
 }
 
 enum LineKind {
@@ -311,9 +313,62 @@ fn hashed_pattern(host_port: &str) -> String {
     format!("|1|{}|{}", base64_encode(&salt), base64_encode(&mac))
 }
 
+/// The verdict over the writable file (`own`) and the read-only ones
+/// (`theirs`): see [`KnownHosts::with_readonly`] for the rules.
+fn combine(own: Evaluation, theirs: Vec<Evaluation>) -> Evaluation {
+    if matches!(own, Evaluation::Revoked { .. }) {
+        return own;
+    }
+    if let Some(revoked) = theirs
+        .iter()
+        .find(|evaluation| matches!(evaluation, Evaluation::Revoked { .. }))
+    {
+        return revoked.clone();
+    }
+    if !matches!(own, Evaluation::Unknown { .. }) {
+        return own;
+    }
+    if let Some(known) = theirs
+        .iter()
+        .find(|evaluation| matches!(evaluation, Evaluation::Known { .. }))
+    {
+        return known.clone();
+    }
+    if let Some(changed) = theirs
+        .iter()
+        .find(|evaluation| matches!(evaluation, Evaluation::Changed { .. }))
+    {
+        return changed.clone();
+    }
+    own
+}
+
 impl KnownHosts {
     pub fn with_path(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            readonly: Vec::new(),
+        }
+    }
+
+    /// Adds known_hosts files that are consulted but **never written**.
+    ///
+    /// How they combine with the writable file (see [`Evaluation`]):
+    /// * `@revoked` in any file refuses the key;
+    /// * what the writable file says wins once it says anything: it holds
+    ///   what the user decided in this app, so a key it knows is known and a
+    ///   key that contradicts it is a changed key, whatever the read-only
+    ///   files hold;
+    /// * a host the writable file has no entry for is judged by the
+    ///   read-only files: the same key is trusted without a prompt, a
+    ///   different key of the same type is a changed key (the prompt's
+    ///   "accept" records the new key in the writable file only);
+    /// * a read-only file that cannot be read is skipped: it is a bonus, not
+    ///   a requirement.
+    #[must_use]
+    pub fn with_readonly(mut self, paths: Vec<PathBuf>) -> Self {
+        self.readonly = paths;
+        self
     }
 
     /// `~/.ssh/known_hosts` — shared with the OpenSSH client on purpose, so
@@ -338,13 +393,42 @@ impl KnownHosts {
         &self.path
     }
 
-    /// Evaluates the presented key against the file. Never writes.
+    /// Evaluates the presented key against the writable file and the
+    /// read-only ones (see [`KnownHosts::with_readonly`]). Never writes.
     pub fn evaluate(&self, host: &str, port: u16, key: &PublicKey) -> Result<Evaluation, SshError> {
+        let own = self.evaluate_file(&self.path, host, port, key)?;
+        if self.readonly.is_empty() {
+            return Ok(own);
+        }
+        let theirs: Vec<Evaluation> = self
+            .readonly
+            .iter()
+            .filter_map(
+                |path| match self.evaluate_file(path, host, port, key) {
+                    Ok(evaluation) => Some(evaluation),
+                    Err(error) => {
+                        tracing::warn!(path = %path.display(), %error, "skipping an unreadable known_hosts file");
+                        None
+                    }
+                },
+            )
+            .collect();
+        Ok(combine(own, theirs))
+    }
+
+    /// Evaluates against one file. Never writes.
+    fn evaluate_file(
+        &self,
+        path: &Path,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+    ) -> Result<Evaluation, SshError> {
         let hp = host_port_string(host, port);
         let presented_type = algorithm_name(key);
         let presented_fp = fingerprint(key);
 
-        let contents = match std::fs::read_to_string(&self.path) {
+        let contents = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Evaluation::Unknown {
@@ -354,7 +438,7 @@ impl KnownHosts {
             }
             Err(e) => {
                 return Err(KnownHostsError::Io {
-                    path: self.path.clone(),
+                    path: path.to_path_buf(),
                     source: e,
                 }
                 .into());
@@ -459,13 +543,32 @@ impl KnownHosts {
     /// handshake asks the server for these types first, so a server that has
     /// several host keys presents one we can actually verify.
     pub fn known_key_types(&self, host: &str, port: u16) -> Result<Vec<String>, SshError> {
+        let mut types = self.key_types_in(&self.path, host, port)?;
+        for path in &self.readonly {
+            match self.key_types_in(path, host, port) {
+                Ok(more) => {
+                    for key_type in more {
+                        if !types.contains(&key_type) {
+                            types.push(key_type);
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "skipping an unreadable known_hosts file");
+                }
+            }
+        }
+        Ok(types)
+    }
+
+    fn key_types_in(&self, path: &Path, host: &str, port: u16) -> Result<Vec<String>, SshError> {
         let hp = host_port_string(host, port);
-        let contents = match std::fs::read_to_string(&self.path) {
+        let contents = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => {
                 return Err(KnownHostsError::Io {
-                    path: self.path.clone(),
+                    path: path.to_path_buf(),
                     source: e,
                 }
                 .into());
@@ -513,10 +616,13 @@ impl KnownHosts {
         } else {
             // Refuse to silently add a second same-type key (would mask a
             // changed-key situation for future evaluations).
-            if let Evaluation::Known { .. } = self.evaluate(host, port, key)? {
+            // The writable file only: a key the read-only files vouch for is
+            // still written here when the user chose to trust it.
+            let current = self.evaluate_file(&self.path, host, port, key)?;
+            if let Evaluation::Known { .. } = current {
                 return Ok(());
             }
-            if let Evaluation::Changed { .. } = self.evaluate(host, port, key)? {
+            if let Evaluation::Changed { .. } = current {
                 return Err(SshError::Protocol(
                     "host key differs from the stored entry; explicit replacement required"
                         .to_string(),
@@ -1299,5 +1405,177 @@ mod tests {
             "temp files left behind: {leftovers:?}"
         );
         assert!(read_file(&kh).starts_with('w'));
+    }
+
+    // ---- read-only extra files (the user's ~/.ssh/known_hosts) ----
+
+    /// A system known_hosts file with the given (host-pattern, key) lines.
+    fn system_file(dir: &Path, name: &str, lines: &[(&str, &str, &PublicKey)]) -> PathBuf {
+        let path = dir.join(name);
+        let mut text = String::new();
+        for (marker, host, key) in lines {
+            if !marker.is_empty() {
+                text.push_str(marker);
+                text.push(' ');
+            }
+            text.push_str(&format!(
+                "{host} {} {}\n",
+                algorithm_name(key),
+                openssh_b64(key)
+            ));
+        }
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn with_system(dir: &tempfile::TempDir, system: Vec<PathBuf>) -> KnownHosts {
+        KnownHosts::with_path(dir.path().join("known_hosts")).with_readonly(system)
+    }
+
+    #[test]
+    fn a_key_only_the_system_file_knows_is_trusted_without_a_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_key(1).public_key().clone();
+        let system = system_file(dir.path(), "system", &[("", "example.com", &key)]);
+        let kh = with_system(&dir, vec![system]);
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &key).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        // Other hosts are still unknown.
+        assert!(matches!(
+            kh.evaluate("other.example.com", 22, &key).unwrap(),
+            Evaluation::Unknown { .. }
+        ));
+        // Nothing was written to the writable file by looking.
+        assert!(!kh.path().exists());
+    }
+
+    #[test]
+    fn a_different_key_in_the_system_file_is_a_changed_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let system_key = ed25519_key(1).public_key().clone();
+        let presented = ed25519_key(2).public_key().clone();
+        let system = system_file(dir.path(), "system", &[("", "example.com", &system_key)]);
+        let kh = with_system(&dir, vec![system.clone()]);
+        let Evaluation::Changed { old, new } = kh.evaluate("example.com", 22, &presented).unwrap()
+        else {
+            panic!("a contradicting system entry must block");
+        };
+        assert_eq!(old.fingerprint, fingerprint(&system_key));
+        assert_eq!(new.fingerprint, fingerprint(&presented));
+
+        // Accepting the warning records the new key in the writable file
+        // only; the system file is not touched.
+        let before = std::fs::read(&system).unwrap();
+        kh.trust("example.com", 22, &presented, true).unwrap();
+        assert_eq!(std::fs::read(&system).unwrap(), before);
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &presented).unwrap(),
+            Evaluation::Known { .. }
+        ));
+    }
+
+    /// What the user decided in this app wins over a stale system entry, and
+    /// a key that contradicts the app's own entry still blocks even when the
+    /// system file knows it.
+    #[test]
+    fn the_writable_file_wins_once_it_has_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = ed25519_key(1).public_key().clone();
+        let new = ed25519_key(2).public_key().clone();
+        let system = system_file(dir.path(), "system", &[("", "example.com", &old)]);
+        let kh = with_system(&dir, vec![system]);
+        kh.trust("example.com", 22, &new, true).unwrap();
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &new).unwrap(),
+            Evaluation::Known { .. }
+        ));
+        // The system file vouches for `old`, but the app pinned `new`.
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &old).unwrap(),
+            Evaluation::Changed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_revoked_key_in_the_system_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_key(1).public_key().clone();
+        let system = system_file(dir.path(), "system", &[("@revoked", "example.com", &key)]);
+        let kh = with_system(&dir, vec![system]);
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &key).unwrap(),
+            Evaluation::Revoked { .. }
+        ));
+        // Even after the app trusted it: revocation is final.
+        let (_other, own) = setup();
+        own.trust("example.com", 22, &key, false).unwrap();
+        let both = KnownHosts::with_path(own.path()).with_readonly(vec![dir.path().join("system")]);
+        assert!(matches!(
+            both.evaluate("example.com", 22, &key).unwrap(),
+            Evaluation::Revoked { .. }
+        ));
+    }
+
+    #[test]
+    fn system_files_use_the_same_host_syntax() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_key(1).public_key().clone();
+        let system = system_file(
+            dir.path(),
+            "system",
+            &[
+                ("", "[example.com]:2222", &key),
+                ("", "*.corp.example", &key),
+                ("", "fe80::1", &key),
+            ],
+        );
+        let kh = with_system(&dir, vec![system]);
+        for (host, port) in [
+            ("example.com", 2222),
+            ("db.corp.example", 22),
+            ("fe80::1", 22),
+        ] {
+            assert!(
+                matches!(
+                    kh.evaluate(host, port, &key).unwrap(),
+                    Evaluation::Known { .. }
+                ),
+                "{host}:{port}"
+            );
+        }
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &key).unwrap(),
+            Evaluation::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_system_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_key(1).public_key().clone();
+        // Missing, and a directory (cannot be read as a file).
+        let kh = with_system(
+            &dir,
+            vec![dir.path().join("absent"), dir.path().to_path_buf()],
+        );
+        assert!(matches!(
+            kh.evaluate("example.com", 22, &key).unwrap(),
+            Evaluation::Unknown { .. }
+        ));
+        assert!(kh.known_key_types("example.com", 22).unwrap().is_empty());
+    }
+
+    #[test]
+    fn known_key_types_include_the_system_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_key(1).public_key().clone();
+        let system = system_file(dir.path(), "system", &[("", "example.com", &key)]);
+        let kh = with_system(&dir, vec![system]);
+        assert_eq!(
+            kh.known_key_types("example.com", 22).unwrap(),
+            vec!["ssh-ed25519".to_string()]
+        );
     }
 }

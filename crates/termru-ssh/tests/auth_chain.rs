@@ -403,8 +403,10 @@ impl TestServer {
             keepalive_seconds: 0,
             timeouts,
             known_hosts_path: self.dir.path().join("known_hosts"),
+            extra_known_hosts: Vec::new(),
             host_key_prompt: Arc::new(AcceptAllHostKeys),
             auth_prompt: prompt,
+            setup: Default::default(),
         }
     }
 }
@@ -825,8 +827,10 @@ async fn the_authentication_deadline_still_applies_without_a_question() {
             ..ConnectTimeouts::default()
         },
         known_hosts_path: dir.path().join("known_hosts"),
+        extra_known_hosts: Vec::new(),
         host_key_prompt: Arc::new(AcceptAllHostKeys),
         auth_prompt: Arc::new(NoAuthPrompts),
+        setup: Default::default(),
     };
     let (tx, _rx) = mpsc::channel(8);
     let error = Session::open(params, SessionOptions::default(), tx)

@@ -84,7 +84,7 @@ is harmless.
 | Boundary | What crosses it | What never crosses it |
 |---|---|---|
 | webview ↔ Rust | IPC commands with validated arguments | The webview has no access to the file system, the network or the shell (the capability file grants `core:default`, the window basics, the key file picker and `opener:allow-open-url` for http, https and mailto addresses) |
-| app ↔ SSH server | The SSH protocol, a key or a password | Nothing else; there is no agent forwarding, no port forwarding |
+| app ↔ SSH server | The SSH protocol, a key or a password; per host and only when it asks for them: jump hosts, port forwards, environment variables, a startup command and (off by default, never to a jump host) the agent (ADR 0010) | Anything the host did not ask for: a listener is on loopback unless the host says otherwise, and a secret is never sent as an environment value by Termru |
 | app ↔ cloud | The sync protocol: hosts, groups, tags, preferences | Secrets, private keys, the log files, the workspace geometry of other devices |
 | app ↔ OS | The credential store (secrets), the data directory (the database, the logs) | The database never holds a secret |
 

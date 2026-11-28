@@ -67,6 +67,8 @@ import type {
   SessionInfo,
   SessionStatus,
   SessionUpdate,
+  SshConfigImportReport,
+  SshConfigPreview,
   SyncOutcome,
   SyncStatus,
   Tag,
@@ -1241,7 +1243,8 @@ function now(): string {
 function validateHostLikeBackend(host: Host): void {
   if (host.name.trim().length === 0) commandError('name must not be empty');
   if ([...host.name].length > 128) commandError('name must be at most 128 characters');
-  if (!/^[A-Za-z0-9._:-]+$/.test(host.address)) {
+  // Letters, digits, `.-_:` and, for IPv6, brackets and a `%zone` (`fe80::1%eth0`).
+  if (!/^[A-Za-z0-9._:%[\]-]+$/.test(host.address)) {
     commandError(
       "address contains invalid characters (allowed: letters, digits, '.', '-', '_', ':')",
     );
@@ -1261,6 +1264,42 @@ function validateHostLikeBackend(host: Host): void {
   if (host.keepalive_seconds > 3600) {
     commandError('keepalive interval must be 0 (automatic) or at most 3600 seconds');
   }
+}
+
+/** What the harness offers to import (no real `~/.ssh/config` here). */
+function sshConfigSample(): Omit<SshConfigPreview['candidates'][number], 'existing_host_id'>[] {
+  return [
+    {
+      alias: 'bastion',
+      host: 'bastion.corp.example',
+      user: 'ops',
+      port: 2222,
+      identity_files: ['/home/demo/.ssh/work_ed25519'],
+      jump_chain: [],
+      warnings: [],
+      problem: null,
+    },
+    {
+      alias: 'app',
+      host: 'app.corp.example',
+      user: 'deploy',
+      port: 22,
+      identity_files: ['/home/demo/.ssh/work_ed25519'],
+      jump_chain: ['bastion'],
+      warnings: [],
+      problem: null,
+    },
+    {
+      alias: 'legacy',
+      host: 'bad host',
+      user: 'root',
+      port: 22,
+      identity_files: [],
+      jump_chain: [],
+      warnings: ['uses ProxyCommand, which cannot be imported; the host is imported without it'],
+      problem: 'address contains invalid characters',
+    },
+  ];
 }
 
 /** The folder rules of the store's `validate_parent`, in its words. */
@@ -1560,6 +1599,69 @@ const handlers: Record<string, Handler> = {
   },
   secret_has: (args) =>
     state.secrets.has(secretKey(arg<string>(args, 'hostId'), arg<string>(args, 'kind'))),
+
+  // Importing from ~/.ssh/config (fixed sample: the harness has no file system)
+  ssh_config_preview: (): SshConfigPreview => ({
+    found: true,
+    path: '/home/demo/.ssh/config',
+    candidates: sshConfigSample().map((candidate) => ({
+      ...candidate,
+      existing_host_id:
+        state.hosts.find(
+          (host) =>
+            !host.deleted &&
+            host.address === candidate.host &&
+            host.port === candidate.port &&
+            host.username === candidate.user,
+        )?.id ?? null,
+    })),
+    warnings: ['/home/demo/.ssh/config:31: a Match block was skipped'],
+  }),
+  ssh_config_import: (args): SshConfigImportReport => {
+    const wanted = new Set(arg<string[]>(args, 'selection'));
+    const imported: SshConfigImportReport['imported'] = [];
+    const skipped: SshConfigImportReport['skipped'] = [];
+    const already: string[] = [];
+    for (const candidate of sshConfigSample()) {
+      if (!wanted.has(candidate.alias)) continue;
+      if (candidate.problem) {
+        skipped.push({ alias: candidate.alias, reason: candidate.problem });
+        continue;
+      }
+      const exists = state.hosts.some(
+        (host) =>
+          !host.deleted &&
+          host.address === candidate.host &&
+          host.port === candidate.port &&
+          host.username === candidate.user,
+      );
+      if (exists) {
+        already.push(candidate.alias);
+        continue;
+      }
+      const id = crypto.randomUUID();
+      state.hosts = upsert(
+        state.hosts,
+        fixtureHost(state.hosts.length, {
+          id,
+          name: candidate.alias,
+          address: candidate.host,
+          port: candidate.port,
+          username: candidate.user ?? 'demo',
+          auth: { type: 'agent' },
+          group_id: null,
+        }),
+      );
+      imported.push({ id, name: candidate.alias });
+    }
+    return {
+      imported,
+      identities_created: 0,
+      skipped,
+      already_present: already,
+      warnings: [],
+    };
+  },
 
   // Sync
   sync_status: () => state.sync,

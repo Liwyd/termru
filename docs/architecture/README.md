@@ -15,6 +15,7 @@ exact paths.
 | [0007](0007-licensing.md) | Licensing: Apache-2.0 code, permissive dependency policy | Accepted |
 | [0008](0008-authentication.md) | Authentication: ordered chain driven by the server, questions routed to the UI | Accepted |
 | [0009](0009-notify-facade.md) | Notices: one facade with its own copy, dedup and a bounded queue | Accepted |
+| [0010](0010-data-model-v2.md) | Data model v2: jump hosts, port forwards, environment, startup command, agent forwarding, authentication order | Accepted |
 
 [The architecture overview](overview.md) ties the decisions together: the
 shape of the system, the crates, the data flow of a change and the

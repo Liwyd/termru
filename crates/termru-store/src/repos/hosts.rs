@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 
 use termru_core::ids::{GroupId, HostId, TagId};
 use termru_core::sync::RecordKind;
+use termru_core::validate::JumpNode;
 use termru_core::{AuthMethod, Host};
 
 use crate::Store;
@@ -17,9 +18,28 @@ pub struct Hosts<'a> {
     pub(crate) store: &'a Store,
 }
 
+/// An identity an import creates, with the key file it is bound to on this
+/// device (the path only: the key itself is never read or copied).
+#[derive(Debug, Clone)]
+pub struct ImportedIdentity {
+    pub identity: termru_core::Identity,
+    pub key_path: String,
+}
+
+/// What [`Hosts::import`] stores in one transaction.
+#[derive(Debug, Clone, Default)]
+pub struct ImportBatch {
+    pub identities: Vec<ImportedIdentity>,
+    pub hosts: Vec<Host>,
+}
+
 pub(crate) const HOST_COLUMNS: &str = "id, name, address, port, username, auth, group_id, favorite, \
      description, term, keepalive_seconds, sort_order, created_at, updated_at, deleted, \
-     server_rev, dirty";
+     server_rev, dirty, jump_chain, forwards, env, startup_command, agent_forward, auth_order";
+
+/// Number of columns in [`HOST_COLUMNS`]: queries that select more columns
+/// after the host's own (a join) find theirs from this index on.
+pub(crate) const HOST_COLUMN_COUNT: usize = 23;
 
 pub(crate) fn row_to_host(row: &Row<'_>) -> rusqlite::Result<Host> {
     let id: String = row.get(0)?;
@@ -51,7 +71,25 @@ pub(crate) fn row_to_host(row: &Row<'_>) -> rusqlite::Result<Host> {
         deleted: deleted != 0,
         server_rev: row.get(15)?,
         dirty: row.get::<_, i64>(16)? != 0,
+        jump_chain: json_column(row, 17)?.unwrap_or_default(),
+        forwards: json_column(row, 18)?.unwrap_or_default(),
+        env: json_column(row, 19)?.unwrap_or_default(),
+        startup_command: row.get(20)?,
+        agent_forward: row.get::<_, i64>(21)? != 0,
+        auth_order: json_column(row, 22)?,
     })
+}
+
+/// A JSON text column, or `None` when it is NULL or does not parse. The
+/// columns are only ever written by this crate; a value that fails to parse
+/// (a hand-edited database) reads as "not set" rather than making the whole
+/// host list unreadable.
+fn json_column<T: serde::de::DeserializeOwned>(
+    row: &Row<'_>,
+    index: usize,
+) -> rusqlite::Result<Option<T>> {
+    let text: Option<String> = row.get(index)?;
+    Ok(text.and_then(|text| serde_json::from_str(&text).ok()))
 }
 
 pub(crate) fn fetch_tags(conn: &Connection, hosts: &mut [Host]) -> Result<(), StoreError> {
@@ -83,18 +121,31 @@ pub(crate) fn fetch_tags(conn: &Connection, hosts: &mut [Host]) -> Result<(), St
 
 fn upsert_host_row(conn: &Connection, host: &Host) -> Result<(), StoreError> {
     let auth = to_json(&host.auth, "host auth")?;
+    let jump_chain = to_json(&host.jump_chain, "host jump chain")?;
+    let forwards = to_json(&host.forwards, "host forwards")?;
+    let env = to_json(&host.env, "host env")?;
+    let auth_order = host
+        .auth_order
+        .as_ref()
+        .map(|order| to_json(order, "host auth order"))
+        .transpose()?;
     conn.execute(
         "INSERT INTO hosts (id, name, address, port, username, auth, group_id, favorite, \
          description, term, keepalive_seconds, sort_order, created_at, updated_at, deleted, \
-         server_rev, dirty) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+         server_rev, dirty, jump_chain, forwards, env, startup_command, agent_forward, \
+         auth_order) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+                 ?18, ?19, ?20, ?21, ?22, ?23) \
          ON CONFLICT(id) DO UPDATE SET \
            name = excluded.name, address = excluded.address, port = excluded.port, \
            username = excluded.username, auth = excluded.auth, group_id = excluded.group_id, \
            favorite = excluded.favorite, description = excluded.description, term = excluded.term, \
            keepalive_seconds = excluded.keepalive_seconds, sort_order = excluded.sort_order, \
            created_at = excluded.created_at, updated_at = excluded.updated_at, \
-           deleted = excluded.deleted, server_rev = excluded.server_rev, dirty = excluded.dirty",
+           deleted = excluded.deleted, server_rev = excluded.server_rev, dirty = excluded.dirty, \
+           jump_chain = excluded.jump_chain, forwards = excluded.forwards, env = excluded.env, \
+           startup_command = excluded.startup_command, agent_forward = excluded.agent_forward, \
+           auth_order = excluded.auth_order",
         rusqlite::params![
             host.id.to_string(),
             host.name,
@@ -113,9 +164,50 @@ fn upsert_host_row(conn: &Connection, host: &Host) -> Result<(), StoreError> {
             bool_to_int(host.deleted),
             host.server_rev,
             bool_to_int(host.dirty),
+            jump_chain,
+            forwards,
+            env,
+            host.startup_command,
+            bool_to_int(host.agent_forward),
+            auth_order,
         ],
     )
     .map_err(StoreError::Sqlite)?;
+    Ok(())
+}
+
+/// The part of a stored host the jump-chain walk needs (`None`: no such live
+/// host). Unparseable chains read as empty, like everywhere else.
+fn jump_node(conn: &Connection, id: HostId) -> Option<JumpNode> {
+    conn.query_row(
+        "SELECT name, jump_chain FROM hosts WHERE id = ?1 AND deleted = 0",
+        [id.to_string()],
+        |row| {
+            let chain: String = row.get(1)?;
+            Ok(JumpNode {
+                name: row.get(0)?,
+                jump_chain: serde_json::from_str(&chain).unwrap_or_default(),
+            })
+        },
+    )
+    .ok()
+}
+
+/// A local save must leave a route that can be walked: every hop exists and
+/// the chain is neither a cycle nor too long. (Synced records skip this on
+/// purpose: they arrive in any order, so a hop may follow the host naming it.
+/// The route is checked again whenever a connection is built.)
+fn check_jump_chain(conn: &Connection, host: &Host, others: &[Host]) -> Result<(), StoreError> {
+    termru_core::validate::resolve_jump_chain(host.id, &host.name, &host.jump_chain, &|id| {
+        others
+            .iter()
+            .find(|other| other.id == id && !other.deleted)
+            .map(|other| JumpNode {
+                name: other.name.clone(),
+                jump_chain: other.jump_chain.clone(),
+            })
+            .or_else(|| jump_node(conn, id))
+    })?;
     Ok(())
 }
 
@@ -205,7 +297,14 @@ impl Hosts<'_> {
 
     /// Saves a host as a **local edit**: validates, stamps `updated_at`,
     /// marks it dirty, and queues a sync mutation — atomically.
+    ///
+    /// The jump chain must lead somewhere: every hop exists and the route is
+    /// neither a cycle nor longer than [`termru_core::validate::MAX_JUMP_HOPS`].
     pub fn save(&self, host: &mut Host) -> Result<(), StoreError> {
+        self.save_with(host, true)
+    }
+
+    fn save_with(&self, host: &mut Host, check_route: bool) -> Result<(), StoreError> {
         host.validate()?;
         host.updated_at = chrono::Utc::now();
         // A local edit marks the row dirty: the sync layer needs that flag to
@@ -216,6 +315,9 @@ impl Hosts<'_> {
         self.store.with_tx(move |conn| {
             ensure_group_exists(conn, host.group_id)?;
             ensure_tags_exist(conn, &host.tags)?;
+            if check_route {
+                check_jump_chain(conn, host, &[])?;
+            }
             upsert_host_row(conn, host)?;
             replace_host_tags(conn, id, &host.tags)?;
             enqueue_mutation(conn, &id.to_string(), RecordKind::Host)?;
@@ -249,7 +351,54 @@ impl Hosts<'_> {
     pub fn set_favorite(&self, id: HostId, favorite: bool) -> Result<(), StoreError> {
         let mut host = self.get(id)?.ok_or(StoreError::NotFound("host"))?;
         host.favorite = favorite;
-        self.save(&mut host)
+        // Starring a host must not fail because a jump host it names was
+        // deleted since: that is for the editor (and the connect) to report.
+        self.save_with(&mut host, false)
+    }
+
+    /// Stores everything of an import (identities with their key bindings,
+    /// hosts) in **one transaction**: either all of it is there afterwards
+    /// or none of it. The hosts may name each other as jump hosts; they are
+    /// checked as a set. Key files are only referenced by path, never read.
+    pub fn import(&self, batch: &mut ImportBatch) -> Result<(), StoreError> {
+        for entry in &mut batch.identities {
+            entry.identity.validate()?;
+            if entry.key_path.is_empty() || entry.key_path.contains('\0') {
+                return Err(StoreError::Validation(termru_core::CoreError::validation(
+                    "key path is invalid",
+                )));
+            }
+        }
+        for host in &batch.hosts {
+            host.validate()?;
+        }
+        let now = chrono::Utc::now();
+        for entry in &mut batch.identities {
+            entry.identity.updated_at = now;
+            entry.identity.dirty = true;
+        }
+        for host in &mut batch.hosts {
+            host.updated_at = now;
+            host.dirty = true;
+        }
+        let batch = &*batch;
+        self.store.with_tx(move |conn| {
+            for entry in &batch.identities {
+                let key = entry.identity.id.to_string();
+                crate::repos::identities::upsert_identity_row(conn, &entry.identity)?;
+                crate::repos::identities::bind_row(conn, &key, &entry.key_path)?;
+                enqueue_mutation(conn, &key, RecordKind::Identity)?;
+            }
+            for host in &batch.hosts {
+                ensure_group_exists(conn, host.group_id)?;
+                ensure_tags_exist(conn, &host.tags)?;
+                check_jump_chain(conn, host, &batch.hosts)?;
+                upsert_host_row(conn, host)?;
+                replace_host_tags(conn, host.id, &host.tags)?;
+                enqueue_mutation(conn, &host.id.to_string(), RecordKind::Host)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn touch_recent(&self, id: HostId) -> Result<(), StoreError> {
@@ -317,6 +466,7 @@ pub(crate) fn apply_remote(conn: &Connection, host: &Host) -> Result<(), StoreEr
 mod tests {
     use super::*;
     use crate::Store;
+    use termru_core::sync::RecordKind;
 
     fn store() -> Store {
         Store::open_in_memory().unwrap()
@@ -420,5 +570,242 @@ mod tests {
         host.group_id = None;
         host.tags = vec![TagId::new()];
         assert!(store.repos().hosts().save(&mut host).is_err());
+    }
+
+    #[test]
+    fn the_column_count_matches_the_column_list() {
+        assert_eq!(HOST_COLUMNS.split(',').count(), HOST_COLUMN_COUNT);
+    }
+
+    fn rich_host(name: &str) -> Host {
+        use termru_core::{AuthKind, EnvVar, Forward, ForwardKind};
+        let mut host = sample_host(name);
+        host.forwards = vec![
+            Forward {
+                kind: ForwardKind::Local,
+                bind_address: Some("127.0.0.1".into()),
+                bind_port: 5433,
+                target_host: Some("db.internal".into()),
+                target_port: Some(5432),
+                enabled: true,
+            },
+            Forward {
+                kind: ForwardKind::Dynamic,
+                bind_address: None,
+                bind_port: 1080,
+                target_host: None,
+                target_port: None,
+                enabled: false,
+            },
+        ];
+        host.env = vec![EnvVar {
+            name: "TERMRU_PROFILE".into(),
+            value: "ops".into(),
+        }];
+        host.startup_command = Some("cd /srv && ls".into());
+        host.agent_forward = true;
+        host.auth_order = Some(vec![AuthKind::Agent, AuthKind::Password]);
+        host
+    }
+
+    #[test]
+    fn the_v2_fields_survive_a_save_and_a_reload() {
+        let store = store();
+        let mut jump = sample_host("bastion");
+        store.repos().hosts().save(&mut jump).unwrap();
+        let mut host = rich_host("web-1");
+        host.jump_chain = vec![jump.id];
+        store.repos().hosts().save(&mut host).unwrap();
+
+        let loaded = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert_eq!(loaded.jump_chain, vec![jump.id]);
+        assert_eq!(loaded.forwards, host.forwards);
+        assert_eq!(loaded.env, host.env);
+        assert_eq!(loaded.startup_command.as_deref(), Some("cd /srv && ls"));
+        assert!(loaded.agent_forward);
+        assert_eq!(loaded.auth_order, host.auth_order);
+
+        // Clearing them stores the empty state, not the previous value.
+        let mut plain = loaded;
+        plain.jump_chain.clear();
+        plain.forwards.clear();
+        plain.env.clear();
+        plain.startup_command = None;
+        plain.agent_forward = false;
+        plain.auth_order = None;
+        store.repos().hosts().save(&mut plain).unwrap();
+        let loaded = store.repos().hosts().get(plain.id).unwrap().unwrap();
+        assert!(loaded.jump_chain.is_empty() && loaded.forwards.is_empty());
+        assert!(loaded.env.is_empty() && loaded.startup_command.is_none());
+        assert!(!loaded.agent_forward && loaded.auth_order.is_none());
+    }
+
+    /// What goes to the sync server and what comes back is the same host,
+    /// new fields included.
+    #[test]
+    fn the_v2_fields_are_in_the_sync_payload() {
+        let store = store();
+        let mut host = rich_host("web-1");
+        store.repos().hosts().save(&mut host).unwrap();
+        let payload = store
+            .repos()
+            .sync()
+            .local_payload(RecordKind::Host, &host.id.to_string())
+            .unwrap()
+            .expect("payload");
+        assert_eq!(payload["forwards"][0]["bind_port"], 5433);
+        assert_eq!(payload["env"][0]["name"], "TERMRU_PROFILE");
+        assert_eq!(payload["agent_forward"], true);
+        assert_eq!(payload["startup_command"], "cd /srv && ls");
+
+        // Another device applies that payload.
+        let other = Store::open_in_memory().unwrap();
+        let wire = termru_core::WireRecord {
+            id: host.id.to_string(),
+            kind: RecordKind::Host,
+            rev: 1,
+            updated_at: chrono::Utc::now(),
+            deleted: false,
+            payload: Some(payload),
+        };
+        other.repos().sync().apply_remote(&wire).unwrap();
+        let received = other.repos().hosts().get(host.id).unwrap().unwrap();
+        assert_eq!(received.forwards, host.forwards);
+        assert_eq!(received.env, host.env);
+        assert_eq!(received.auth_order, host.auth_order);
+        assert!(received.agent_forward);
+    }
+
+    #[test]
+    fn a_synced_host_may_name_a_jump_host_that_has_not_arrived() {
+        let other = Store::open_in_memory().unwrap();
+        let mut host = sample_host("web-1");
+        host.jump_chain = vec![HostId::new()];
+        let wire = termru_core::WireRecord {
+            id: host.id.to_string(),
+            kind: RecordKind::Host,
+            rev: 1,
+            updated_at: chrono::Utc::now(),
+            deleted: false,
+            payload: Some(serde_json::to_value(&host).unwrap()),
+        };
+        other.repos().sync().apply_remote(&wire).unwrap();
+        assert!(other.repos().hosts().get(host.id).unwrap().is_some());
+        // A local edit, though, has to leave a route that can be walked.
+        let mut local = other.repos().hosts().get(host.id).unwrap().unwrap();
+        let error = other
+            .repos()
+            .hosts()
+            .save(&mut local)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not exist"), "{error}");
+    }
+
+    #[test]
+    fn a_local_save_refuses_cycles_and_missing_or_deleted_hops() {
+        let store = store();
+        let mut a = sample_host("a");
+        let mut b = sample_host("b");
+        store.repos().hosts().save(&mut a).unwrap();
+        store.repos().hosts().save(&mut b).unwrap();
+        b.jump_chain = vec![a.id];
+        store.repos().hosts().save(&mut b).unwrap();
+
+        // a -> b -> a
+        a.jump_chain = vec![b.id];
+        let error = store.repos().hosts().save(&mut a).unwrap_err().to_string();
+        assert!(error.contains("cycle"), "{error}");
+        // Self reference.
+        a.jump_chain = vec![a.id];
+        assert!(store.repos().hosts().save(&mut a).is_err());
+        // Missing hop.
+        a.jump_chain = vec![HostId::new()];
+        let error = store.repos().hosts().save(&mut a).unwrap_err().to_string();
+        assert!(error.contains("does not exist"), "{error}");
+        // The refused saves wrote nothing.
+        let stored = store.repos().hosts().get(a.id).unwrap().unwrap();
+        assert!(stored.jump_chain.is_empty());
+
+        // A deleted hop is as good as missing for a new save...
+        let mut c = sample_host("c");
+        c.jump_chain = vec![b.id];
+        store.repos().hosts().soft_delete(b.id).unwrap();
+        assert!(store.repos().hosts().save(&mut c).is_err());
+    }
+
+    /// Starring a host whose jump host was deleted must still work.
+    #[test]
+    fn favoriting_does_not_trip_over_a_deleted_jump_host() {
+        let store = store();
+        let mut jump = sample_host("bastion");
+        store.repos().hosts().save(&mut jump).unwrap();
+        let mut host = sample_host("web-1");
+        host.jump_chain = vec![jump.id];
+        store.repos().hosts().save(&mut host).unwrap();
+        store.repos().hosts().soft_delete(jump.id).unwrap();
+        store.repos().hosts().set_favorite(host.id, true).unwrap();
+        assert!(
+            store
+                .repos()
+                .hosts()
+                .get(host.id)
+                .unwrap()
+                .unwrap()
+                .favorite
+        );
+    }
+
+    #[test]
+    fn an_import_is_all_or_nothing() {
+        let store = store();
+        let identity = termru_core::Identity::new("imported key".into());
+        let mut jump = sample_host("bastion");
+        let mut target = sample_host("app");
+        target.jump_chain = vec![jump.id];
+        target.auth = AuthMethod::PrivateKey {
+            identity_id: identity.id,
+        };
+        jump.auth = target.auth.clone();
+        let mut batch = ImportBatch {
+            identities: vec![ImportedIdentity {
+                identity: identity.clone(),
+                key_path: "/home/u/.ssh/id_ed25519".into(),
+            }],
+            hosts: vec![target.clone(), jump.clone()],
+        };
+        store.repos().hosts().import(&mut batch).unwrap();
+        assert_eq!(store.repos().hosts().list().unwrap().len(), 2);
+        assert_eq!(
+            store
+                .repos()
+                .identities()
+                .binding(identity.id)
+                .unwrap()
+                .as_deref(),
+            Some("/home/u/.ssh/id_ed25519")
+        );
+        let saved = store.repos().hosts().get(target.id).unwrap().unwrap();
+        assert_eq!(saved.jump_chain, vec![jump.id]);
+        // Everything is queued for sync, as after any local edit.
+        assert_eq!(store.repos().sync().pending().unwrap().len(), 3);
+
+        // One bad host (a cycle) sinks the whole batch.
+        let fresh = Store::open_in_memory().unwrap();
+        let mut a = sample_host("a");
+        let mut b = sample_host("b");
+        a.jump_chain = vec![b.id];
+        b.jump_chain = vec![a.id];
+        let mut batch = ImportBatch {
+            identities: vec![ImportedIdentity {
+                identity: termru_core::Identity::new("k".into()),
+                key_path: "/k".into(),
+            }],
+            hosts: vec![sample_host("fine"), a, b],
+        };
+        assert!(fresh.repos().hosts().import(&mut batch).is_err());
+        assert!(fresh.repos().hosts().list().unwrap().is_empty());
+        assert!(fresh.repos().identities().list().unwrap().is_empty());
+        assert!(fresh.repos().sync().pending().unwrap().is_empty());
     }
 }

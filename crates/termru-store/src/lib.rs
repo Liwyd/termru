@@ -29,6 +29,7 @@ mod util;
 pub use backup::{backup_to, restore_from_backup};
 pub use error::StoreError;
 pub use repos::conflicts::ConflictRecord;
+pub use repos::hosts::{ImportBatch, ImportedIdentity};
 pub use repos::sync::{ApplyOutcome, PendingMutation, PushRecord, SyncMeta};
 pub use repos::{DevicePrefs, Repos};
 

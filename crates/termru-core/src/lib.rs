@@ -15,7 +15,7 @@ pub mod validate;
 pub mod workspace;
 
 pub use error::CoreError;
-pub use host::{AuthMethod, Host};
+pub use host::{AuthKind, AuthMethod, EnvVar, Forward, ForwardKind, Host};
 pub use identity::Identity;
 pub use preference::Preferences;
 pub use sync::{

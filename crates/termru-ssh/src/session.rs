@@ -20,6 +20,15 @@
 //!   the newest value matters) and is independent of the input pump: a resize
 //!   never queues behind a blocked write.
 //!
+//! ## Route, forwards and setup
+//!
+//! `connect_and_start` connects every hop of the route (`jump.rs`), then sets
+//! the shell channel up (environment, agent forwarding, terminal, shell). The
+//! actor also owns the connections to the jump hosts and the port forwards
+//! (`forward.rs`); the forwards start when `Ready` has been announced and are
+//! stopped, with their listening sockets closed, before the session reports
+//! its end.
+//!
 //! ## Output
 //!
 //! Output flows to one consumer through a bounded channel. The actor **never
@@ -45,16 +54,18 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use russh::client::{self, Config as ClientConfig, Handle, Handler, Msg};
+use russh::client::{self, ChannelOpenHandle, Handle, Handler, Msg};
 use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::auth::{AuthContext, MAX_BANNER_BYTES, authenticate, sanitize_banner};
-use crate::config::{ConnectParams, HostKeyPromptRequest};
-use crate::dial::{Budget, dial};
+use crate::auth::{MAX_BANNER_BYTES, sanitize_banner};
+use crate::config::{AgentForward, ConnectParams, ForwardSpec, HostKeyPromptRequest};
+use crate::dial::Budget;
 use crate::error::SshError;
-use crate::known_hosts::{Evaluation, KnownHosts, preferred_host_key_algorithms};
+use crate::forward::{ForwardRuntime, ForwardStatus, RemoteForwards};
+use crate::jump::{Progress, TargetExtras, close_all};
+use crate::known_hosts::{Evaluation, KnownHosts};
 use crate::reconnect::ReconnectPolicy;
 use crate::replay::ReplayRing;
 
@@ -91,6 +102,10 @@ pub enum SessionEvent {
     Exit {
         code: Option<i32>,
     },
+    /// What became of one of the host's port forwards. They start after
+    /// `Ready` (so these events follow it), once per forward, and again after
+    /// every reconnect; a forward that dies later reports `Failed`.
+    Forward(ForwardStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +144,8 @@ pub enum ErrorCategory {
 impl ErrorCategory {
     pub fn of(error: &SshError) -> Self {
         match error {
+            // A failure on a jump host is what it is on that host.
+            SshError::Hop { source, .. } => Self::of(source),
             SshError::AuthFailed { .. }
             | SshError::AuthTimeout
             | SshError::AuthCancelled
@@ -183,6 +200,8 @@ enum SessionCommand {
     /// Snapshot of the replay ring **without** replacing the consumer (used
     /// to show a second view the same scrollback).
     Replay(oneshot::Sender<Vec<u8>>),
+    /// The session is announced as ready: start its port forwards.
+    StartForwards,
     Close,
 }
 
@@ -290,6 +309,8 @@ impl Session {
         let _ = events
             .send(SessionEvent::Status(SessionStatus::Ready))
             .await;
+        // Only now: the forwards' statuses must come after `Ready`.
+        let _ = session.cmd.send(SessionCommand::StartForwards).await;
         Ok(session)
     }
 
@@ -299,178 +320,46 @@ impl Session {
         events: mpsc::Sender<SessionEvent>,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<Session, SshError> {
-        let _ = events
-            .send(SessionEvent::Status(SessionStatus::Connecting))
-            .await;
-
-        let known_hosts = Arc::new(KnownHosts::with_path(params.known_hosts_path.clone()));
         let prompt_active = Arc::new(AtomicBool::new(false));
         let (banner_tx, mut banner_rx) = mpsc::unbounded_channel::<String>();
-        let recorded: Arc<std::sync::Mutex<Option<SshError>>> =
-            Arc::new(std::sync::Mutex::new(None));
-        let keepalive = params.effective_keepalive();
+        let remote_forwards = Arc::new(RemoteForwards::default());
 
-        // One deadline for DNS + TCP + key exchange + shell setup. Time spent
-        // on a host-key prompt is not charged (the budget pauses), and
-        // authentication has its own timeout below.
-        let mut budget = Budget::new(params.timeouts.connect);
-        let connect_timeout = || SshError::ConnectTimeout {
-            host: params.host.clone(),
-            port: params.port,
-            seconds: params.timeouts.connect.as_secs(),
-        };
-
-        // --- resolve + dial (staggered address race, precise DNS errors) ---
-        let stream = dial(&params.host, params.port, &mut budget, cancel, keepalive).await?;
-
-        // --- handshake (key exchange incl. host-key decision) ---
-        // Ask for the key types we already know this host under first: a
-        // server with several host keys then presents one we can verify,
-        // instead of its own favourite that would look like a new host.
-        let known_types = {
-            let known_hosts = known_hosts.clone();
-            let (host, port) = (params.host.clone(), params.port);
-            blocking(move || known_hosts.known_key_types(&host, port))
-                .await
-                .unwrap_or_default()
-        };
-        let handler = ClientHandler {
-            host: params.host.clone(),
-            port: params.port,
-            known_hosts,
-            prompt: params.host_key_prompt.clone(),
-            decision_budget: params.timeouts.host_key_decision,
-            prompt_active: prompt_active.clone(),
-            recorded: recorded.clone(),
-            banner: BannerSink::new(banner_tx.clone()),
-        };
-        let config = ClientConfig {
-            // `SshId::Standard` writes the value verbatim and appends `\r\n`;
-            // it MUST include the `SSH-2.0-` prefix or OpenSSH desyncs the
-            // banner exchange (caught by the sshd integration suite).
-            client_id: russh::SshId::Standard(std::borrow::Cow::Owned(format!(
-                "SSH-2.0-Termru_{}",
-                env!("CARGO_PKG_VERSION")
-            ))),
-            // russh's own keepalive is the only one: no second timer in the
-            // actor (two timers double the traffic and race each other).
-            keepalive_interval: Some(keepalive),
-            keepalive_max: DEFAULT_KEEPALIVE_MAX,
-            inactivity_timeout: None,
-            // `connect_stream` does not tune the socket, `dial` already did;
-            // this keeps russh's own view consistent.
-            nodelay: true,
-            preferred: russh::Preferred {
-                key: std::borrow::Cow::Owned(preferred_host_key_algorithms(&known_types)),
-                ..russh::Preferred::default()
-            },
-            ..ClientConfig::default()
-        };
-
-        let handshake = async {
-            client::connect_stream(Arc::new(config), stream, handler)
-                .await
-                .map_err(|err| {
-                    take_recorded(&recorded).unwrap_or_else(|| {
-                        map_connect_error(
-                            err,
-                            &params.host,
-                            params.port,
-                            params.timeouts.connect.as_secs(),
-                        )
-                    })
-                })
-        };
-        let mut handle = budget
-            .run(handshake, Some(&prompt_active), cancel, || {
-                take_recorded(&recorded).unwrap_or_else(connect_timeout)
-            })
-            .await?;
-
-        // --- authentication ---
-        let _ = events
-            .send(SessionEvent::Status(SessionStatus::Authenticating))
-            .await;
-        let context = AuthContext {
-            username: &params.username,
-            methods: &params.auth,
-            prompt: params.auth_prompt.as_ref(),
-            prompt_active: &prompt_active,
-            prompt_timeout: params.timeouts.auth_prompt,
-            notices: &banner_tx,
-        };
-        // The deadline stands still while a human answers a question.
-        let mut auth_budget = Budget::new(params.timeouts.auth);
-        let outcome = {
-            let work = auth_budget.run(
-                authenticate(&mut handle, &context),
-                Some(&prompt_active),
+        // --- every hop: transport, key exchange + host-key decision,
+        // authentication (see the `jump` module) ---
+        let chain = {
+            let mut progress = Progress {
+                events: &events,
                 cancel,
-                || SshError::AuthTimeout,
-            );
-            tokio::pin!(work);
-            loop {
-                tokio::select! {
-                    result = &mut work => break result,
-                    Some(text) = banner_rx.recv() => forward_banner(&events, text).await,
-                }
+                prompt_active: &prompt_active,
+                banner_tx: &banner_tx,
+                banner_rx: &mut banner_rx,
+            };
+            crate::jump::connect_chain(
+                &params,
+                TargetExtras {
+                    remote_forwards: remote_forwards.clone(),
+                    agent_forward: params.setup.agent_forward.clone(),
+                },
+                &mut progress,
+            )
+            .await?
+        };
+        let crate::jump::Chain {
+            target: handle,
+            jump: jump_handles,
+        } = chain;
+
+        // --- interactive shell (the target's budget, same cancellation) ---
+        // The whole chain is closed again when this fails.
+        let shell = open_shell(&handle, &params, &options, cancel).await;
+        let (channel, replies) = match shell {
+            Ok(opened) => opened,
+            Err(error) => {
+                close_all(std::slice::from_ref(&handle)).await;
+                close_all(&jump_handles).await;
+                return Err(error);
             }
         };
-        // What the server said last still reaches the user, also when the
-        // authentication failed (that is when the text matters most).
-        while let Ok(text) = banner_rx.try_recv() {
-            forward_banner(&events, text).await;
-        }
-        outcome?;
-
-        // --- interactive shell (same budget, same cancellation) ---
-        let channel = budget
-            .run(
-                async {
-                    handle
-                        .channel_open_session()
-                        .await
-                        .map_err(|e| SshError::Protocol(format!("open session channel: {e}")))
-                },
-                None,
-                cancel,
-                connect_timeout,
-            )
-            .await?;
-        budget
-            .run(
-                async {
-                    channel
-                        .request_pty(
-                            true,
-                            &params.term,
-                            u32::from(options.cols),
-                            u32::from(options.rows),
-                            0,
-                            0,
-                            &[],
-                        )
-                        .await
-                        .map_err(|e| SshError::Protocol(format!("terminal allocation failed: {e}")))
-                },
-                None,
-                cancel,
-                connect_timeout,
-            )
-            .await?;
-        budget
-            .run(
-                async {
-                    channel
-                        .request_shell(true)
-                        .await
-                        .map_err(|e| SshError::Protocol(format!("request shell: {e}")))
-                },
-                None,
-                cancel,
-                connect_timeout,
-            )
-            .await?;
 
         // Reading and writing are separated from here on (see module docs).
         let (reader, writer) = channel.split();
@@ -478,8 +367,20 @@ impl Session {
         let (cmd_tx, cmd_rx) = mpsc::channel(CONTROL_QUEUE);
         let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
         let (size_tx, size_rx) = watch::channel((options.cols, options.rows));
+        // The startup command is the first thing in the (ordered) input
+        // queue: it reaches the shell before anything the user types. An
+        // interactive shell takes Enter as carriage return, like a terminal
+        // sends it.
+        if let Some(command) = &params.setup.startup_command {
+            let mut line = command.clone().into_bytes();
+            line.push(b'\r');
+            // The queue is empty and has room for thousands of chunks.
+            let _ = input_tx.try_send(line);
+        }
+        let (forward_tx, forward_rx) = mpsc::unbounded_channel();
         let actor = Actor {
-            handle,
+            handle: Arc::new(handle),
+            jump_handles,
             reader,
             writer: writer.clone(),
             _pumps: [
@@ -493,6 +394,12 @@ impl Session {
             exit_code: None,
             exit_emitted: false,
             eof_seen: false,
+            replies,
+            forward_specs: params.setup.forwards.clone(),
+            remote_forwards,
+            forwards: None,
+            forward_tx,
+            forward_rx,
         };
         tokio::spawn(actor.run());
 
@@ -573,13 +480,135 @@ impl Session {
     }
 }
 
+/// A channel request whose reply is still to come, in the order the
+/// requests were sent (the server answers in that order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Request {
+    Env(String),
+    AgentForward,
+    Pty,
+    Shell,
+}
+
+/// Opens the session channel and sets it up: environment, agent forwarding,
+/// terminal, shell — each under the connect budget and the cancellation.
+/// Returns the channel and the replies still to read from it.
+async fn open_shell(
+    handle: &Handle<ClientHandler>,
+    params: &ConnectParams,
+    options: &SessionOptions,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<(russh::Channel<Msg>, VecDeque<Request>), SshError> {
+    let mut budget = Budget::new(params.timeouts.connect);
+    let connect_timeout = || SshError::ConnectTimeout {
+        host: params.host.clone(),
+        port: params.port,
+        seconds: params.timeouts.connect.as_secs(),
+    };
+    let channel = budget
+        .run(
+            async {
+                handle
+                    .channel_open_session()
+                    .await
+                    .map_err(|e| SshError::Protocol(format!("open session channel: {e}")))
+            },
+            None,
+            cancel,
+            connect_timeout,
+        )
+        .await?;
+    let mut replies = VecDeque::new();
+
+    // Environment first: a server applies it to the shell that follows. Each
+    // request asks for an answer, so a refusal (the usual case for a name
+    // the server's `AcceptEnv` does not list) is noticed and logged — the
+    // name only, never the value.
+    for (name, value) in &params.setup.env {
+        budget
+            .run(
+                async {
+                    channel
+                        .set_env(true, name.clone(), value.clone())
+                        .await
+                        .map_err(|e| SshError::Protocol(format!("set environment variable: {e}")))
+                },
+                None,
+                cancel,
+                connect_timeout,
+            )
+            .await?;
+        replies.push_back(Request::Env(name.clone()));
+    }
+    if params.setup.agent_forward.is_some() {
+        budget
+            .run(
+                async {
+                    channel
+                        .agent_forward(true)
+                        .await
+                        .map_err(|e| SshError::Protocol(format!("request agent forwarding: {e}")))
+                },
+                None,
+                cancel,
+                connect_timeout,
+            )
+            .await?;
+        replies.push_back(Request::AgentForward);
+    }
+    budget
+        .run(
+            async {
+                channel
+                    .request_pty(
+                        true,
+                        &params.term,
+                        u32::from(options.cols),
+                        u32::from(options.rows),
+                        0,
+                        0,
+                        &[],
+                    )
+                    .await
+                    .map_err(|e| SshError::Protocol(format!("terminal allocation failed: {e}")))
+            },
+            None,
+            cancel,
+            connect_timeout,
+        )
+        .await?;
+    replies.push_back(Request::Pty);
+    budget
+        .run(
+            async {
+                channel
+                    .request_shell(true)
+                    .await
+                    .map_err(|e| SshError::Protocol(format!("request shell: {e}")))
+            },
+            None,
+            cancel,
+            connect_timeout,
+        )
+        .await?;
+    replies.push_back(Request::Shell);
+    Ok((channel, replies))
+}
+
 // ---------- handshake helpers ----------
 
-fn take_recorded(recorded: &Arc<std::sync::Mutex<Option<SshError>>>) -> Option<SshError> {
+pub(crate) fn take_recorded(
+    recorded: &Arc<std::sync::Mutex<Option<SshError>>>,
+) -> Option<SshError> {
     recorded.lock().ok().and_then(|mut g| g.take())
 }
 
-fn map_connect_error(err: russh::Error, host: &str, port: u16, seconds: u64) -> SshError {
+pub(crate) fn map_connect_error(
+    err: russh::Error,
+    host: &str,
+    port: u16,
+    seconds: u64,
+) -> SshError {
     match &err {
         russh::Error::IO(io) => SshError::ConnectFailed {
             host: host.to_string(),
@@ -607,17 +636,23 @@ pub(crate) struct ClientHandler {
     prompt_active: Arc<AtomicBool>,
     recorded: Arc<std::sync::Mutex<Option<SshError>>>,
     banner: BannerSink,
+    /// Where the channels of the server's remote forwards go. Only the
+    /// target's handler is ever asked; a jump host's is empty.
+    remote_forwards: Arc<RemoteForwards>,
+    /// `Some` only on the target of a host that opted into agent forwarding:
+    /// the only handler that answers an `auth-agent` channel.
+    agent_forward: Option<AgentForward>,
 }
 
 /// Hands the server's authentication banner to the session, bounded.
-struct BannerSink {
+pub(crate) struct BannerSink {
     tx: mpsc::UnboundedSender<String>,
     /// Bytes forwarded so far: a server may send banners forever.
     forwarded: usize,
 }
 
 impl BannerSink {
-    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+    pub(crate) fn new(tx: mpsc::UnboundedSender<String>) -> Self {
         Self { tx, forwarded: 0 }
     }
 
@@ -635,12 +670,12 @@ impl BannerSink {
     }
 }
 
-async fn forward_banner(events: &mpsc::Sender<SessionEvent>, text: String) {
+pub(crate) async fn forward_banner(events: &mpsc::Sender<SessionEvent>, text: String) {
     let _ = events.send(SessionEvent::Banner(text)).await;
 }
 
 /// Runs blocking file work (known_hosts) off the async workers.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, SshError> + Send + 'static,
 ) -> Result<T, SshError> {
     tokio::task::spawn_blocking(work)
@@ -649,6 +684,33 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl ClientHandler {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        host: String,
+        port: u16,
+        known_hosts: Arc<KnownHosts>,
+        prompt: Arc<dyn crate::config::HostKeyPrompt>,
+        decision_budget: Duration,
+        prompt_active: Arc<AtomicBool>,
+        recorded: Arc<std::sync::Mutex<Option<SshError>>>,
+        banner: BannerSink,
+        remote_forwards: Arc<RemoteForwards>,
+        agent_forward: Option<AgentForward>,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            known_hosts,
+            prompt,
+            decision_budget,
+            prompt_active,
+            recorded,
+            banner,
+            remote_forwards,
+            agent_forward,
+        }
+    }
+
     fn record(&self, error: SshError) {
         if let Ok(mut slot) = self.recorded.lock() {
             if slot.is_none() {
@@ -667,6 +729,64 @@ impl Handler for ClientHandler {
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         self.banner.offer(banner);
+        Ok(())
+    }
+
+    /// The server opens a channel for a connection to one of our remote
+    /// forwards (`-R`): connect to its local target, then confirm. A channel
+    /// for a port nobody asked for is refused.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.remote_forwards.lookup(connected_port) {
+            Some(target) => {
+                tokio::spawn(crate::forward::serve_remote(channel, reply, target));
+            }
+            None => {
+                tracing::debug!(
+                    address = connected_address,
+                    port = connected_port,
+                    "refusing a forwarded channel nobody asked for"
+                );
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    /// The server asks for our agent (`ForwardAgent`). Only the target of a
+    /// host that opted in answers; a jump host never gets one, and neither
+    /// does a server that opens the channel without having been asked.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<Msg>,
+        reply: ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        match &self.agent_forward {
+            Some(agent) => {
+                tokio::spawn(crate::forward::serve_agent(
+                    channel,
+                    reply,
+                    agent.socket.clone(),
+                ));
+            }
+            None => {
+                tracing::warn!("a server opened an agent channel that was not requested; refused");
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
         Ok(())
     }
 
@@ -850,6 +970,8 @@ async fn resize_pump(writer: Arc<ChannelWriteHalf<Msg>>, mut size: watch::Receiv
 enum Tick {
     Command(Option<SessionCommand>),
     Message(Option<ChannelMsg>),
+    /// A forward reported its state.
+    Forward(Option<ForwardStatus>),
     /// A slot in the consumer's queue (`None`: the consumer is gone).
     Slot(Option<mpsc::OwnedPermit<SessionEvent>>),
 }
@@ -863,7 +985,11 @@ enum End {
 }
 
 struct Actor {
-    handle: Handle<ClientHandler>,
+    /// Shared with the forwards, which open channels on it.
+    handle: Arc<Handle<ClientHandler>>,
+    /// The connections to the jump hosts (first hop first): the target's
+    /// connection runs through them.
+    jump_handles: Vec<Handle<ClientHandler>>,
     reader: ChannelReadHalf,
     writer: Arc<ChannelWriteHalf<Msg>>,
     _pumps: [AbortOnDrop; 2],
@@ -878,6 +1004,14 @@ struct Actor {
     exit_emitted: bool,
     /// The remote sent EOF on the channel.
     eof_seen: bool,
+    /// Channel requests that have not been answered yet, oldest first.
+    replies: VecDeque<Request>,
+    /// Forwards to start after `Ready`, and what they share with the handler.
+    forward_specs: Vec<ForwardSpec>,
+    remote_forwards: Arc<RemoteForwards>,
+    forwards: Option<ForwardRuntime>,
+    forward_tx: mpsc::UnboundedSender<ForwardStatus>,
+    forward_rx: mpsc::UnboundedReceiver<ForwardStatus>,
 }
 
 impl Actor {
@@ -890,6 +1024,7 @@ impl Actor {
         loop {
             let tick = tokio::select! {
                 command = self.cmd_rx.recv() => Tick::Command(command),
+                status = self.forward_rx.recv() => Tick::Forward(status),
                 slot = reserve_slot(self.events.clone()),
                     if self.events.is_some() && !self.pending.is_empty() => Tick::Slot(slot),
                 // Reading pauses only while the consumer is `MAX_PENDING_EVENTS`
@@ -911,6 +1046,11 @@ impl Actor {
                     };
                 }
                 Tick::Command(Some(SessionCommand::Attach(consumer))) => self.attach(consumer),
+                Tick::Command(Some(SessionCommand::StartForwards)) => self.start_forwards(),
+                Tick::Forward(Some(status)) => self.queue(SessionEvent::Forward(status)),
+                // The actor holds a sender itself: the channel never ends
+                // while it runs.
+                Tick::Forward(None) => {}
                 Tick::Command(Some(SessionCommand::Replay(tx))) => {
                     let _ = tx.send(self.ring.snapshot());
                 }
@@ -988,6 +1128,10 @@ impl Actor {
                 // follow. From here on the end of the stream is final.
                 self.eof_seen = true;
             }
+            ChannelMsg::Success => {
+                self.replies.pop_front();
+            }
+            ChannelMsg::Failure => self.request_refused(),
             ChannelMsg::Close => {
                 return Some(End::Finished {
                     reason: self.remote_end_reason(),
@@ -996,6 +1140,39 @@ impl Actor {
             _ => {}
         }
         None
+    }
+
+    /// The server said no to the oldest unanswered request.
+    ///
+    /// A refused environment variable is the normal case (the server's
+    /// `AcceptEnv` decides): only the name is logged, at debug level. The
+    /// refusals that change what the user gets are louder.
+    fn request_refused(&mut self) {
+        match self.replies.pop_front() {
+            Some(Request::Env(name)) => {
+                tracing::debug!(variable = %name, "the server did not accept the environment variable");
+            }
+            Some(Request::AgentForward) => {
+                tracing::warn!("the server refused agent forwarding");
+            }
+            Some(Request::Pty) => tracing::warn!("the server refused the terminal request"),
+            Some(Request::Shell) => tracing::warn!("the server refused to start the shell"),
+            None => tracing::debug!("the server refused a request nobody sent"),
+        }
+    }
+
+    /// Starts the host's forwards (once; `Ready` was just announced).
+    fn start_forwards(&mut self) {
+        if self.forwards.is_some() || self.forward_specs.is_empty() {
+            return;
+        }
+        let specs = std::mem::take(&mut self.forward_specs);
+        self.forwards = Some(crate::forward::start(
+            &self.handle,
+            specs,
+            &self.remote_forwards,
+            &self.forward_tx,
+        ));
     }
 
     /// Queues output for the consumer, merging with the previous chunk.
@@ -1041,6 +1218,12 @@ impl Actor {
 
     /// Tears the connection down, then delivers the final events.
     async fn conclude(&mut self, end: End) {
+        // The forwards go first and are waited for: their listening sockets
+        // are closed before anybody hears that the session ended, so a
+        // reconnect can bind the same ports.
+        if let Some(forwards) = self.forwards.take() {
+            forwards.shutdown().await;
+        }
         self.shutdown_connection().await;
         match end {
             End::Finished { reason } => {
@@ -1094,6 +1277,8 @@ impl Actor {
                 .await;
         })
         .await;
+        // The target's connection ran through the jump hosts: they go last.
+        close_all(&self.jump_handles).await;
     }
 }
 
@@ -1246,8 +1431,10 @@ mod tests {
                 ..ConnectTimeouts::default()
             },
             known_hosts_path: std::path::PathBuf::from("/nonexistent/known_hosts"),
+            extra_known_hosts: Vec::new(),
             host_key_prompt: Arc::new(crate::config::RejectUnknownHostKeys),
             auth_prompt: Arc::new(crate::config::NoAuthPrompts),
+            setup: crate::config::SessionSetup::default(),
         };
         let error = Session::open(params, SessionOptions::default(), tx)
             .await

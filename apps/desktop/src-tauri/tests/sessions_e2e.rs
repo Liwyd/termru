@@ -75,8 +75,10 @@ async fn app_session_connects_streams_and_closes() {
             ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
+        extra_known_hosts: Vec::new(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
         auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
+        setup: Default::default(),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -204,8 +206,10 @@ async fn app_session_reports_a_failed_authentication() {
             ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
+        extra_known_hosts: Vec::new(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
         auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
+        setup: Default::default(),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -268,8 +272,10 @@ async fn second_view_attaches_and_receives_replay_and_live_output() {
             ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
+        extra_known_hosts: Vec::new(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
         auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
+        setup: Default::default(),
     };
 
     let (channel, mut updates) = channel_to_sender();
@@ -369,8 +375,10 @@ fn connect_params(
             ..ConnectTimeouts::default()
         },
         known_hosts_path: server.known_hosts.clone(),
+        extra_known_hosts: Vec::new(),
         host_key_prompt: prompt,
         auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
+        setup: Default::default(),
     }
 }
 

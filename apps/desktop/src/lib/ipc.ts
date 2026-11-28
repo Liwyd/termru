@@ -6,6 +6,7 @@ import type {
   GeneratedIdentity,
   Group,
   Host,
+  HopSecrets,
   HostKeyPromptRequest,
   Identity,
   IdentityBinding,
@@ -17,6 +18,8 @@ import type {
   SessionInfo,
   SessionSecrets,
   SessionUpdate,
+  SshConfigImportReport,
+  SshConfigPreview,
   SyncOutcome,
   SyncStatus,
   WorkspaceDoc,
@@ -75,7 +78,13 @@ export const api = {
 
   sessionOpen: (
     hostId: string,
-    options: { cols: number; rows: number; secrets: SessionSecrets },
+    options: {
+      cols: number;
+      rows: number;
+      secrets: SessionSecrets;
+      /** Secrets for jump hosts, by host id (`options` keeps the backend's field names). */
+      hop_secrets?: HopSecrets;
+    },
     channel: Channel<SessionUpdate>,
   ) => invoke<string>('session_open', { hostId, options, channel }),
   sessionRetry: (id: string, geometry: SessionGeometry, channel: Channel<SessionUpdate>) =>
@@ -118,6 +127,19 @@ export const api = {
     invoke<void>('secret_delete', { hostId, kind }),
   secretHas: (hostId: string, kind: 'password' | 'passphrase') =>
     invoke<boolean>('secret_has', { hostId, kind }),
+
+  /**
+   * Reads `~/.ssh/config` (and what it includes) and lists its hosts, marking
+   * those the library already has. A missing file is `found: false`.
+   */
+  sshConfigPreview: () => invoke<SshConfigPreview>('ssh_config_preview'),
+  /**
+   * Imports the hosts with these aliases (from the preview), the jump hosts
+   * they route through and an identity per key file, in one transaction.
+   * Key files are only referenced by path, never read or copied.
+   */
+  sshConfigImport: (selection: string[]) =>
+    invoke<SshConfigImportReport>('ssh_config_import', { selection }),
 
   syncStatus: () => invoke<SyncStatus>('sync_status'),
   syncSignIn: (serverUrl: string, email: string, password: string, deviceName: string) =>

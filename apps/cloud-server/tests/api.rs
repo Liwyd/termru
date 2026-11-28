@@ -580,6 +580,79 @@ async fn a_record_can_be_pushed_and_pulled() {
     assert_eq!(empty.body["records"].as_array().expect("records").len(), 0);
 }
 
+/// The v2 host fields (jump chain, forwards, environment, startup command,
+/// agent flag, authentication order) are stored and returned as pushed, and a
+/// payload that breaks their rules is refused with a client error.
+#[tokio::test]
+async fn the_v2_host_fields_round_trip_and_are_validated() {
+    use termru_core::{AuthKind, EnvVar, Forward, ForwardKind};
+
+    let server = server!();
+    let (access, _, _) = register(&server, "olga@example.com").await;
+    let mut host = sample_host();
+    host.jump_chain = vec![termru_core::ids::HostId::new()];
+    host.forwards = vec![Forward {
+        kind: ForwardKind::Dynamic,
+        bind_address: None,
+        bind_port: 1080,
+        target_host: None,
+        target_port: None,
+        enabled: true,
+    }];
+    host.env = vec![EnvVar {
+        name: "TERMRU_PROFILE".to_string(),
+        value: "ops".to_string(),
+    }];
+    host.startup_command = Some("uptime".to_string());
+    host.agent_forward = true;
+    host.auth_order = Some(vec![AuthKind::Agent, AuthKind::Password]);
+
+    let push = |host_id: String, payload: serde_json::Value| {
+        send(
+            &server.router,
+            "POST",
+            "/v1/sync/changes",
+            Some(&access),
+            Some(json!({
+                "mutations": [{
+                    "mutation_id": Uuid::new_v4(),
+                    "id": host_id,
+                    "kind": "host",
+                    "base_rev": null,
+                    "deleted": false,
+                    "payload": payload,
+                    "updated_at": chrono::Utc::now(),
+                }]
+            })),
+        )
+    };
+
+    let payload = serde_json::to_value(&host).expect("serialize the host");
+    let accepted = push(host.id.to_string(), payload.clone()).await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
+
+    let pull = send(
+        &server.router,
+        "GET",
+        "/v1/sync/changes?since=0",
+        Some(&access),
+        None,
+    )
+    .await;
+    let records = pull.body["records"].as_array().expect("records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["payload"], payload, "stored as pushed");
+
+    // A dynamic forward with a target is invalid, wherever it comes from.
+    let mut bad = payload;
+    bad["id"] = json!(Uuid::new_v4().to_string());
+    bad["forwards"][0]["target_host"] = json!("example.com");
+    bad["forwards"][0]["target_port"] = json!(80);
+    let id = bad["id"].as_str().expect("id").to_string();
+    let refused = push(id, bad).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.body);
+}
+
 #[tokio::test]
 async fn pushing_the_same_mutation_twice_is_idempotent() {
     let server = server!();

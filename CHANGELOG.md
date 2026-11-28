@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* Data model v2 (ADR 0010): a host can name **jump hosts** (`jump_chain`),
+  **port forwards** (local `-L`, remote `-R`, dynamic `-D` as a SOCKS5 proxy),
+  **environment variables**, a **startup command**, **agent forwarding** (off
+  by default) and an explicit **authentication order**. Old records and old
+  sync payloads load unchanged, and a host that uses none of it serializes as
+  before. Addresses accept IPv6 literals with zone ids (`fe80::1%eth0`,
+  bracketed or bare). Database migration 2 adds the columns when the database
+  is opened.
+* Connections through jump hosts: every hop has its own host-key check,
+  known_hosts decision and authentication; one cancel and the reconnect policy
+  cover the chain; an error says which hop failed. The agent is never offered
+  to a jump host.
+* Port forwards start after the session is ready, report `listening` or
+  `failed` (with the reason) per forward as a new `forward` session update,
+  close their sockets before the session reports its end and start again on a
+  reconnect. Listeners are loopback unless a bind address says otherwise.
+* `SetEnv` requests (a refusal is ignored), a startup command typed into the
+  interactive shell first, and agent forwarding proxied to the local agent.
+* The user's `~/.ssh/known_hosts` is a read-only extra source of trusted host
+  keys: a key found only there is trusted without a prompt, a contradicting key
+  or `@revoked` still blocks.
+* Import from `~/.ssh/config` (`ssh_config_preview`, `ssh_config_import`):
+  `Host` patterns, `HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump`,
+  `Include`; hosts that exist are recognised, an identity is created per key
+  file (bound by path, the key is never read), jump chains follow `ProxyJump`,
+  all in one transaction. `Match` blocks are skipped with a warning.
+
 * SSH authentication is an ordered chain driven by the server (ADR 0008):
   a `none` probe lists the allowed methods, methods the server does not allow
   are skipped, partial success is honoured (publickey, then

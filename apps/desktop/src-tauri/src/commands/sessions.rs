@@ -6,16 +6,19 @@
 //! build `AuthChoice`, and are only retained in memory (inside the live
 //! session's `ConnectParams`, zeroized on drop).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
 use tauri::State;
 use tauri::ipc::Channel;
-use termru_core::host::{AuthMethod, Host};
+use termru_core::host::{AuthKind, AuthMethod, Host};
 use termru_core::ids::HostId;
+use termru_core::validate::{JumpNode, resolve_jump_chain};
 use termru_ssh::{
-    AuthChoice, ConnectParams, ConnectTimeouts, KeyIdentity, SecretValue, SessionOptions,
+    AgentForward, AuthChoice, ConnectParams, ConnectTimeouts, ForwardSpec, JumpHop, KeyIdentity,
+    SecretValue, SessionOptions, SessionSetup,
 };
 
 use crate::app_error::CommandError;
@@ -79,6 +82,11 @@ pub struct SessionOpenOptions {
     pub rows: u16,
     #[serde(default)]
     pub secrets: SessionSecrets,
+    /// Secrets for the jump hosts of the route, by host id (what the user
+    /// typed for them). A jump host without an entry uses what the
+    /// credential store holds for it.
+    #[serde(default)]
+    pub hop_secrets: HashMap<String, SessionSecrets>,
 }
 
 impl std::fmt::Debug for SessionOpenOptions {
@@ -87,6 +95,7 @@ impl std::fmt::Debug for SessionOpenOptions {
             .field("cols", &self.cols)
             .field("rows", &self.rows)
             .field("secrets", &self.secrets)
+            .field("hop_secrets", &self.hop_secrets.len())
             .finish()
     }
 }
@@ -121,22 +130,20 @@ fn agent_socket() -> Option<PathBuf> {
 ///   stored), then keyboard-interactive;
 /// * agent: the agent's keys, then keyboard-interactive.
 ///
-/// The chain is derived from the host's single method on purpose: a
-/// user-ordered list of methods is a data-model change of its own.
+/// That is the chain derived from the host's single method. A host that
+/// stores an explicit `auth_order` gets exactly the methods it lists, in that
+/// order (see [`build_ordered_auth`]).
 pub(crate) fn build_auth(
     host: &Host,
     store: &termru_store::Store,
     secrets: &SessionSecrets,
 ) -> Result<Vec<AuthChoice>, CommandError> {
+    if let Some(order) = &host.auth_order {
+        return build_ordered_auth(host, order, store, secrets);
+    }
     match &host.auth {
         AuthMethod::Password => {
-            // Prefer the secret the user just typed; otherwise fall back to
-            // the OS credential store; otherwise ask.
-            let password = match secrets.password.clone() {
-                Some(password) => Some(password),
-                None => SecretStore::get(&host.id.to_string(), SecretKind::Password),
-            }
-            .ok_or_else(|| {
+            let password = password_for(host, secrets).ok_or_else(|| {
                 CommandError::new(format!("host \"{}\" requires a password", host.name))
             })?;
             Ok(vec![
@@ -148,54 +155,196 @@ pub(crate) fn build_auth(
                 },
             ])
         }
-        AuthMethod::PrivateKey { identity_id } => {
-            let repos = store.repos();
-            let identity = repos
-                .identities()
-                .get(*identity_id)?
-                .ok_or_else(|| CommandError::new("identity no longer exists"))?;
-            let key_path = repos.identities().binding(*identity_id)?.ok_or_else(|| {
-                CommandError::new(format!(
-                    "identity \"{}\" has no private key bound on this device",
-                    identity.name
-                ))
-            })?;
-            // What the user typed, else what the credential store holds for
-            // the identity (or, from an older version, for this host). A key
-            // that needs a passphrase and has none is asked about by the
-            // engine.
-            let passphrase = match secrets.passphrase.clone() {
-                Some(passphrase) => Some(passphrase),
-                None => SecretStore::get_passphrase(&identity_id.to_string(), &host.id.to_string()),
-            };
-            Ok(vec![
-                AuthChoice::PrivateKey {
-                    key_path: PathBuf::from(key_path),
-                    passphrase: passphrase.map(SecretValue::new),
-                    identity: Some(KeyIdentity {
-                        id: identity_id.to_string(),
-                        name: identity.name,
-                    }),
-                },
-                AuthChoice::KeyboardInteractive { password: None },
-            ])
-        }
+        AuthMethod::PrivateKey { identity_id } => Ok(vec![
+            key_choice(host, *identity_id, store, secrets)?,
+            AuthChoice::KeyboardInteractive { password: None },
+        ]),
         AuthMethod::Agent => Ok(vec![
-            AuthChoice::Agent {
-                socket: agent_socket(),
-                // No identity is tied to an agent host (yet): the agent's
-                // own order decides.
-                prefer_fingerprint: None,
-            },
+            agent_choice(),
             AuthChoice::KeyboardInteractive { password: None },
         ]),
     }
 }
 
-/// The engine's parameters for a host. The questions it may ask are bound to
-/// the session by [`AppState::scope_prompts`] when the session is started;
-/// until then they refuse everything.
-fn build_params(state: &AppState, host: &Host, auth: Vec<AuthChoice>) -> ConnectParams {
+/// What the user typed, else what the OS credential store holds for the host.
+fn password_for(host: &Host, secrets: &SessionSecrets) -> Option<String> {
+    match secrets.password.clone() {
+        Some(password) => Some(password),
+        None => SecretStore::get(&host.id.to_string(), SecretKind::Password),
+    }
+}
+
+fn agent_choice() -> AuthChoice {
+    AuthChoice::Agent {
+        socket: agent_socket(),
+        // No identity is tied to an agent host (yet): the agent's own order
+        // decides.
+        prefer_fingerprint: None,
+    }
+}
+
+fn key_choice(
+    host: &Host,
+    identity_id: termru_core::ids::IdentityId,
+    store: &termru_store::Store,
+    secrets: &SessionSecrets,
+) -> Result<AuthChoice, CommandError> {
+    let repos = store.repos();
+    let identity = repos
+        .identities()
+        .get(identity_id)?
+        .ok_or_else(|| CommandError::new("identity no longer exists"))?;
+    let key_path = repos.identities().binding(identity_id)?.ok_or_else(|| {
+        CommandError::new(format!(
+            "identity \"{}\" has no private key bound on this device",
+            identity.name
+        ))
+    })?;
+    // What the user typed, else what the credential store holds for the
+    // identity (or, from an older version, for this host). A key that needs a
+    // passphrase and has none is asked about by the engine.
+    let passphrase = match secrets.passphrase.clone() {
+        Some(passphrase) => Some(passphrase),
+        None => SecretStore::get_passphrase(&identity_id.to_string(), &host.id.to_string()),
+    };
+    Ok(AuthChoice::PrivateKey {
+        key_path: PathBuf::from(key_path),
+        passphrase: passphrase.map(SecretValue::new),
+        identity: Some(KeyIdentity {
+            id: identity_id.to_string(),
+            name: identity.name,
+        }),
+    })
+}
+
+/// The chain of a host with an explicit `auth_order`: each listed method that
+/// the host has the means for, in the listed order — and nothing else (no
+/// keyboard-interactive unless it is listed).
+///
+/// * `Password`: the typed or stored password. For a host whose own method is
+///   a password it is **required** (the connection dialog asks for it);
+///   for any other host it is used when there is one and skipped otherwise;
+/// * `PrivateKey`: the key of the host's identity; a host that does not use
+///   one has none to offer, so the entry is skipped;
+/// * `Agent`: the agent's keys;
+/// * `KeyboardInteractive`: answered with the password when there is one and
+///   the server asks for nothing else.
+///
+/// When nothing is left, the error says so instead of connecting to try
+/// nothing.
+fn build_ordered_auth(
+    host: &Host,
+    order: &[AuthKind],
+    store: &termru_store::Store,
+    secrets: &SessionSecrets,
+) -> Result<Vec<AuthChoice>, CommandError> {
+    let password_wanted = order
+        .iter()
+        .any(|kind| matches!(kind, AuthKind::Password | AuthKind::KeyboardInteractive));
+    let password = if password_wanted {
+        password_for(host, secrets)
+    } else {
+        None
+    };
+    let mut chain = Vec::with_capacity(order.len());
+    for kind in order {
+        match kind {
+            AuthKind::Password => match &password {
+                Some(password) => chain.push(AuthChoice::Password {
+                    password: SecretValue::new(password.clone()),
+                }),
+                None if host.auth == AuthMethod::Password => {
+                    return Err(CommandError::new(format!(
+                        "host \"{}\" requires a password",
+                        host.name
+                    )));
+                }
+                None => {}
+            },
+            AuthKind::PrivateKey => {
+                if let AuthMethod::PrivateKey { identity_id } = &host.auth {
+                    chain.push(key_choice(host, *identity_id, store, secrets)?);
+                }
+            }
+            AuthKind::Agent => chain.push(agent_choice()),
+            AuthKind::KeyboardInteractive => chain.push(AuthChoice::KeyboardInteractive {
+                password: password.clone().map(SecretValue::new),
+            }),
+        }
+    }
+    if chain.is_empty() {
+        return Err(CommandError::new(format!(
+            "host \"{}\": none of the methods in its authentication order can be used here \
+             (no password, key or agent to offer)",
+            host.name
+        )));
+    }
+    Ok(chain)
+}
+
+/// Everything about a connection that needs the store and the credential
+/// vault: the host, its authentication, and the route to it.
+pub(crate) struct Prepared {
+    pub host: Host,
+    pub auth: Vec<AuthChoice>,
+    /// The jump hosts, first hop first, each with its authentication.
+    pub hops: Vec<(Host, Vec<AuthChoice>)>,
+}
+
+/// Loads the host, resolves its route through the jump hosts (every hop must
+/// exist, no cycle, at most [`termru_core::validate::MAX_JUMP_HOPS`] hops) and
+/// builds the authentication of the host and of every hop.
+///
+/// Blocking (SQLite, the credential store): never call it on an async worker.
+pub(crate) fn prepare(
+    store: &termru_store::Store,
+    host_id: HostId,
+    secrets: &SessionSecrets,
+    hop_secrets: &HashMap<String, SessionSecrets>,
+) -> Result<Prepared, CommandError> {
+    let host = store
+        .repos()
+        .hosts()
+        .get(host_id)?
+        .ok_or_else(|| CommandError::not_found("host", &host_id.to_string()))?;
+    if host.deleted {
+        return Err(CommandError::new("host has been deleted"));
+    }
+    let route = resolve_jump_chain(host.id, &host.name, &host.jump_chain, &|id| {
+        store
+            .repos()
+            .hosts()
+            .get(id)
+            .ok()
+            .flatten()
+            .map(|hop| JumpNode {
+                name: hop.name,
+                jump_chain: hop.jump_chain,
+            })
+    })?;
+    let mut hops = Vec::with_capacity(route.len());
+    for id in route {
+        let hop = store
+            .repos()
+            .hosts()
+            .get(id)?
+            .ok_or_else(|| CommandError::not_found("jump host", &id.to_string()))?;
+        let typed = hop_secrets
+            .get(&id.to_string())
+            .cloned()
+            .unwrap_or_default();
+        let auth = build_auth(&hop, store, &typed)
+            .map_err(|error| CommandError::new(format!("jump host: {}", error.message)))?;
+        hops.push((hop, auth));
+    }
+    let auth = build_auth(&host, store, secrets)?;
+    Ok(Prepared { host, auth, hops })
+}
+
+/// The engine's parameters for one host (a jump host or the target). The
+/// questions it may ask are bound to the session by [`AppState::scope_prompts`]
+/// when the session is started; until then they refuse everything.
+fn endpoint_params(state: &AppState, host: &Host, auth: Vec<AuthChoice>) -> ConnectParams {
     ConnectParams {
         host: host.address.clone(),
         port: host.port,
@@ -210,8 +359,57 @@ fn build_params(state: &AppState, host: &Host, auth: Vec<AuthChoice>) -> Connect
             ..ConnectTimeouts::default()
         },
         known_hosts_path: state.known_hosts_path.clone(),
+        // The user's own known_hosts is trusted too, read only.
+        extra_known_hosts: state.system_known_hosts.iter().cloned().collect(),
         host_key_prompt: Arc::new(termru_ssh::config::RejectUnknownHostKeys),
         auth_prompt: Arc::new(termru_ssh::NoAuthPrompts),
+        setup: SessionSetup::default(),
+    }
+}
+
+/// The parameters of a whole session: the host, the route to it and what the
+/// session does besides connecting (forwards, environment, startup input,
+/// agent forwarding).
+pub(crate) fn build_params(state: &AppState, prepared: Prepared) -> ConnectParams {
+    let Prepared { host, auth, hops } = prepared;
+    let mut params = endpoint_params(state, &host, auth);
+    params.setup = session_setup(
+        &host,
+        hops.into_iter()
+            .map(|(hop, auth)| JumpHop {
+                label: hop.name.clone(),
+                params: endpoint_params(state, &hop, auth),
+            })
+            .collect(),
+    );
+    params
+}
+
+/// What the host asks of its session. Only the **enabled** forwards run; each
+/// is named by its index in the host's list so a disabled one keeps its slot.
+fn session_setup(host: &Host, jump: Vec<JumpHop>) -> SessionSetup {
+    SessionSetup {
+        jump,
+        forwards: host
+            .forwards
+            .iter()
+            .enumerate()
+            .filter(|(_, forward)| forward.enabled)
+            .filter_map(|(index, forward)| {
+                u32::try_from(index)
+                    .ok()
+                    .map(|id| ForwardSpec::from_forward(id, forward))
+            })
+            .collect(),
+        env: host
+            .env
+            .iter()
+            .map(|var| (var.name.clone(), var.value.clone()))
+            .collect(),
+        startup_command: host.startup_command.clone(),
+        agent_forward: host.agent_forward.then(|| AgentForward {
+            socket: agent_socket(),
+        }),
     }
 }
 
@@ -260,21 +458,13 @@ pub async fn session_open(
     // Manager) can block for a long time; neither may run on an async worker.
     let store = state.store.clone();
     let secrets = options.secrets.clone();
-    let (host, auth) = tauri::async_runtime::spawn_blocking(move || {
-        let host = store
-            .repos()
-            .hosts()
-            .get(host_id)?
-            .ok_or_else(|| CommandError::not_found("host", &host_id.to_string()))?;
-        if host.deleted {
-            return Err(CommandError::new("host has been deleted"));
-        }
-        let auth = build_auth(&host, &store, &secrets)?;
-        Ok::<_, CommandError>((host, auth))
+    let hop_secrets = options.hop_secrets.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        prepare(&store, host_id, &secrets, &hop_secrets)
     })
     .await
     .map_err(|error| CommandError::new(format!("the session could not be prepared: {error}")))??;
-    let params = build_params(&state, &host, auth);
+    let params = build_params(&state, prepared);
     Ok(start_session(
         &state,
         host_id,
@@ -603,5 +793,226 @@ mod tests {
         let debug = format!("{secrets:?}");
         assert!(!debug.contains("top-secret"), "{debug}");
         assert!(!debug.contains("also-secret"), "{debug}");
+    }
+
+    // ---- data model v2: auth order, route, setup ----
+
+    fn secrets(password: Option<&str>) -> SessionSecrets {
+        SessionSecrets {
+            password: password.map(str::to_string),
+            passphrase: None,
+        }
+    }
+
+    #[test]
+    fn an_explicit_auth_order_is_followed_exactly() {
+        let (_dir, store) = temp_store();
+        let mut host = host_with(AuthMethod::Password);
+        host.auth_order = Some(vec![AuthKind::Agent, AuthKind::Password]);
+        let chain = build_auth(&host, &store, &secrets(Some("pw"))).expect("builds");
+        assert_eq!(names(&chain), ["publickey (agent)", "password"]);
+
+        // No keyboard-interactive unless it is listed.
+        host.auth_order = Some(vec![AuthKind::KeyboardInteractive, AuthKind::Password]);
+        let chain = build_auth(&host, &store, &secrets(Some("pw"))).expect("builds");
+        assert_eq!(names(&chain), ["keyboard-interactive", "password"]);
+        match &chain[0] {
+            AuthChoice::KeyboardInteractive { password } => {
+                assert_eq!(password.as_ref().expect("answers").expose(), "pw");
+            }
+            other => panic!("wrong variant: {}", other.method_name()),
+        }
+    }
+
+    #[test]
+    fn a_listed_password_is_required_only_for_a_password_host() {
+        let (_dir, store) = temp_store();
+        let mut host = host_with(AuthMethod::Password);
+        host.auth_order = Some(vec![AuthKind::Password, AuthKind::Agent]);
+        let error = build_auth(&host, &store, &SessionSecrets::default()).expect_err("required");
+        assert!(
+            error.message.contains("requires a password"),
+            "{}",
+            error.message
+        );
+
+        // An agent host that lists a password it does not have just skips it.
+        let mut host = host_with(AuthMethod::Agent);
+        host.id = HostId::new();
+        host.auth_order = Some(vec![AuthKind::Password, AuthKind::Agent]);
+        let chain = build_auth(&host, &store, &SessionSecrets::default()).expect("builds");
+        assert_eq!(names(&chain), ["publickey (agent)"]);
+    }
+
+    #[test]
+    fn an_order_with_nothing_usable_says_so() {
+        let (_dir, store) = temp_store();
+        // A key entry for a host that has no identity.
+        let mut host = host_with(AuthMethod::Agent);
+        host.auth_order = Some(vec![AuthKind::PrivateKey]);
+        let error = build_auth(&host, &store, &SessionSecrets::default()).expect_err("empty");
+        assert!(
+            error.message.contains("none of the methods"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_listed_key_uses_the_hosts_identity() {
+        let (_dir, store) = temp_store();
+        let mut identity = Identity::new("key".into());
+        store
+            .repos()
+            .identities()
+            .save(&mut identity)
+            .expect("save");
+        store
+            .repos()
+            .identities()
+            .bind(identity.id, "/home/u/.ssh/id")
+            .expect("bind");
+        let mut host = host_with(AuthMethod::PrivateKey {
+            identity_id: identity.id,
+        });
+        host.auth_order = Some(vec![AuthKind::Agent, AuthKind::PrivateKey]);
+        let chain = build_auth(&host, &store, &SessionSecrets::default()).expect("builds");
+        assert_eq!(names(&chain), ["publickey (agent)", "publickey"]);
+    }
+
+    #[test]
+    fn the_setup_carries_only_the_enabled_forwards_by_their_index() {
+        use termru_core::{EnvVar, Forward, ForwardKind};
+        let forward = |kind, enabled, port| Forward {
+            kind,
+            bind_address: None,
+            bind_port: port,
+            target_host: (kind != ForwardKind::Dynamic).then(|| "db".to_string()),
+            target_port: (kind != ForwardKind::Dynamic).then_some(5432),
+            enabled,
+        };
+        let mut host = host_with(AuthMethod::Agent);
+        host.forwards = vec![
+            forward(ForwardKind::Local, true, 8080),
+            forward(ForwardKind::Dynamic, false, 1080),
+            forward(ForwardKind::Remote, true, 9000),
+        ];
+        host.env = vec![EnvVar {
+            name: "TERMRU_PROFILE".into(),
+            value: "ops".into(),
+        }];
+        host.startup_command = Some("uptime".into());
+        let setup = session_setup(&host, Vec::new());
+        let ids: Vec<(u32, ForwardKind)> = setup.forwards.iter().map(|f| (f.id, f.kind)).collect();
+        assert_eq!(ids, vec![(0, ForwardKind::Local), (2, ForwardKind::Remote)]);
+        assert_eq!(
+            setup.env,
+            vec![("TERMRU_PROFILE".to_string(), "ops".to_string())]
+        );
+        assert_eq!(setup.startup_command.as_deref(), Some("uptime"));
+        assert!(setup.agent_forward.is_none(), "agent forwarding is opt-in");
+        host.agent_forward = true;
+        assert!(session_setup(&host, Vec::new()).agent_forward.is_some());
+    }
+
+    #[test]
+    fn the_route_is_resolved_through_the_store_with_each_hops_own_auth() {
+        let (_dir, store) = temp_store();
+        let mut gateway = Host::new("gateway".into(), "gw.test".into(), "ops".into());
+        gateway.auth = AuthMethod::Agent;
+        store.repos().hosts().save(&mut gateway).expect("save");
+        let mut bastion = Host::new("bastion".into(), "bastion.test".into(), "ops".into());
+        bastion.auth = AuthMethod::Agent;
+        bastion.jump_chain = vec![gateway.id];
+        store.repos().hosts().save(&mut bastion).expect("save");
+        let mut target = Host::new("app".into(), "app.test".into(), "deploy".into());
+        target.auth = AuthMethod::Agent;
+        target.jump_chain = vec![bastion.id];
+        store.repos().hosts().save(&mut target).expect("save");
+
+        let prepared = prepare(
+            &store,
+            target.id,
+            &SessionSecrets::default(),
+            &HashMap::new(),
+        )
+        .expect("route");
+        let route: Vec<&str> = prepared
+            .hops
+            .iter()
+            .map(|(hop, _)| hop.name.as_str())
+            .collect();
+        assert_eq!(
+            route,
+            ["gateway", "bastion"],
+            "the first hop's own route comes first"
+        );
+        assert_eq!(prepared.host.name, "app");
+        assert_eq!(
+            names(&prepared.hops[0].1),
+            ["publickey (agent)", "keyboard-interactive"]
+        );
+    }
+
+    #[test]
+    fn a_hop_that_needs_a_password_says_which_host() {
+        let (_dir, store) = temp_store();
+        let mut bastion = Host::new("bastion".into(), "bastion.test".into(), "ops".into());
+        bastion.auth = AuthMethod::Password;
+        store.repos().hosts().save(&mut bastion).expect("save");
+        let mut target = Host::new("app".into(), "app.test".into(), "deploy".into());
+        target.auth = AuthMethod::Agent;
+        target.jump_chain = vec![bastion.id];
+        store.repos().hosts().save(&mut target).expect("save");
+
+        let error = prepare(
+            &store,
+            target.id,
+            &SessionSecrets::default(),
+            &HashMap::new(),
+        )
+        .err()
+        .expect("the hop has no password");
+        assert!(error.message.contains("jump host"), "{}", error.message);
+        assert!(error.message.contains("bastion"), "{}", error.message);
+
+        // What the user typed for the hop is used.
+        let typed = HashMap::from([(bastion.id.to_string(), secrets(Some("typed")))]);
+        let prepared =
+            prepare(&store, target.id, &SessionSecrets::default(), &typed).expect("route");
+        assert_eq!(
+            names(&prepared.hops[0].1),
+            ["password", "keyboard-interactive"]
+        );
+    }
+
+    #[test]
+    fn a_route_through_a_deleted_host_is_refused_with_a_clear_message() {
+        let (_dir, store) = temp_store();
+        let mut bastion = Host::new("bastion".into(), "bastion.test".into(), "ops".into());
+        bastion.auth = AuthMethod::Agent;
+        store.repos().hosts().save(&mut bastion).expect("save");
+        let mut target = Host::new("app".into(), "app.test".into(), "deploy".into());
+        target.auth = AuthMethod::Agent;
+        target.jump_chain = vec![bastion.id];
+        store.repos().hosts().save(&mut target).expect("save");
+        store
+            .repos()
+            .hosts()
+            .soft_delete(bastion.id)
+            .expect("delete");
+        let error = prepare(
+            &store,
+            target.id,
+            &SessionSecrets::default(),
+            &HashMap::new(),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error.message.contains("does not exist"),
+            "{}",
+            error.message
+        );
     }
 }

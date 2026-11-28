@@ -33,7 +33,7 @@
 //! the frontend must serialize its writes (await the previous one, or batch
 //! keystrokes into one chunk).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -41,10 +41,11 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use termru_core::ForwardKind;
 use termru_core::ids::HostId;
 use termru_ssh::{
-    ConnectParams, ErrorCategory, ReconnectPolicy, ReplayRing, Session, SessionEvent,
-    SessionOptions, SessionStatus,
+    ConnectParams, ErrorCategory, ForwardState, ForwardStatus, ReconnectPolicy, ReplayRing,
+    Session, SessionEvent, SessionOptions, SessionStatus,
 };
 use termru_store::Store;
 use tokio::sync::{Notify, mpsc, watch};
@@ -79,9 +80,70 @@ const COALESCE_MIN_WAIT: usize = 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUpdate {
-    Status { status: SessionStatusDto },
-    Data { base64: String },
-    Exit { code: Option<i32> },
+    Status {
+        status: SessionStatusDto,
+    },
+    Data {
+        base64: String,
+    },
+    Exit {
+        code: Option<i32>,
+    },
+    /// What became of one of the host's port forwards. They start after the
+    /// session is `ready` (these follow that status), once per forward, and
+    /// again after a reconnect; every status other than `ready` clears them.
+    Forward {
+        forward: ForwardUpdate,
+    },
+}
+
+/// The state of one port forward of a session.
+///
+/// `id` is the forward's index in the host's `forwards` list (a disabled
+/// forward keeps its slot and is simply never reported).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ForwardUpdate {
+    /// The listener is up. `address`/`port` are where it is bound: on this
+    /// machine for `local` and `dynamic`, on the server for `remote`.
+    Listening {
+        id: u32,
+        kind: ForwardKind,
+        address: String,
+        port: u16,
+    },
+    /// The forward could not be set up, or died; `reason` says why.
+    Failed {
+        id: u32,
+        kind: ForwardKind,
+        reason: String,
+    },
+}
+
+impl ForwardUpdate {
+    pub fn id(&self) -> u32 {
+        match self {
+            Self::Listening { id, .. } | Self::Failed { id, .. } => *id,
+        }
+    }
+}
+
+impl From<&ForwardStatus> for ForwardUpdate {
+    fn from(status: &ForwardStatus) -> Self {
+        match &status.state {
+            ForwardState::Listening { address, port } => Self::Listening {
+                id: status.id,
+                kind: status.kind,
+                address: address.clone(),
+                port: *port,
+            },
+            ForwardState::Failed { reason } => Self::Failed {
+                id: status.id,
+                kind: status.kind,
+                reason: reason.clone(),
+            },
+        }
+    }
 }
 
 /// Serde-friendly session status (mirrors `termru_ssh::SessionStatus`).
@@ -167,6 +229,9 @@ pub struct SessionInfo {
     pub id: String,
     pub host_id: HostId,
     pub status: SessionStatusDto,
+    /// The forwards that are up (or failed) right now, by `id`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forwards: Vec<ForwardUpdate>,
 }
 
 /// One view (a terminal pane in some window) rendering a session. It carries
@@ -184,6 +249,10 @@ struct View {
 /// send + push) both hold this lock for their whole duration.
 struct Stream {
     status: SessionStatusDto,
+    /// What the session's forwards last reported, by id: a view that attaches
+    /// later is told. Emptied by every status but `Ready` (the forwards live
+    /// and die with the connection).
+    forwards: BTreeMap<u32, ForwardUpdate>,
     ring: ReplayRing,
     views: Vec<View>,
     /// Wakes the session's pump when views were removed from outside it. The
@@ -215,6 +284,16 @@ impl Stream {
             // now, so the wake-up cannot be lost.
             self.views_changed.notify_one();
         }
+    }
+}
+
+fn session_info(id: &str, entry: &Managed) -> SessionInfo {
+    let stream = lock_stream(&entry.stream);
+    SessionInfo {
+        id: id.to_string(),
+        host_id: entry.host_id,
+        status: stream.status.clone(),
+        forwards: stream.forwards.values().cloned().collect(),
     }
 }
 
@@ -338,6 +417,7 @@ impl SessionManager {
         let (cancel, cancel_rx) = watch::channel(false);
         let stream = Stream {
             status: SessionStatusDto::Connecting,
+            forwards: BTreeMap::new(),
             ring: ReplayRing::new(REPLAY_LIMIT),
             views: vec![Self::new_view(window, view)],
             views_changed: Arc::new(Notify::new()),
@@ -445,6 +525,11 @@ impl SessionManager {
         let _ = view.channel.send(SessionUpdate::Status {
             status: guard.status.clone(),
         });
+        for forward in guard.forwards.values() {
+            let _ = view.channel.send(SessionUpdate::Forward {
+                forward: forward.clone(),
+            });
+        }
         guard.add_view(view);
         Ok(())
     }
@@ -552,22 +637,14 @@ impl SessionManager {
 
     pub fn info(&self, id: &str) -> Option<SessionInfo> {
         let guard = self.lock();
-        guard.get(id).map(|entry| SessionInfo {
-            id: id.to_string(),
-            host_id: entry.host_id,
-            status: lock_stream(&entry.stream).status.clone(),
-        })
+        guard.get(id).map(|entry| session_info(id, entry))
     }
 
     pub fn list(&self) -> Vec<SessionInfo> {
         let guard = self.lock();
         let mut out: Vec<SessionInfo> = guard
             .iter()
-            .map(|(id, entry)| SessionInfo {
-                id: id.clone(),
-                host_id: entry.host_id,
-                status: lock_stream(&entry.stream).status.clone(),
-            })
+            .map(|(id, entry)| session_info(id, entry))
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
@@ -748,8 +825,20 @@ fn deliver_data(stream: &Mutex<Stream>, bytes: &[u8]) -> usize {
 /// view.
 fn deliver_status(stream: &Mutex<Stream>, status: SessionStatusDto) -> usize {
     let mut guard = lock_stream(stream);
+    if status != SessionStatusDto::Ready {
+        // The forwards belong to the connection that just changed or ended.
+        guard.forwards.clear();
+    }
     guard.status = status.clone();
     broadcast(&mut guard.views, SessionUpdate::Status { status })
+}
+
+/// Records what a forward reported (for views that attach later) and sends
+/// it to every view.
+fn deliver_forward(stream: &Mutex<Stream>, forward: ForwardUpdate) -> usize {
+    let mut guard = lock_stream(stream);
+    guard.forwards.insert(forward.id(), forward.clone());
+    broadcast(&mut guard.views, SessionUpdate::Forward { forward })
 }
 
 fn deliver_exit(stream: &Mutex<Stream>, code: Option<i32>) -> usize {
@@ -890,8 +979,9 @@ async fn run_cycle(
     ));
     let mut opening = true;
     // `Ready` is held back until the session is registered with the manager,
-    // so a UI that reacts to it by writing never hits "not ready yet".
-    let mut held_ready: Option<SessionEvent> = None;
+    // so a UI that reacts to it by writing never hits "not ready yet". The
+    // forwards' reports follow `Ready` and are held with it, in order.
+    let mut held: VecDeque<SessionEvent> = VecDeque::new();
     let mut pump = Pump {
         id,
         manager,
@@ -905,10 +995,11 @@ async fn run_cycle(
         budget,
         failed: None,
     };
-    let mut deferred: Option<SessionEvent> = None;
+    // Events to handle before reading new ones (ahead of the channel).
+    let mut deferred: VecDeque<SessionEvent> = VecDeque::new();
 
     loop {
-        let event = if let Some(event) = deferred.take() {
+        let event = if let Some(event) = deferred.pop_front() {
             event
         } else {
             tokio::select! {
@@ -922,9 +1013,7 @@ async fn run_cycle(
                     if let Ok(session) = opened {
                         manager.set_session(id, Some(session.clone()));
                         pump.session = Some(session);
-                        if let Some(ready) = held_ready.take() {
-                            deferred = Some(ready);
-                        }
+                        deferred.extend(held.drain(..));
                     }
                     // On failure the final statuses are already queued in
                     // `ev_rx`; they are forwarded below.
@@ -941,7 +1030,9 @@ async fn run_cycle(
             SessionEvent::Data(bytes) => {
                 let (merged, next) = coalesce(bytes, &mut ev_rx).await;
                 deliver_data(&pump.stream, &merged);
-                deferred = next;
+                if let Some(next) = next {
+                    deferred.push_front(next);
+                }
             }
             SessionEvent::Banner(text) => {
                 // The server's pre-login text is plain output as far as the
@@ -952,7 +1043,13 @@ async fn run_cycle(
                 deliver_exit(&pump.stream, code);
             }
             SessionEvent::Status(SessionStatus::Ready) if opening => {
-                held_ready = Some(SessionEvent::Status(SessionStatus::Ready));
+                held.push_back(SessionEvent::Status(SessionStatus::Ready));
+            }
+            SessionEvent::Forward(status) if opening => {
+                held.push_back(SessionEvent::Forward(status));
+            }
+            SessionEvent::Forward(status) => {
+                deliver_forward(&pump.stream, ForwardUpdate::from(&status));
             }
             SessionEvent::Status(status) => {
                 if let Some(end) = pump.on_status(&status) {
@@ -1184,8 +1281,10 @@ mod tests {
             keepalive_seconds: 0,
             timeouts: termru_ssh::ConnectTimeouts::default(),
             known_hosts_path: std::path::PathBuf::from("/dev/null"),
+            extra_known_hosts: Vec::new(),
             host_key_prompt: std::sync::Arc::new(termru_ssh::config::RejectUnknownHostKeys),
             auth_prompt: std::sync::Arc::new(termru_ssh::NoAuthPrompts),
+            setup: Default::default(),
         }
     }
 
@@ -1806,6 +1905,159 @@ mod tests {
         let (merged, _) = coalesce(vec![7; COALESCE_MIN_WAIT], &mut rx).await;
         assert_eq!(merged.len(), COALESCE_MIN_WAIT);
         assert_eq!(started.elapsed(), COALESCE_WINDOW);
+    }
+
+    // ---- port forward reports ----
+
+    fn listening(id: u32, port: u16) -> ForwardUpdate {
+        ForwardUpdate::Listening {
+            id,
+            kind: ForwardKind::Local,
+            address: "127.0.0.1".into(),
+            port,
+        }
+    }
+
+    /// The exact shape the frontend reads (`types.ts`).
+    #[test]
+    fn forward_updates_serialize_for_the_frontend_contract() {
+        let json = serde_json::to_value(SessionUpdate::Forward {
+            forward: listening(2, 8080),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "forward",
+                "forward": {
+                    "state": "listening", "id": 2, "kind": "local",
+                    "address": "127.0.0.1", "port": 8080
+                }
+            })
+        );
+        let json = serde_json::to_value(SessionUpdate::Forward {
+            forward: ForwardUpdate::Failed {
+                id: 0,
+                kind: ForwardKind::Dynamic,
+                reason: "the port is already in use".into(),
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "forward",
+                "forward": {
+                    "state": "failed", "id": 0, "kind": "dynamic",
+                    "reason": "the port is already in use"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn the_engines_forward_status_converts_without_loss() {
+        let status = ForwardStatus {
+            id: 4,
+            kind: ForwardKind::Remote,
+            state: ForwardState::Listening {
+                address: "localhost".into(),
+                port: 9000,
+            },
+        };
+        assert_eq!(
+            ForwardUpdate::from(&status),
+            ForwardUpdate::Listening {
+                id: 4,
+                kind: ForwardKind::Remote,
+                address: "localhost".into(),
+                port: 9000
+            }
+        );
+        let failed = ForwardStatus {
+            id: 1,
+            kind: ForwardKind::Local,
+            state: ForwardState::Failed {
+                reason: "nope".into(),
+            },
+        };
+        assert!(matches!(
+            ForwardUpdate::from(&failed),
+            ForwardUpdate::Failed { id: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn a_view_that_attaches_later_is_told_what_the_forwards_are() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let stream = manager.stream(&id).expect("stream");
+        deliver_status(&stream, SessionStatusDto::Ready);
+        deliver_forward(&stream, listening(1, 8080));
+        deliver_forward(&stream, listening(0, 1080));
+        // A newer report for the same forward replaces the older one.
+        deliver_forward(
+            &stream,
+            ForwardUpdate::Failed {
+                id: 1,
+                kind: ForwardKind::Local,
+                reason: "died".into(),
+            },
+        );
+
+        let (channel, log) = capturing_channel();
+        futures_block(manager.attach_view(&id, "other", channel)).expect("attach");
+        let seen: Vec<ForwardUpdate> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|update| match update {
+                SessionUpdate::Forward { forward } => Some(forward.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[0].id(), 0);
+        assert!(matches!(seen[1], ForwardUpdate::Failed { id: 1, .. }));
+        // The status comes before the forwards it qualifies.
+        let first = log.lock().unwrap().first().cloned();
+        assert!(
+            matches!(first, Some(SessionUpdate::Status { .. })),
+            "{first:?}"
+        );
+
+        let info = manager.info(&id).expect("info");
+        assert_eq!(info.forwards.len(), 2);
+    }
+
+    /// The forwards live and die with the connection: any status but `ready`
+    /// (reconnecting, closed, failed, connecting again) forgets them, so a
+    /// view that attaches after a drop is not told of listeners that are gone.
+    #[test]
+    fn only_a_ready_session_keeps_its_forwards() {
+        let manager = SessionManager::new();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let stream = manager.stream(&id).expect("stream");
+        for status in [
+            SessionStatusDto::Reconnecting {
+                attempt: 1,
+                delay_ms: 10,
+                last_error: "x".into(),
+            },
+            SessionStatusDto::Connecting,
+            SessionStatusDto::Closed {
+                reason: "bye".into(),
+            },
+        ] {
+            deliver_status(&stream, SessionStatusDto::Ready);
+            deliver_forward(&stream, listening(0, 8080));
+            assert_eq!(manager.info(&id).expect("info").forwards.len(), 1);
+            deliver_status(&stream, status.clone());
+            assert!(
+                manager.info(&id).expect("info").forwards.is_empty(),
+                "{status:?} forgets the forwards"
+            );
+        }
     }
 
     #[test]

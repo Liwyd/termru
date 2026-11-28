@@ -12,17 +12,22 @@ mod auth;
 pub mod config;
 mod dial;
 pub mod error;
+pub mod forward;
+mod jump;
 pub mod known_hosts;
 pub mod reconnect;
 pub mod replay;
 pub mod session;
+pub mod ssh_config;
 
 pub use config::{
-    AuthChoice, AuthPrompt, AuthPromptField, AuthPromptKind, AuthPromptRequest, AuthPromptResponse,
-    ConnectParams, ConnectTimeouts, HostKeyPrompt, HostKeyPromptRequest, KeyIdentity,
-    MAX_AGENT_KEYS, NoAuthPrompts, SecretValue,
+    AgentForward, AuthChoice, AuthPrompt, AuthPromptField, AuthPromptKind, AuthPromptRequest,
+    AuthPromptResponse, ConnectParams, ConnectTimeouts, ForwardSpec, HostKeyPrompt,
+    HostKeyPromptRequest, JumpHop, KeyIdentity, MAX_AGENT_KEYS, NoAuthPrompts, SecretValue,
+    SessionSetup,
 };
 pub use error::SshError;
+pub use forward::{ForwardState, ForwardStatus};
 pub use known_hosts::{Evaluation, HostKeyEntry, KnownHosts};
 pub use reconnect::{GiveUpReason, ReconnectDecision, ReconnectPolicy};
 pub use replay::ReplayRing;

@@ -19,10 +19,11 @@ security-relevant part of this list is also tracked in the
   (the tabs, the order and the pane tree), but the sessions do not: the
   user reconnects. A remote shell can not be restored, and Termru never
   claims otherwise.
-* **The port forwarding is not implemented.** No local, remote or dynamic
-  forwarding, no jump hosts. The SSH engine is the pure-Rust one, so the
-  feature is possible, but it was left out of the first version
-  (see ADR 0002).
+* **Forwarding, jump hosts and the other session options have no screens
+  yet.** The engine, the data model and the import of `~/.ssh/config` work
+  (see ADR 0010), but the host editor does not show the Jump host, Forwards
+  and Advanced sections until the next phase: they can only come from an
+  import or a synced record.
 * **No snippets.** The domain has no snippet model, so the search can not
   cover one and the palette can not insert one.
 * **No context menus and no drag & drop of a host onto a tab.** The tabs can
@@ -68,6 +69,60 @@ security-relevant part of this list is also tracked in the
 * **The first use of a private key trusts the file on disk.** The path is
   stored, the key is never copied, but the file itself is not verified
   against a fingerprint in the UI.
+
+## Jump hosts, forwards and session setup
+
+See [ADR 0010](architecture/0010-data-model-v2.md) and ADR 0002.
+
+* **An older Termru drops the new fields.** A version from before data model
+  v2 that edits a host keeps no jump chain, forwards, environment, startup
+  command, agent flag or authentication order in its copy and pushes that.
+  There is no unknown-field preservation. Update every device before editing
+  hosts that use them.
+* **Synced fields act.** A startup command, agent forwarding and forwards come
+  with the synced record: whoever can write to the sync account can change
+  what a connection does on every device. They are validated everywhere and
+  off or loopback-only by default, but there is no per-device switch that
+  ignores them yet.
+* **Agent forwarding is a risk by nature.** The server's administrators can use
+  the agent while the session lives. It is off by default and only requested
+  on the target, never on a jump host. On Windows only the OpenSSH agent's
+  named pipe is proxied (Pageant can authenticate but not be forwarded), and
+  that path was never run.
+* **The startup command is typed input, not `exec`.** It reaches an
+  interactive shell like keystrokes: a shell whose startup files read from the
+  terminal (a prompt in `.profile`) may consume it, and it runs again after
+  every automatic reconnect (a new shell).
+* **Environment variables only reach what the server accepts** (`AcceptEnv`;
+  most servers take `LANG` and `LC_*`). A refusal is silent in the UI and
+  logged at debug level (the name, never the value).
+* **A SOCKS forward has no authentication,** and a forward bound to a
+  non-loopback address is reachable from the network. Both are the user's
+  explicit choice.
+* **Forward listeners are IPv4 loopback by default** (`localhost` binds
+  `127.0.0.1`); an IPv6 listener needs an explicit `::1` bind address.
+* **The route is not rechecked for the hosts that depend on an edited host.**
+  Editing a jump host so that another host's route becomes a cycle or too long
+  is reported when that host is connected, not when the jump host is saved.
+  Deleting a jump host does the same.
+* **Each hop has its own time budgets.** A chain of N hops can take N times the
+  connect and authentication time before it gives up; cancelling is immediate.
+  A question asked by a jump host is shown in the session's dialog, marked with
+  the host's name.
+* **The user's `~/.ssh/known_hosts` is trusted read-only.** A key it holds is
+  accepted without a prompt for a host the app has no entry for. There is no
+  setting to turn that off yet. Wildcard and hashed entries work like
+  OpenSSH's; `@cert-authority` is ignored.
+* **The `~/.ssh/config` import is a subset.** It understands `Host` (patterns,
+  negation), `HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump` and
+  `Include`. `Match` blocks are skipped with a warning; `ProxyCommand`,
+  forwards, `SendEnv` and every other option are not imported. A host uses one
+  key: only the first usable `IdentityFile` is imported. A host with none is
+  imported with agent authentication. The import is not repeated on change:
+  it creates what is missing and recognises what exists by address, user and
+  port.
+* **The jump, forward and import code was exercised against OpenSSH `sshd`
+  only** (private instances, no PAM, no real firewall between the hops).
 
 ## Authentication
 

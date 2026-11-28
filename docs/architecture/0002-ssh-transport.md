@@ -86,3 +86,42 @@ Concrete design choices that follow:
 * **`ssh2`/libssh2 bindings**: C dependency (build-tool risk in constrained
   CI), weaker async integration, no advantage in trust UX.
 * **Implement the SSH protocol**: unjustified complexity.
+
+## Amendment 2026-11-28: jump hosts, port forwards, session setup
+
+The decisions above stand. ADR 0010 adds what a host may ask of its session;
+this is how the transport carries it.
+
+* **Jump hosts** (`jump.rs`). The first hop is dialed; every later hop and the
+  target are reached through a `direct-tcpip` channel opened on the hop before,
+  turned into a stream and handed to `russh::client::connect_stream`. Each hop
+  has its **own** key exchange, host-key decision (known_hosts, the trust
+  prompt, `@revoked`), keepalive and authentication chain; a jump host cannot
+  vouch for what lies behind it. One cancellation signal covers the whole
+  chain; each hop runs under its own connect budget and authentication
+  timeout, so the worst case is that of every hop in turn. Errors of a jump
+  host are wrapped in `SshError::Hop` (which hop, of how many, its name) and
+  keep the category of their cause: a refused password on a jump host is still
+  an authentication failure, a dropped link is still retriable, and a
+  forwarding ban (`AllowTcpForwarding no`) is final. The jump connections stay
+  open as long as the target's, and are closed after it. Automatic reconnects
+  start the whole chain again.
+* **Port forwards** (`forward.rs`). `local` (`-L`) and `dynamic` (`-D`, a
+  minimal SOCKS5 server: no authentication, `CONNECT` only, IPv4/IPv6/domain
+  names resolved by the server) listen here; `remote` (`-R`) asks the server to
+  listen (`tcpip-forward`) and answers its `forwarded-tcpip` channels by
+  connecting to the target, which is connected *before* the channel is
+  confirmed. Loopback unless a bind address says otherwise. A forward reports
+  `Listening` (with the address actually bound) or `Failed` (with a reason in
+  words) as `SessionEvent::Forward`, after `Ready`. They belong to the session
+  actor: on any end they are aborted and awaited (listening sockets closed)
+  before `Closed` is reported, so a reconnect can bind the same ports. At most
+  128 connections per forward.
+* **Environment, startup command, agent**. `SetEnv` requests ask for a reply:
+  a refusal is logged (name only) and ignored. The startup command is the first
+  chunk of the ordered input queue (Enter is `\r`, as a terminal sends it).
+  Agent forwarding sends `auth-agent-req` on the target's channel and proxies
+  the server's agent channels to the local agent socket; the handler of a jump
+  host refuses them.
+* **Read-only known_hosts** (`KnownHosts::with_readonly`). See ADR 0010 for the
+  rules; the writable file stays the only one that is written.

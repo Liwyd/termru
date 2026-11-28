@@ -78,7 +78,8 @@ impl RecordKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum RecordPayload {
-    Host(Host),
+    /// Boxed: a host carries the v2 lists and is by far the largest record.
+    Host(Box<Host>),
     Identity(Identity),
     Group(Group),
     Tag(Tag),
@@ -391,5 +392,85 @@ mod tests {
         let host = sample_host();
         let value = serde_json::to_value(&host).unwrap();
         RecordPayload::decode_and_validate(RecordKind::Host, &value).unwrap();
+    }
+
+    /// The new host fields travel through the sync protocol unchanged, and the
+    /// server-side structural validation (which runs the same entity rules)
+    /// accepts them.
+    #[test]
+    fn v2_host_fields_roundtrip_through_a_push_mutation() {
+        use crate::host::{AuthKind, EnvVar, Forward, ForwardKind};
+        let mut host = sample_host();
+        host.jump_chain = vec![crate::ids::HostId::new()];
+        host.forwards = vec![Forward {
+            kind: ForwardKind::Remote,
+            bind_address: None,
+            bind_port: 9000,
+            target_host: Some("127.0.0.1".into()),
+            target_port: Some(3000),
+            enabled: true,
+        }];
+        host.env = vec![EnvVar {
+            name: "TERMRU_PROFILE".into(),
+            value: "ops".into(),
+        }];
+        host.startup_command = Some("uptime".into());
+        host.agent_forward = true;
+        host.auth_order = Some(vec![AuthKind::Agent, AuthKind::Password]);
+        let mutation = PushMutation {
+            mutation_id: uuid::Uuid::new_v4(),
+            id: host.id.to_string(),
+            kind: RecordKind::Host,
+            base_rev: None,
+            deleted: false,
+            payload: Some(serde_json::to_value(&host).unwrap()),
+            updated_at: Utc::now(),
+        };
+        mutation.validate_structure().unwrap();
+        let wire = serde_json::to_string(&mutation).unwrap();
+        let back: PushMutation = serde_json::from_str(&wire).unwrap();
+        let decoded =
+            RecordPayload::decode_and_validate(RecordKind::Host, back.payload.as_ref().unwrap())
+                .unwrap();
+        let RecordPayload::Host(decoded) = decoded else {
+            panic!("a host payload decodes to a host");
+        };
+        assert_eq!(decoded.jump_chain, host.jump_chain);
+        assert_eq!(decoded.forwards, host.forwards);
+        assert_eq!(decoded.env, host.env);
+        assert_eq!(decoded.startup_command, host.startup_command);
+        assert!(decoded.agent_forward);
+        assert_eq!(decoded.auth_order, host.auth_order);
+    }
+
+    /// The payload an older device pushes (no v2 fields) is accepted by the
+    /// current validation, and an invalid v2 payload is refused on the way in.
+    #[test]
+    fn old_host_payloads_are_accepted_and_bad_v2_ones_are_not() {
+        let old = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "legacy",
+            "address": "legacy.example.com",
+            "port": 22,
+            "username": "root",
+            "auth": {"type": "agent"},
+            "tags": [],
+            "favorite": false,
+            "term": "xterm-256color",
+            "keepalive_seconds": 30,
+            "sort_order": 0,
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-01T00:00:00Z",
+        });
+        RecordPayload::decode_and_validate(RecordKind::Host, &old).unwrap();
+
+        let mut bad = old.clone();
+        bad["forwards"] = serde_json::json!([
+            {"kind": "dynamic", "bind_port": 1080, "target_host": "x", "target_port": 1}
+        ]);
+        assert!(RecordPayload::decode_and_validate(RecordKind::Host, &bad).is_err());
+        let mut bad = old;
+        bad["env"] = serde_json::json!([{"name": "A B", "value": "x"}]);
+        assert!(RecordPayload::decode_and_validate(RecordKind::Host, &bad).is_err());
     }
 }

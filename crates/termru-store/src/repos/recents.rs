@@ -24,7 +24,10 @@ pub struct RecentHost {
 }
 
 fn row_recent(row: &Row<'_>) -> rusqlite::Result<(Host, i64)> {
-    Ok((super::hosts::row_to_host(row)?, row.get(17)?))
+    Ok((
+        super::hosts::row_to_host(row)?,
+        row.get(super::hosts::HOST_COLUMN_COUNT)?,
+    ))
 }
 
 impl Recents<'_> {

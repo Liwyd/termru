@@ -15,7 +15,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Tag `v0.1.0` (or subsequent production tag) using credentials on a push-enabled host with release permissions.
 
 ### SSH authentication follow-ups (see ADR 0008)
-- [ ] Persist a per-host method order (`auth_order`, a synced field with a serde default); until then the chain is derived from the host's method.
+- [x] A per-host method order (`auth_order`, a synced field with a serde default; Phase 5a). The editor control is Phase 5b.
 - [x] `AuthPromptDialog`, `HostKeyDialog` and `ConnectDialog` restyled on the session dialog (Phase 4c).
 - [ ] Windows: try the OpenSSH named-pipe agent and the Pageant fallback on a real Windows host (implemented, never run).
 - [ ] Try keyboard-interactive against a real PAM/2FA server (the tests use an in-process server; the private `sshd` of the tests runs without PAM).
@@ -38,8 +38,19 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] "Choose hosts" is a searchable list of up to 50 hosts, not a multi-select; moving several hosts at once is still one at a time.
 - [ ] Generated keys are ed25519 only; RSA/ECDSA generation, importing a key into the app's folder and deleting a generated key's file with its identity are not offered (deleting the identity leaves the file).
 - [ ] The window-close guard (`onCloseRequested`) is only exercised against a fake window in tests; try it on a real desktop session (WebKitGTK, WebView2, WKWebView).
-- [ ] Phase 5 will add the Jump host, Forwards and Advanced sections to the editor; `04 / ADVANCED` already exists for them.
+- [ ] Phase 5b: the Jump host, Forwards and Advanced sections of the host editor (`04 / ADVANCED` already exists for them), the forward status in the session toolbar, the `~/.ssh/config` import dialog and the jump-host password prompt (`hop_secrets`). The backend is done (below).
 - [ ] A password typed in the editor is sent to the backend over IPC as a plain string and is not zeroized on the frontend side (as in the connect dialog).
+
+### Data model v2, jump hosts, forwards, session setup (Phase 5a, ADR 0010)
+- [x] `Host` gets `jump_chain`, `forwards`, `env`, `startup_command`, `agent_forward`, `auth_order` (serde defaults, unused fields not serialized); validation incl. IPv6 zone ids, per-kind forwards, env names, jump cycles and length; store migration 2 (v1 fixture database), `Hosts::import` in one transaction; the sync server needs no change (opaque payload, same entity validation).
+- [x] Engine: jump chains (every hop verified and authenticated, errors name the hop), local / remote / dynamic (SOCKS5) forwards with per-forward status events, `SetEnv`, startup command, agent forwarding, read-only `~/.ssh/known_hosts`; sshd integration tests for all of them.
+- [x] `~/.ssh/config` parser (pure) and the `ssh_config_preview` / `ssh_config_import` commands.
+- [ ] Decide whether a device-local switch should make a device ignore synced startup commands, agent forwarding and non-loopback forwards (a synced record can otherwise change what a connection does on every device, see ADR 0010).
+- [ ] A setting to turn the read-only `~/.ssh/known_hosts` source off.
+- [ ] Windows: the agent-forwarding proxy (OpenSSH named pipe) and the forwards were never run on Windows.
+- [ ] Preserve unknown host fields across versions (an older app editing a v2 host drops them).
+- [ ] Re-check the routes of the hosts that depend on an edited or deleted jump host at save time (today: at connect time).
+- [ ] The cloud-server test for v2 host payloads needs PostgreSQL; it was compiled but not run locally.
 
 ### Sync, Preferences, dialogs and notices (Phase 4c, frame 8 and the specification C.03-C.04)
 - [x] Sync page (status, conflicts, this device, sign in, change account, sign out, offline copy), Preferences page (every field, live preview, shortcut table with record / unbind / reset, Restore defaults, About), connect / host-key / sign-in dialogs, the notify facade (ADR 0009) and the opener plugin.

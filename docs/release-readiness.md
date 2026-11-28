@@ -112,5 +112,5 @@ is most likely to notice:
 
 * the second window can only show a moved tab (no per-window tab bar);
 * the restored tabs are placeholders (the user reconnects);
-* no port forwarding, no jump hosts, no snippets;
+* jump hosts, port forwards and the other session options work in the engine but have no editor screens yet (the next phase); no snippets;
 * the packages are not signed.

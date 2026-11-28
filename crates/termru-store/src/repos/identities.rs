@@ -69,6 +69,22 @@ pub(crate) fn upsert_identity_row(
     Ok(())
 }
 
+/// Binds (or re-binds) the key path of an identity. The identity must exist.
+pub(crate) fn bind_row(
+    conn: &Connection,
+    identity_id: &str,
+    key_path: &str,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO identity_bindings (identity_id, key_path, updated_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(identity_id) DO UPDATE SET key_path = excluded.key_path, \
+         updated_at = excluded.updated_at",
+        rusqlite::params![identity_id, key_path, now_ms()],
+    )
+    .map_err(StoreError::Sqlite)?;
+    Ok(())
+}
+
 /// Number of non-deleted hosts that authenticate with this identity.
 fn referencing_host_count(conn: &Connection, identity_id: &str) -> Result<i64, StoreError> {
     conn.query_row(
@@ -180,21 +196,16 @@ impl Identities<'_> {
         let path = key_path.to_string();
         self.store.with_tx(move |conn| {
             let identity_exists: i64 = conn
-                .query_row("SELECT 1 FROM identities WHERE id = ?1", [&key], |r| r.get(0))
+                .query_row("SELECT 1 FROM identities WHERE id = ?1", [&key], |r| {
+                    r.get(0)
+                })
                 .optional()
                 .map_err(StoreError::Sqlite)?
                 .unwrap_or(0);
             if identity_exists == 0 {
                 return Err(StoreError::NotFound("identity"));
             }
-            conn.execute(
-                "INSERT INTO identity_bindings (identity_id, key_path, updated_at) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(identity_id) DO UPDATE SET key_path = excluded.key_path, \
-                 updated_at = excluded.updated_at",
-                rusqlite::params![key, path, now_ms()],
-            )
-            .map_err(StoreError::Sqlite)?;
-            Ok(())
+            bind_row(conn, &key, &path)
         })
     }
 

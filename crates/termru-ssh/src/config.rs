@@ -238,6 +238,105 @@ impl HostKeyPrompt for RejectUnknownHostKeys {
     }
 }
 
+/// A port forward the session starts once it is ready. Built from a host's
+/// `termru_core::Forward` (only the enabled ones).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardSpec {
+    /// The caller's name for this forward, handed back in every
+    /// [`ForwardStatus`](crate::forward::ForwardStatus). The desktop uses the
+    /// forward's index in the host, so a disabled forward keeps its slot.
+    pub id: u32,
+    pub kind: termru_core::ForwardKind,
+    /// `None` means loopback (see `termru_core::Forward`).
+    pub bind_address: Option<String>,
+    pub bind_port: u16,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+}
+
+impl ForwardSpec {
+    pub fn from_forward(id: u32, forward: &termru_core::Forward) -> Self {
+        Self {
+            id,
+            kind: forward.kind,
+            bind_address: forward.bind_address.clone(),
+            bind_port: forward.bind_port,
+            target_host: forward.target_host.clone(),
+            target_port: forward.target_port,
+        }
+    }
+}
+
+/// A host the connection passes through on its way to the target. It is
+/// connected to and authenticated like any other host (its own host-key
+/// check, known_hosts and authentication chain); only its `setup` is ignored.
+#[derive(Clone)]
+pub struct JumpHop {
+    /// How the hop is named in errors (the host's display name).
+    pub label: String,
+    pub params: ConnectParams,
+}
+
+impl std::fmt::Debug for JumpHop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JumpHop")
+            .field("label", &self.label)
+            .field("params", &self.params)
+            .finish()
+    }
+}
+
+/// Lets the server use the local SSH agent while the session is open.
+///
+/// **Risky by nature**: anyone who controls the server (or can read the
+/// socket it creates) can have the agent sign as the user for as long as the
+/// session lives. It is only ever requested on the final hop, never on a jump
+/// host.
+#[derive(Debug, Clone, Default)]
+pub struct AgentForward {
+    /// Explicit agent socket. `None` = `SSH_AUTH_SOCK` (on Windows the
+    /// OpenSSH agent's named pipe).
+    pub socket: Option<PathBuf>,
+}
+
+/// What a session does besides connecting: the route to the host, forwards,
+/// environment, startup input. All off by default.
+#[derive(Clone, Default)]
+pub struct SessionSetup {
+    /// Hosts to pass through, in order, before the target (see
+    /// [`ConnectParams::setup`]). The caller has already resolved the full
+    /// route (`termru_core::validate::resolve_jump_chain`).
+    pub jump: Vec<JumpHop>,
+    /// Forwards started after the session is ready, torn down when it ends
+    /// and started again by a reconnect.
+    pub forwards: Vec<ForwardSpec>,
+    /// Environment variables requested before the shell starts. A server
+    /// accepts only what its `AcceptEnv` allows; a refusal is not an error.
+    pub env: Vec<(String, String)>,
+    /// Typed into the shell once it is up, followed by Enter. It is input to
+    /// an interactive shell, not an `exec` request: the session stays a
+    /// normal terminal.
+    pub startup_command: Option<String>,
+    pub agent_forward: Option<AgentForward>,
+}
+
+impl std::fmt::Debug for SessionSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Environment values and the startup command are the user's text and
+        // may hold something private: names and presence only.
+        f.debug_struct("SessionSetup")
+            .field("jump", &self.jump)
+            .field("forwards", &self.forwards)
+            .field(
+                "env",
+                &self.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            )
+            .field("startup_command", &self.startup_command.is_some())
+            .field("agent_forward", &self.agent_forward)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct ConnectParams {
     pub host: String,
@@ -256,9 +355,18 @@ pub struct ConnectParams {
     pub keepalive_seconds: u32,
     pub timeouts: ConnectTimeouts,
     pub known_hosts_path: PathBuf,
+    /// More known_hosts files, **read only**: a key found in one of them (and
+    /// nowhere in `known_hosts_path`) is trusted without a prompt; a key that
+    /// contradicts one is a changed key, and `@revoked` is honored. They are
+    /// never written (typically the user's `~/.ssh/known_hosts`).
+    pub extra_known_hosts: Vec<PathBuf>,
     pub host_key_prompt: Arc<dyn HostKeyPrompt>,
     /// Asked for keyboard-interactive answers and missing key passphrases.
     pub auth_prompt: Arc<dyn AuthPrompt>,
+    /// Route, forwards, environment and startup input of the session. Only
+    /// the connection's final hop uses it: a [`JumpHop`]'s own `setup` is
+    /// ignored.
+    pub setup: SessionSetup,
 }
 
 impl std::fmt::Debug for ConnectParams {
@@ -274,6 +382,8 @@ impl std::fmt::Debug for ConnectParams {
             .field("keepalive_seconds", &self.keepalive_seconds)
             .field("timeouts", &self.timeouts)
             .field("known_hosts_path", &self.known_hosts_path)
+            .field("extra_known_hosts", &self.extra_known_hosts)
+            .field("setup", &self.setup)
             .finish_non_exhaustive()
     }
 }
@@ -342,8 +452,10 @@ mod tests {
             keepalive_seconds,
             timeouts: ConnectTimeouts::default(),
             known_hosts_path: PathBuf::from("/dev/null"),
+            extra_known_hosts: Vec::new(),
             host_key_prompt: Arc::new(RejectUnknownHostKeys),
             auth_prompt: Arc::new(NoAuthPrompts),
+            setup: SessionSetup::default(),
         }
     }
 
@@ -355,5 +467,18 @@ mod tests {
             Duration::from_secs(u64::from(DEFAULT_KEEPALIVE_SECONDS))
         );
         assert_eq!(params(45).effective_keepalive(), Duration::from_secs(45));
+    }
+
+    /// Environment values and the startup command are the user's text: they
+    /// never reach a log line through `Debug`.
+    #[test]
+    fn debug_output_names_environment_variables_but_not_values() {
+        let mut p = params(0);
+        p.setup.env = vec![("TERMRU_PROFILE".into(), "hunter2-value".into())];
+        p.setup.startup_command = Some("echo supersecret-command".into());
+        let debug = format!("{p:?}");
+        assert!(debug.contains("TERMRU_PROFILE"), "{debug}");
+        assert!(!debug.contains("hunter2-value"), "{debug}");
+        assert!(!debug.contains("supersecret-command"), "{debug}");
     }
 }

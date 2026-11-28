@@ -15,6 +15,11 @@
 //! PTY resize, large output flood, re-attach replay ordering, interrupted
 //! connection classification, binary output preservation, clean exit
 //! classification, bounded automatic reconnect give-up.
+//!
+//! Phase 5a adds (see the last section): jump chains through two and three
+//! private servers, local/remote/dynamic port forwards, environment
+//! variables, the startup command, agent forwarding and the read-only extra
+//! known_hosts files.
 
 #![cfg(unix)]
 #![allow(
@@ -31,10 +36,11 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 
+use termru_core::ForwardKind;
 use termru_ssh::{
-    AuthChoice, ConnectParams, ConnectTimeouts, ErrorCategory, HostKeyPrompt, HostKeyPromptRequest,
-    NoAuthPrompts, ReconnectPolicy, SecretValue, Session, SessionEvent, SessionOptions,
-    SessionStatus, SshError,
+    AgentForward, AuthChoice, ConnectParams, ConnectTimeouts, ErrorCategory, ForwardSpec,
+    ForwardState, ForwardStatus, HostKeyPrompt, HostKeyPromptRequest, JumpHop, NoAuthPrompts,
+    ReconnectPolicy, SecretValue, Session, SessionEvent, SessionOptions, SessionStatus, SshError,
 };
 
 const ENC_PASSPHRASE: &str = "kite-pass-test";
@@ -347,8 +353,10 @@ impl TestServer {
                 ..ConnectTimeouts::default()
             },
             known_hosts_path: self.known_hosts.clone(),
+            extra_known_hosts: Vec::new(),
             host_key_prompt: prompt,
             auth_prompt: Arc::new(NoAuthPrompts),
+            setup: Default::default(),
         }
     }
 
@@ -447,6 +455,7 @@ struct Collector {
     banners: Vec<String>,
     statuses: Vec<SessionStatus>,
     exits: Vec<Option<i32>>,
+    forwards: Vec<ForwardStatus>,
 }
 
 impl Collector {
@@ -456,7 +465,37 @@ impl Collector {
             SessionEvent::Banner(text) => self.banners.push(text),
             SessionEvent::Status(status) => self.statuses.push(status),
             SessionEvent::Exit { code } => self.exits.push(code),
+            SessionEvent::Forward(status) => self.forwards.push(status),
         }
+    }
+
+    /// The first status the forward `id` reported.
+    async fn until_forward(
+        &mut self,
+        rx: &mut mpsc::Receiver<SessionEvent>,
+        id: u32,
+    ) -> ForwardState {
+        let result = tokio::time::timeout(EVENT_TIMEOUT, async {
+            loop {
+                if let Some(status) = self.forwards.iter().find(|status| status.id == id) {
+                    return status.state.clone();
+                }
+                let event = rx.recv().await.unwrap_or_else(|| {
+                    panic!(
+                        "event channel closed waiting for forward {id}; saw {:?}",
+                        self.statuses
+                    )
+                });
+                self.push(event);
+            }
+        })
+        .await;
+        result.unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for forward {id}; statuses {:?}, forwards {:?}",
+                self.statuses, self.forwards
+            )
+        })
     }
 
     fn drain(&mut self, rx: &mut mpsc::Receiver<SessionEvent>) {
@@ -2155,4 +2194,1004 @@ async fn the_known_host_key_type_is_requested_first() {
     let session = result.expect("the known ECDSA key must be presented and trusted");
     assert!(prompt.seen().is_empty(), "{:?}", prompt.seen());
     session.close().await.expect("close");
+}
+
+// ============================================================ Phase 5a ====
+// Jump chains, port forwards, environment, startup command, agent
+// forwarding, extra known_hosts files.
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+/// A TCP echo server on loopback. The task ends with the runtime.
+async fn echo_server() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind echo");
+    let port = listener.local_addr().expect("echo addr").port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; 16 * 1024];
+                loop {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => {
+                            if socket.write_all(&buffer[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+/// A port nothing listens on (right now).
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind :0")
+        .local_addr()
+        .expect("addr")
+        .port()
+}
+
+/// A listener that accepts connections and never says a word: an SSH
+/// handshake against it hangs.
+async fn silent_server() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind silent");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    port
+}
+
+fn hop(label: &str, server: &TestServer, prompt: Arc<dyn HostKeyPrompt>) -> JumpHop {
+    JumpHop {
+        label: label.to_string(),
+        params: server.params(prompt, server.client_auth()),
+    }
+}
+
+fn forward(id: u32, kind: ForwardKind, bind_port: u16, target: Option<(&str, u16)>) -> ForwardSpec {
+    ForwardSpec {
+        id,
+        kind,
+        bind_address: None,
+        bind_port,
+        target_host: target.map(|(host, _)| host.to_string()),
+        target_port: target.map(|(_, port)| port),
+    }
+}
+
+/// Opens a ready session with `params` and returns it with its event plumbing.
+async fn ready(params: ConnectParams) -> (Session, Collector, mpsc::Receiver<SessionEvent>) {
+    let (result, col, rx) = open_ready(params).await;
+    (result.expect("the session opens"), col, rx)
+}
+
+fn listening_port(state: &ForwardState) -> u16 {
+    match state {
+        ForwardState::Listening { port, .. } => *port,
+        other => panic!("expected a listening forward, got {other:?}"),
+    }
+}
+
+// ------------------------------------------------------------ jump chains --
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shell_through_a_jump_host_reaches_the_target() {
+    let (Some(jump), Some(target)) = (TestServer::start(), TestServer::start()) else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    params.setup.jump = vec![hop("bastion", &jump, prompt.clone())];
+
+    let (session, mut col, mut rx) = ready(params).await;
+    // SSH_CONNECTION is "client-ip client-port server-ip server-port": the
+    // port is the one of the server this shell runs on.
+    session
+        .write(b"echo ON_$(echo $SSH_CONNECTION | cut -d' ' -f4)_PORT\n".to_vec())
+        .await
+        .expect("write");
+    let wanted = format!("ON_{}_PORT", target.port);
+    col.until_data(&mut rx, "the target's port", |data| {
+        count(data, wanted.as_bytes()) >= 1
+    })
+    .await;
+
+    // Both hops were asked about their host keys, each for its own address.
+    let seen = prompt.seen();
+    let ports: Vec<u16> = seen
+        .iter()
+        .map(|request| match request {
+            HostKeyPromptRequest::Unknown { port, .. } => *port,
+            other => panic!("unexpected prompt {other:?}"),
+        })
+        .collect();
+    assert_eq!(ports, vec![jump.port, target.port], "{seen:?}");
+    let known = std::fs::read_to_string(&target.known_hosts).expect("target known_hosts");
+    assert!(
+        known.contains("|1|"),
+        "the target's key was recorded: {known:?}"
+    );
+    assert!(
+        std::fs::read_to_string(&jump.known_hosts)
+            .expect("jump known_hosts")
+            .contains("|1|"),
+        "the jump host's key was recorded"
+    );
+    // The jump host forwarded exactly one connection for us.
+    assert!(
+        jump.sshd_log().contains("Accepted publickey"),
+        "the jump host authenticated us: {}",
+        jump.sshd_log()
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chain_of_two_jump_hosts_reaches_the_target() {
+    let (Some(first), Some(second), Some(target)) = (
+        TestServer::start(),
+        TestServer::start(),
+        TestServer::start(),
+    ) else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    params.setup.jump = vec![
+        hop("first", &first, prompt.clone()),
+        hop("second", &second, prompt.clone()),
+    ];
+    let (session, mut col, mut rx) = ready(params).await;
+    session
+        .write(b"echo THREE_$(echo $SSH_CONNECTION | cut -d' ' -f4)_HOPS\n".to_vec())
+        .await
+        .expect("write");
+    let wanted = format!("THREE_{}_HOPS", target.port);
+    col.until_data(&mut rx, "the target's port", |data| {
+        count(data, wanted.as_bytes()) >= 1
+    })
+    .await;
+    assert_eq!(prompt.seen().len(), 3, "every hop is verified");
+    session.close().await.expect("close");
+}
+
+/// A known key on the target does not excuse the jump host: it is asked
+/// about too, and a refusal there stops the connection and names the hop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_declined_host_key_on_a_jump_host_names_the_hop() {
+    let (Some(jump), Some(target)) = (TestServer::start(), TestServer::start()) else {
+        return;
+    };
+    target.seed_known_hosts(&target.server_host_key_line());
+    let accepting = RecordingPrompt::new(true);
+    let refusing = RecordingPrompt::new(false);
+    let mut params = target.params(accepting.clone(), target.client_auth());
+    params.setup.jump = vec![hop("bastion", &jump, refusing.clone())];
+
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("the jump host's key was refused");
+    match &error {
+        SshError::Hop {
+            index,
+            total,
+            label,
+            source,
+        } => {
+            assert_eq!((*index, *total, label.as_str()), (1, 1, "bastion"));
+            assert!(matches!(**source, SshError::HostKeyRejected), "{source:?}");
+        }
+        other => panic!("expected a hop error, got {other:?}"),
+    }
+    assert_eq!(ErrorCategory::of(&error), ErrorCategory::HostKey);
+    assert!(!error.is_retriable());
+    assert!(
+        accepting.seen().is_empty(),
+        "the target is not even contacted after the jump host failed"
+    );
+}
+
+/// A changed key on the inner host is caught although the outer connection
+/// is perfectly trusted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_host_key_behind_a_jump_host_blocks_the_connection() {
+    let (Some(jump), Some(target)) = (TestServer::start(), TestServer::start()) else {
+        return;
+    };
+    target.seed_known_hosts(&pubkey_line(&pub_of(&target.decoy_key)));
+    let prompt = RecordingPrompt::new(false);
+    let trusting = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    params.setup.jump = vec![hop("bastion", &jump, trusting)];
+
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("the changed key must be refused");
+    assert!(
+        matches!(error, SshError::HostKeyChanged { .. }),
+        "{error:?}"
+    );
+    assert!(matches!(
+        prompt.seen().as_slice(),
+        [HostKeyPromptRequest::Changed { .. }]
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wrong_key_on_a_jump_host_is_an_auth_failure_of_that_hop() {
+    let (Some(jump), Some(target)) = (TestServer::start(), TestServer::start()) else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    let mut bastion = hop("bastion", &jump, prompt.clone());
+    bastion.params.auth = vec![key_auth(&jump.bad_key)];
+    params.setup.jump = vec![bastion];
+
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("the jump host refuses the key");
+    let message = error.to_string();
+    assert!(message.contains("jump host 1 of 1 (bastion)"), "{message}");
+    assert!(error.is_auth_failure(), "{message}");
+    assert!(!error.is_retriable());
+    assert_eq!(ErrorCategory::of(&error), ErrorCategory::Auth);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jump_host_that_forbids_forwarding_says_so() {
+    let (Some(jump), Some(target)) = (
+        TestServer::start_with("AllowTcpForwarding no", |_| {}),
+        TestServer::start(),
+    ) else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    params.setup.jump = vec![hop("bastion", &jump, prompt.clone())];
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("forwarding is forbidden on the jump host");
+    let message = error.to_string();
+    assert!(message.contains("AllowTcpForwarding"), "{message}");
+    assert!(
+        !error.is_retriable(),
+        "retrying cannot lift the ban: {message}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_connect_budget_applies_to_every_hop() {
+    let Some(target) = TestServer::start() else {
+        return;
+    };
+    let silent = silent_server().await;
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    // The first hop accepts the connection and never speaks.
+    let mut stuck = target.params(prompt.clone(), target.client_auth());
+    stuck.port = silent;
+    stuck.timeouts.connect = Duration::from_secs(1);
+    params.setup.jump = vec![JumpHop {
+        label: "stuck".into(),
+        params: stuck,
+    }];
+
+    let started = std::time::Instant::now();
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("the first hop never answers");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(&error, SshError::Hop { index: 1, source, .. }
+            if matches!(**source, SshError::ConnectTimeout { .. })),
+        "{error:?}"
+    );
+    assert!(error.is_retriable(), "a timeout is worth retrying");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_stops_a_chain_in_the_middle_of_a_hop() {
+    let Some(target) = TestServer::start() else {
+        return;
+    };
+    let silent = silent_server().await;
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    let mut stuck = target.params(prompt.clone(), target.client_auth());
+    stuck.port = silent;
+    stuck.timeouts.connect = Duration::from_secs(30);
+    params.setup.jump = vec![JumpHop {
+        label: "stuck".into(),
+        params: stuck,
+    }];
+
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (tx, mut rx) = mpsc::channel(256);
+    let opening = tokio::spawn(Session::open_cancellable(
+        params,
+        SessionOptions::default(),
+        tx,
+        cancel_rx,
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = std::time::Instant::now();
+    cancel_tx.send(true).expect("cancel");
+    let result = tokio::time::timeout(Duration::from_secs(5), opening)
+        .await
+        .expect("cancellation is prompt")
+        .expect("the task ends");
+    assert!(
+        matches!(result, Err(SshError::SessionClosing)),
+        "{:?}",
+        result.err()
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let mut col = Collector::default();
+    col.drain(&mut rx);
+    assert!(
+        !col.statuses
+            .iter()
+            .any(|status| matches!(status, SessionStatus::Failed { .. })),
+        "a cancelled connect is not a failure: {:?}",
+        col.statuses
+    );
+}
+
+/// The retry policy covers the chain: a jump host that cannot be reached is a
+/// network failure of that hop and is retried like any other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reconnect_policy_retries_a_failing_hop_and_then_gives_up() {
+    let Some(target) = TestServer::start() else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    let mut dead = target.params(prompt.clone(), target.client_auth());
+    dead.port = free_port();
+    params.setup.jump = vec![JumpHop {
+        label: "dead".into(),
+        params: dead,
+    }];
+    let policy = ReconnectPolicy {
+        max_attempts: 3,
+        initial_delay: Duration::from_millis(50),
+        max_delay: Duration::from_millis(100),
+        multiplier: 1.0,
+        jitter_ratio: 0.0,
+    };
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (tx, mut rx) = mpsc::channel(256);
+    let error =
+        Session::open_with_reconnect(params, SessionOptions::default(), tx, policy, cancel_rx)
+            .await
+            .expect_err("the hop never comes up");
+    assert!(matches!(error, SshError::Hop { index: 1, .. }), "{error:?}");
+    let mut col = Collector::default();
+    col.drain(&mut rx);
+    let retries = col
+        .statuses
+        .iter()
+        .filter(|status| matches!(status, SessionStatus::Reconnecting { .. }))
+        .count();
+    assert_eq!(retries, 2, "{:?}", col.statuses);
+    col.assert_terminal_failure(ErrorCategory::Network);
+}
+
+// ----------------------------------------------------------- port forwards --
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_forward_carries_a_connection_to_its_target() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let echo = echo_server().await;
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(3, ForwardKind::Local, 0, Some(("127.0.0.1", echo)))];
+
+    let (session, mut col, mut rx) = ready(params).await;
+    // The forward starts after Ready.
+    let state = col.until_forward(&mut rx, 3).await;
+    let ForwardState::Listening { address, port } = &state else {
+        panic!("not listening: {state:?}");
+    };
+    assert_eq!(address, "127.0.0.1", "loopback unless told otherwise");
+
+    let mut client = TcpStream::connect(("127.0.0.1", *port))
+        .await
+        .expect("connect");
+    client
+        .write_all(b"hello through the tunnel")
+        .await
+        .expect("write");
+    let mut echoed = vec![0u8; 24];
+    tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut echoed))
+        .await
+        .expect("echo arrives")
+        .expect("read");
+    assert_eq!(&echoed, b"hello through the tunnel");
+
+    // A megabyte both ways keeps its bytes.
+    let payload: Vec<u8> = (0..1_000_000u32).map(|n| (n % 251) as u8).collect();
+    let (mut reader, mut writer) = client.into_split();
+    let sending = payload.clone();
+    let write_all = tokio::spawn(async move {
+        writer.write_all(&sending).await.expect("write payload");
+        writer
+    });
+    let mut received = vec![0u8; payload.len()];
+    tokio::time::timeout(Duration::from_secs(30), reader.read_exact(&mut received))
+        .await
+        .expect("payload comes back")
+        .expect("read payload");
+    assert!(received == payload, "payload damaged in transit");
+    let _writer = write_all.await.expect("writer task");
+
+    // Closing the session closes the listener.
+    session.close().await.expect("close");
+    col.until_status(&mut rx, "Closed", |s| {
+        matches!(s, SessionStatus::Closed { .. })
+    })
+    .await;
+    assert!(
+        TcpStream::connect(("127.0.0.1", *port)).await.is_err(),
+        "the listener is gone with the session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forward_port_that_is_taken_reports_why() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = taken.local_addr().expect("addr").port();
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![
+        forward(1, ForwardKind::Local, port, Some(("127.0.0.1", 9))),
+        forward(2, ForwardKind::Dynamic, 0, None),
+    ];
+    let (session, mut col, mut rx) = ready(params).await;
+    match col.until_forward(&mut rx, 1).await {
+        ForwardState::Failed { reason } => {
+            assert!(reason.contains("already in use"), "{reason}");
+            assert!(reason.contains(&port.to_string()), "{reason}");
+        }
+        other => panic!("expected a failure, got {other:?}"),
+    }
+    // One forward failing does not take the others (or the shell) with it.
+    assert!(matches!(
+        col.until_forward(&mut rx, 2).await,
+        ForwardState::Listening { .. }
+    ));
+    session
+        .write(b"echo STILL_UP\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "the shell", |d| count(d, b"STILL_UP") >= 2)
+        .await;
+    session.close().await.expect("close");
+}
+
+/// A forward is torn down with its session and set up again by the next one:
+/// the port is free again by the time the session reports its end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forwards_are_rebuilt_for_the_next_session() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let echo = echo_server().await;
+    let port = free_port();
+    for round in 0..3 {
+        let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+        params.setup.forwards = vec![forward(
+            0,
+            ForwardKind::Local,
+            port,
+            Some(("127.0.0.1", echo)),
+        )];
+        let (session, mut col, mut rx) = ready(params).await;
+        let state = col.until_forward(&mut rx, 0).await;
+        assert_eq!(listening_port(&state), port, "round {round}: {state:?}");
+        let mut client = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        client.write_all(b"ping").await.expect("write");
+        let mut echoed = [0u8; 4];
+        tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut echoed))
+            .await
+            .expect("echo arrives")
+            .expect("read");
+        assert_eq!(&echoed, b"ping");
+        session.close().await.expect("close");
+        col.until_status(&mut rx, "Closed", |s| {
+            matches!(s, SessionStatus::Closed { .. })
+        })
+        .await;
+    }
+}
+
+/// A lost connection takes its forwards down too, and the port is free when
+/// the failure is reported (the reconnect needs it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_interrupted_connection_releases_its_forwards() {
+    let Some(mut server) = TestServer::start() else {
+        return;
+    };
+    let echo = echo_server().await;
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(0, ForwardKind::Local, 0, Some(("127.0.0.1", echo)))];
+    let (_session, mut col, mut rx) = ready(params).await;
+    let port = listening_port(&col.until_forward(&mut rx, 0).await);
+    server.interrupt();
+    col.until_status(&mut rx, "Closed", |s| {
+        matches!(s, SessionStatus::Closed { .. })
+    })
+    .await;
+    assert!(
+        TcpListener::bind(("127.0.0.1", port)).await.is_ok(),
+        "the port is bindable again once the session reported its end"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dynamic_forward_is_a_socks5_proxy() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let echo = echo_server().await;
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(5, ForwardKind::Dynamic, 0, None)];
+    let (session, mut col, mut rx) = ready(params).await;
+    let port = listening_port(&col.until_forward(&mut rx, 5).await);
+
+    async fn socks(port: u16, request: &[u8]) -> (TcpStream, Vec<u8>) {
+        let mut client = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        client.write_all(&[5, 1, 0]).await.expect("greeting");
+        let mut method = [0u8; 2];
+        client.read_exact(&mut method).await.expect("method");
+        assert_eq!(method, [5, 0], "no authentication");
+        client.write_all(request).await.expect("request");
+        let mut reply = vec![0u8; 10];
+        tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut reply))
+            .await
+            .expect("reply arrives")
+            .expect("reply");
+        (client, reply)
+    }
+    async fn echo_roundtrip(client: &mut TcpStream, text: &[u8]) {
+        client.write_all(text).await.expect("write");
+        let mut back = vec![0u8; text.len()];
+        tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut back))
+            .await
+            .expect("echo arrives")
+            .expect("read");
+        assert_eq!(back, text);
+    }
+
+    // An IPv4 address.
+    let mut request = vec![5, 1, 0, 1, 127, 0, 0, 1];
+    request.extend(echo.to_be_bytes());
+    let (mut client, reply) = socks(port, &request).await;
+    assert_eq!(&reply[..2], &[5, 0], "connected: {reply:?}");
+    echo_roundtrip(&mut client, b"by address").await;
+
+    // A domain name, resolved by the server.
+    let mut request = vec![5, 1, 0, 3, 9];
+    request.extend(b"localhost");
+    request.extend(echo.to_be_bytes());
+    let (mut client, reply) = socks(port, &request).await;
+    assert_eq!(&reply[..2], &[5, 0], "connected: {reply:?}");
+    echo_roundtrip(&mut client, b"by name").await;
+
+    // A target that refuses the connection.
+    let mut request = vec![5, 1, 0, 1, 127, 0, 0, 1];
+    request.extend(free_port().to_be_bytes());
+    let (_client, reply) = socks(port, &request).await;
+    assert_eq!(reply[1], 0x05, "connection refused: {reply:?}");
+
+    // Something that is not SOCKS5 is dropped without a reply.
+    let mut http = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    http.write_all(b"GET / HTTP/1.0\r\n\r\n")
+        .await
+        .expect("write");
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), http.read_to_end(&mut rest))
+        .await
+        .expect("the connection is closed")
+        .ok();
+    assert!(rest.is_empty(), "{rest:?}");
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_forward_brings_a_connection_back_to_its_target() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let echo = echo_server().await;
+    let listen = free_port();
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(
+        9,
+        ForwardKind::Remote,
+        listen,
+        Some(("127.0.0.1", echo)),
+    )];
+    let (session, mut col, mut rx) = ready(params).await;
+    let state = col.until_forward(&mut rx, 9).await;
+    assert_eq!(listening_port(&state), listen, "{state:?}");
+
+    // A client on the "server" side connects to the port sshd listens on;
+    // the connection travels back through the session to the echo server.
+    let mut client = TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .expect("sshd listens on the remote port");
+    client
+        .write_all(b"from the other side")
+        .await
+        .expect("write");
+    let mut echoed = vec![0u8; 19];
+    tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut echoed))
+        .await
+        .expect("echo arrives")
+        .expect("read");
+    assert_eq!(&echoed, b"from the other side");
+
+    session.close().await.expect("close");
+}
+
+/// The local target of a remote forward is down: the server's channel is
+/// refused, the client sees its connection close, and the session lives on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_forward_to_a_dead_target_closes_the_clients_connection() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let listen = free_port();
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(
+        2,
+        ForwardKind::Remote,
+        listen,
+        Some(("127.0.0.1", free_port())),
+    )];
+    let (session, mut col, mut rx) = ready(params).await;
+    assert!(matches!(
+        col.until_forward(&mut rx, 2).await,
+        ForwardState::Listening { .. }
+    ));
+    let mut client = TcpStream::connect(("127.0.0.1", listen))
+        .await
+        .expect("connect");
+    let mut rest = Vec::new();
+    let ended = tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut rest)).await;
+    assert!(ended.is_ok(), "the connection is closed, not left hanging");
+    assert!(rest.is_empty());
+    session
+        .write(b"echo ALIVE_$((2+3))\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "the shell", |d| count(d, b"ALIVE_5") >= 1)
+        .await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_forward_the_server_refuses_reports_why() {
+    let Some(server) = TestServer::start_with("AllowTcpForwarding local", |_| {}) else {
+        return;
+    };
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(
+        4,
+        ForwardKind::Remote,
+        free_port(),
+        Some(("127.0.0.1", 1)),
+    )];
+    let (session, mut col, mut rx) = ready(params).await;
+    match col.until_forward(&mut rx, 4).await {
+        ForwardState::Failed { reason } => assert!(reason.contains("refused"), "{reason}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_forward_the_server_forbids_closes_the_clients_connection() {
+    let Some(server) = TestServer::start_with("AllowTcpForwarding remote", |_| {}) else {
+        return;
+    };
+    let echo = echo_server().await;
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.forwards = vec![forward(1, ForwardKind::Local, 0, Some(("127.0.0.1", echo)))];
+    let (session, mut col, mut rx) = ready(params).await;
+    let port = listening_port(&col.until_forward(&mut rx, 1).await);
+    let mut client = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let mut rest = Vec::new();
+    let ended = tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut rest)).await;
+    assert!(ended.is_ok(), "the connection is closed, not left hanging");
+    assert!(rest.is_empty());
+    session.close().await.expect("close");
+}
+
+// ------------------------------------------------- environment and startup --
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_environment_variables_reach_the_shell_and_refused_ones_are_ignored() {
+    let Some(server) = TestServer::start_with("AcceptEnv TERMRU_*", |_| {}) else {
+        return;
+    };
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.env = vec![
+        ("TERMRU_PROFILE".into(), "ops-team".into()),
+        // Not in AcceptEnv: refused by the server, which is not an error.
+        ("NOT_ALLOWED_VAR".into(), "nope".into()),
+        ("TERMRU_SPACED".into(), "two words".into()),
+    ];
+    let (session, mut col, mut rx) = ready(params).await;
+    session
+        .write(b"echo \"A=[$TERMRU_PROFILE] B=[$NOT_ALLOWED_VAR] C=[$TERMRU_SPACED]\"\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "the variables", |data| {
+        count(data, b"A=[ops-team] B=[] C=[two words]") >= 1
+    })
+    .await;
+    // The refusal is not a failure of the session.
+    assert!(
+        !col.statuses
+            .iter()
+            .any(|status| matches!(status, SessionStatus::Failed { .. })),
+        "{:?}",
+        col.statuses
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_startup_command_runs_before_anything_the_user_types() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    // The arithmetic tells the command's output from the terminal's echo of it.
+    params.setup.startup_command = Some("echo STARTED_$((40+2))_OK".into());
+    let (session, mut col, mut rx) = ready(params).await;
+    session
+        .write(b"echo AFTER_$((1+1))_USER\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "both outputs", |data| {
+        count(data, b"STARTED_42_OK") >= 1 && count(data, b"AFTER_2_USER") >= 1
+    })
+    .await;
+    let text = String::from_utf8_lossy(&col.data);
+    let started = text.find("STARTED_42_OK").expect("startup output");
+    let after = text.find("AFTER_2_USER").expect("user output");
+    assert!(started < after, "startup first: {text:?}");
+    session.close().await.expect("close");
+}
+
+// --------------------------------------------------------- agent forwarding --
+
+fn start_agent_with(dir: &Path, key: &Path) -> Option<(KillOnDrop, PathBuf)> {
+    if which("ssh-agent").is_none() || which("ssh-add").is_none() {
+        eprintln!("SKIPPED: ssh-agent/ssh-add not found — agent forwarding not exercised");
+        return None;
+    }
+    let sock = dir.join("forwarded-agent.sock");
+    let agent = KillOnDrop(
+        Command::new("ssh-agent")
+            .args(["-a"])
+            .arg(&sock)
+            .arg("-D")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ssh-agent"),
+    );
+    for _ in 0..100 {
+        if sock.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(sock.exists(), "agent socket never appeared");
+    let added = Command::new("ssh-add")
+        .arg(key)
+        .env("SSH_AUTH_SOCK", &sock)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run ssh-add");
+    assert!(added.success(), "ssh-add must load the key");
+    Some((agent, sock))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_forwarding_gives_the_remote_shell_the_local_agent() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let Some((_agent, sock)) = start_agent_with(&server.dir, &server.decoy_key) else {
+        return;
+    };
+    let fingerprint = fingerprint_of(&pub_of(&server.decoy_key));
+
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    params.setup.agent_forward = Some(AgentForward {
+        socket: Some(sock.clone()),
+    });
+    let (session, mut col, mut rx) = ready(params).await;
+    // `ssh-add -l` on the remote side talks to the forwarded socket.
+    session
+        .write(b"ssh-add -l\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "the forwarded agent's key", |data| {
+        count(data, fingerprint.as_bytes()) >= 1
+    })
+    .await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_agent_forwarding_the_remote_shell_has_no_agent() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let mut params = server.params(RecordingPrompt::new(true), server.client_auth());
+    // Agent forwarding off: whatever the local environment holds stays here.
+    params.setup.agent_forward = None;
+    let (session, mut col, mut rx) = ready(params).await;
+    session
+        .write(b"echo \"AGENT=[${SSH_AUTH_SOCK:+set}]\"\n".to_vec())
+        .await
+        .expect("write");
+    // The sshd of this test runs without an agent of its own.
+    col.until_data(&mut rx, "the probe", |data| count(data, b"AGENT=[]") >= 1)
+        .await;
+    session.close().await.expect("close");
+}
+
+/// A jump host never gets the agent, even when the target does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_forwarding_is_only_requested_on_the_target() {
+    let (Some(jump), Some(target)) = (
+        TestServer::start_with("LogLevel DEBUG1", |_| {}),
+        TestServer::start_with("LogLevel DEBUG1", |_| {}),
+    ) else {
+        return;
+    };
+    let Some((_agent, sock)) = start_agent_with(&target.dir, &target.decoy_key) else {
+        return;
+    };
+    let prompt = RecordingPrompt::new(true);
+    let mut params = target.params(prompt.clone(), target.client_auth());
+    params.setup.jump = vec![hop("bastion", &jump, prompt.clone())];
+    params.setup.agent_forward = Some(AgentForward { socket: Some(sock) });
+    let (session, mut col, mut rx) = ready(params).await;
+    let fingerprint = fingerprint_of(&pub_of(&target.decoy_key));
+    session
+        .write(b"ssh-add -l\n".to_vec())
+        .await
+        .expect("write");
+    col.until_data(&mut rx, "the forwarded agent's key", |data| {
+        count(data, fingerprint.as_bytes()) >= 1
+    })
+    .await;
+    session.close().await.expect("close");
+    // The positive control: sshd logs the request where it was made.
+    assert!(
+        target.sshd_log().contains("auth-agent-req@openssh.com"),
+        "the target was asked for agent forwarding: {}",
+        target.sshd_log()
+    );
+    assert!(
+        !jump.sshd_log().contains("auth-agent-req@openssh.com"),
+        "the jump host must never be asked for agent forwarding: {}",
+        jump.sshd_log()
+    );
+}
+
+// ------------------------------------------------- read-only known_hosts --
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_the_system_file_knows_connects_without_a_prompt_and_writes_nothing() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let system = server.dir.join("system_known_hosts");
+    std::fs::write(
+        &system,
+        format!(
+            "[127.0.0.1]:{} {}\n",
+            server.port,
+            server.server_host_key_line()
+        ),
+    )
+    .expect("system known_hosts");
+    let refusing = RecordingPrompt::new(false);
+    let mut params = server.params(refusing.clone(), server.client_auth());
+    params.extra_known_hosts = vec![system];
+    let (session, _col, _rx) = ready(params).await;
+    assert!(
+        refusing.seen().is_empty(),
+        "no prompt for a key the system file vouches for"
+    );
+    assert!(
+        !server.known_hosts.exists(),
+        "the app's own file is not written for a key it did not have to ask about"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_that_contradicts_the_system_file_still_blocks() {
+    let Some(server) = TestServer::start() else {
+        return;
+    };
+    let system = server.dir.join("system_known_hosts");
+    std::fs::write(
+        &system,
+        format!(
+            "[127.0.0.1]:{} {}\n",
+            server.port,
+            pubkey_line(&pub_of(&server.decoy_key))
+        ),
+    )
+    .expect("system known_hosts");
+    let refusing = RecordingPrompt::new(false);
+    let mut params = server.params(refusing.clone(), server.client_auth());
+    params.extra_known_hosts = vec![system.clone()];
+    let (tx, _rx) = mpsc::channel(256);
+    let error = Session::open(params, SessionOptions::default(), tx)
+        .await
+        .expect_err("a changed key must be refused");
+    assert!(
+        matches!(error, SshError::HostKeyChanged { .. }),
+        "{error:?}"
+    );
+    assert!(matches!(
+        refusing.seen().as_slice(),
+        [HostKeyPromptRequest::Changed { .. }]
+    ));
+    assert!(
+        std::fs::read_to_string(&system)
+            .expect("system file")
+            .contains(&pubkey_line(&pub_of(&server.decoy_key))),
+        "the system file is never rewritten"
+    );
 }

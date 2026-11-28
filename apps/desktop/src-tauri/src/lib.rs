@@ -14,8 +14,8 @@ use tracing_subscriber::prelude::*;
 pub use app_error::CommandError;
 pub use state::sessions::spawn_connection;
 pub use state::{
-    AppState, AuthPrompts, HostKeyPrompts, SessionInfo, SessionManager, SessionStatusDto,
-    SessionUpdate,
+    AppState, AuthPrompts, ForwardUpdate, HostKeyPrompts, SessionInfo, SessionManager,
+    SessionStatusDto, SessionUpdate,
 };
 
 pub fn run() {
@@ -122,6 +122,8 @@ fn build() -> tauri::Result<tauri::App> {
             commands::secrets::secret_set,
             commands::secrets::secret_delete,
             commands::secrets::secret_has,
+            commands::ssh_import::ssh_config_preview,
+            commands::ssh_import::ssh_config_import,
             commands::sync::sync_status,
             commands::sync::sync_sign_in,
             commands::sync::sync_sign_out,

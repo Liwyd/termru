@@ -5,5 +5,6 @@ pub mod layout;
 pub mod prefs;
 pub mod secrets;
 pub mod sessions;
+pub mod ssh_import;
 pub mod sync;
 pub mod windows;
