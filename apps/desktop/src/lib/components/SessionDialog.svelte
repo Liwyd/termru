@@ -1,13 +1,15 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { focusTrap } from '../actions/focus-trap';
+  import { lastInputWasKeyboard } from '../input-modality';
   import { presence } from '../presence.svelte';
 
   /**
    * The modal of the Sessions page (closing a live session, pasting many
    * lines). It traps the focus, Escape cancels, the focus goes back to what
-   * opened it, and it fades and scales in from the centre (160 ms, 100 ms
-   * out; opacity only when motion is reduced).
+   * opened it, and it fades and scales in from the centre (120 ms, 100 ms
+   * out; opacity only when motion is reduced). A dialog that a key opened or
+   * closed does not move at all (`input-modality.ts`).
    *
    * The caller owns `open`: it turns false on Cancel, Escape and a click on
    * the backdrop, and the dialog plays its exit before it leaves the page.
@@ -52,7 +54,10 @@
     onsubmit?: (event: SubmitEvent) => void;
   } = $props();
 
-  const pop = presence(() => open);
+  const pop = presence(
+    () => open,
+    () => !lastInputWasKeyboard(),
+  );
   const uid = $props.id();
 </script>
 

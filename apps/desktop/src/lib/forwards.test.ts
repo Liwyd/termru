@@ -3,8 +3,10 @@ import {
   bindText,
   execFieldsOf,
   exposedForwards,
+  forwardFootLine,
   forwardLine,
   forwardRows,
+  forwardsSummary,
   hasExecFields,
   hostPort,
   sshForwardFlag,
@@ -153,5 +155,46 @@ describe('the forwards of a session', () => {
   it('has nothing for a pane without a host or a host without forwards', () => {
     expect(forwardRows(null, [], false)).toEqual([]);
     expect(forwardRows(host(), undefined, false)).toEqual([]);
+  });
+});
+
+describe('the summary of the forwards of a session', () => {
+  const rows = (updates: Parameters<typeof forwardRows>[1], execPending = false) =>
+    forwardRows(
+      host({
+        forwards: [
+          forward(),
+          forward({ kind: 'dynamic', bind_port: 1080, target_host: undefined }),
+          forward({ bind_address: '0.0.0.0', bind_port: 9090 }),
+        ],
+      }),
+      updates,
+      execPending,
+    );
+
+  it('counts the forwards, in the singular for one', () => {
+    const all = rows([
+      { state: 'listening', id: 0, kind: 'local', address: '127.0.0.1', port: 8080 },
+      { state: 'listening', id: 1, kind: 'dynamic', address: '127.0.0.1', port: 1080 },
+      { state: 'listening', id: 2, kind: 'local', address: '0.0.0.0', port: 9090 },
+    ]);
+    expect(forwardsSummary(all)).toEqual({ tone: 'ok', label: '3 forwards' });
+    expect(forwardsSummary(all.slice(0, 1)).label).toBe('1 forward');
+  });
+
+  it('waits while a forward has not reported', () => {
+    expect(forwardsSummary(rows([])).tone).toBe('wait');
+  });
+
+  it('says what failed, and what needs approval, before it counts', () => {
+    const failed = rows([{ state: 'failed', id: 2, kind: 'local', reason: 'in use' }]);
+    expect(forwardsSummary(failed)).toEqual({ tone: 'bad', label: '1 of 3 failed' });
+    expect(forwardsSummary(rows([], true))).toEqual({ tone: 'warn', label: '1 needs approval' });
+  });
+
+  it('writes the first forward and how many more, for the pane footer', () => {
+    expect(forwardFootLine([])).toBe('');
+    expect(forwardFootLine(rows([]))).toBe('L 127.0.0.1:8080 → db:5432 +2');
+    expect(forwardFootLine(rows([]).slice(0, 1))).toBe('L 127.0.0.1:8080 → db:5432');
   });
 });

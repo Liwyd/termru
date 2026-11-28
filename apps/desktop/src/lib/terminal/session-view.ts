@@ -4,7 +4,6 @@
  * the wording is in one place and testable without a DOM.
  */
 
-import type { TreeNode } from '../pane-tree';
 import type { Host, Identity, SessionStatus } from '../types';
 import type { Pane, Tab } from '../stores/sessions.svelte';
 
@@ -52,33 +51,53 @@ export function isInputReady(pane: Pick<Pane, 'status' | 'host' | 'dead'>): bool
 }
 
 export const ENCODING_LABEL = 'UTF-8';
-export const LINE_ENDING_LABEL = 'LF';
 
 /**
- * The left half of the pane footer (frame 3): `INPUT READY · UTF-8 · LF`
- * while the pane takes input, the reason it does not otherwise.
+ * The left half of the pane footer: `Ready · UTF-8` while the pane takes
+ * input, the reason it does not otherwise. Sentence case: it is a status, not
+ * a label.
  */
 export function inputLine(
   pane: Pick<Pane, 'status' | 'host' | 'dead' | 'restored' | 'awaitingReconnect'>,
 ): string {
-  if (!pane.host) return 'NO SESSION';
-  if (isInputReady(pane)) return `INPUT READY · ${ENCODING_LABEL} · ${LINE_ENDING_LABEL}`;
+  if (!pane.host) return 'No session';
+  if (isInputReady(pane)) return `Ready · ${ENCODING_LABEL}`;
   const status = pane.status;
   switch (status.state) {
     case 'connecting':
-      return 'CONNECTING · INPUT OFF';
+      return 'Connecting · input off';
     case 'authenticating':
-      return 'AUTHENTICATING · INPUT OFF';
+      return 'Authenticating · input off';
     case 'reconnecting':
-      return `RECONNECTING · ATTEMPT ${status.attempt}`;
+      return `Reconnecting · attempt ${status.attempt}`;
     case 'failed':
-      return 'CONNECTION FAILED · INPUT OFF';
+      return 'Connection failed · input off';
     case 'closed':
-      if (pane.awaitingReconnect) return 'CONNECTION LOST · RETRYING';
-      return pane.restored ? 'NOT CONNECTED · INPUT OFF' : 'DISCONNECTED · INPUT OFF';
+      if (pane.awaitingReconnect) return 'Connection lost · retrying';
+      return pane.restored ? 'Not connected · input off' : 'Disconnected · input off';
     case 'ready':
-      return 'DISCONNECTED · INPUT OFF';
+      return 'Disconnected · input off';
   }
+}
+
+/**
+ * Whether Reconnect applies to a pane, and why not when it does not: it is
+ * for a session that is over (closed, failed or dead), not one that is
+ * connected or still connecting.
+ */
+export function reconnectState(pane: Pick<Pane, 'status' | 'host' | 'dead'> | null): {
+  can: boolean;
+  reason: string;
+} {
+  if (!pane?.host) return { can: false, reason: 'There is no session to reconnect' };
+  const state = pane.status.state;
+  if (pane.dead || state === 'failed' || state === 'closed') {
+    return { can: true, reason: 'Connect this session again' };
+  }
+  return {
+    can: false,
+    reason: state === 'ready' ? 'The session is connected' : 'The session is still connecting',
+  };
 }
 
 /** `132 × 32`, or an empty string until the grid is measured. */
@@ -163,34 +182,4 @@ export function sessionsContext(
     parts.push(`${shown} connected in background`);
   }
   return parts.join(' · ');
-}
-
-/** The directions of every split of a tree. */
-function directions(node: TreeNode): Set<'columns' | 'rows'> {
-  if (node.kind === 'leaf') return new Set();
-  return new Set([node.direction, ...directions(node.first), ...directions(node.second)]);
-}
-
-/**
- * What the split is called in the hint (frame 3 calls two panes side by
- * side a vertical split: the divider is vertical).
- */
-export function splitKind(root: TreeNode): string {
-  const found = directions(root);
-  if (found.size > 1) return 'Mixed split';
-  return found.has('rows') ? 'Horizontal split' : 'Vertical split';
-}
-
-/** `⌘⌥ ← →` or `Ctrl Alt ← →`: how to move between panes, as bound. */
-export function paneMoveHint(next: string, previous: string): string {
-  const arrows = (label: string) => label.replace('ArrowRight', '→').replace('ArrowLeft', '←');
-  const a = arrows(next);
-  const b = arrows(previous);
-  const prefix = a.slice(0, -1);
-  const bothArrows = /[→←]$/.test(a) && /[→←]$/.test(b);
-  if (bothArrows && b.slice(0, -1) === prefix) {
-    const modifiers = prefix.replace(/\+/g, ' ').trim();
-    return `${modifiers} ${b.slice(-1)} ${a.slice(-1)}`.trim();
-  }
-  return `${previous} / ${next}`;
 }

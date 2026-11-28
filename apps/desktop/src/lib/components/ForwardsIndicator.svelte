@@ -1,16 +1,18 @@
 <script lang="ts">
-  import { forwardRows, type ForwardRow } from '../forwards';
+  import { forwardRows, forwardsSummary, type ForwardRow } from '../forwards';
   import type { MenuEntry } from '../menu';
   import { notify } from '../notify.svelte';
   import type { Pane } from '../stores/sessions.svelte';
   import { execApproval } from '../stores/exec-approval.svelte';
   import { copyText } from '../terminal/links';
   import PopMenu from './PopMenu.svelte';
+  import SessionIcon from './SessionIcon.svelte';
 
   /**
    * What became of the port forwards of the session in this pane, in the
-   * toolbar: `2 forwards`, or `1 of 2 failed` / `1 needs approval` when
-   * something is wrong. It opens a menu with one line per forward
+   * toolbar: a champagne-soft chip, `2 forwards`, or `1 of 2 failed` /
+   * `1 needs approval` (in the colour of the trouble) when something is wrong.
+   * It opens a menu with one line per forward
    * (`L 127.0.0.1:8080 → db:5432 · listening`, or the reason it failed).
    * Fed by the `forward` updates of the session (and `SessionInfo.forwards`
    * when a view attaches).
@@ -20,23 +22,10 @@
   const rows = $derived(
     forwardRows(pane?.host ?? null, pane?.forwards, pane?.execPending === true),
   );
-  const failed = $derived(rows.filter((row) => row.status.state === 'failed').length);
-  const blocked = $derived(rows.filter((row) => row.status.state === 'blocked').length);
-  const up = $derived(rows.filter((row) => row.status.state === 'listening').length);
-
-  /** The state of the whole set: what the glyph and the colour stand for. */
-  const tone = $derived<'bad' | 'warn' | 'ok' | 'wait'>(
-    failed > 0 ? 'bad' : blocked > 0 ? 'warn' : up === rows.length ? 'ok' : 'wait',
-  );
-  const glyph = $derived.by(() => ({ bad: '▲', warn: '▲', ok: '■', wait: '□' })[tone]);
-
-  const label = $derived(
-    failed > 0
-      ? `${failed} of ${rows.length} failed`
-      : blocked > 0
-        ? `${blocked} need${blocked === 1 ? 's' : ''} approval`
-        : `${rows.length} ${rows.length === 1 ? 'forward' : 'forwards'}`,
-  );
+  /** The state of the whole set: what the icon, the colour and the words stand for. */
+  const summary = $derived(forwardsSummary(rows));
+  const tone = $derived(summary.tone);
+  const label = $derived(summary.label);
 
   let menu = $state<{ x: number; y: number; animate: boolean } | null>(null);
 
@@ -121,7 +110,7 @@
     title="Port forwards of this session"
     onclick={toggle}
   >
-    <span class="glyph" aria-hidden="true">{glyph}</span>
+    <SessionIcon name={tone === 'bad' || tone === 'warn' ? 'alert' : 'forward'} size={13} />
     {label}
   </button>
 
@@ -138,52 +127,52 @@
 {/if}
 
 <style>
+  /* The chip: mono 11 on the soft champagne; trouble takes the warn or error
+     tint. It is the one coloured thing in the toolbar, so it is the first
+     thing the eye finds when a forward needs attention. */
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    min-height: 28px;
-    padding: 0 var(--termru-space-12);
-    border: 1px solid var(--termru-border);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--termru-text-2);
+    gap: 6px;
+    min-height: 26px;
+    margin-right: var(--termru-space-6);
+    padding: 0 9px;
+    border: none;
+    border-radius: var(--termru-radius-sm);
+    background: var(--termru-accent-soft);
+    color: var(--termru-accent-text);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-meta-weight);
     white-space: nowrap;
   }
 
-  .glyph {
-    font-size: 8px;
-    color: var(--termru-accent-text);
-  }
-
   .chip.bad {
-    border-color: var(--termru-err-text);
-    color: var(--termru-err-text);
-  }
-
-  .chip.bad .glyph {
+    background: var(--termru-err-soft);
     color: var(--termru-err-text);
   }
 
   .chip.warn {
-    border-color: var(--termru-warn-text);
-    color: var(--termru-warn-text);
-  }
-
-  .chip.warn .glyph {
+    background: var(--termru-warn-soft);
     color: var(--termru-warn-text);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .chip:hover {
-      background: var(--termru-side);
+    button.chip:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--termru-accent) 18%, transparent);
+    }
+
+    button.chip.bad:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--termru-err) 20%, transparent);
+    }
+
+    button.chip.warn:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--termru-warn) 20%, transparent);
     }
   }
 
   .chip[aria-expanded='true'] {
-    background: var(--termru-side);
+    background-color: color-mix(in srgb, var(--termru-accent) 18%, transparent);
   }
 </style>

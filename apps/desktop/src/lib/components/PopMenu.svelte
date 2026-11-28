@@ -10,8 +10,9 @@
    * Escape closes and gives the focus back to what had it, Tab leaves the
    * menu. Disabled entries stay reachable so their reason can be read.
    *
-   * It scales in from the corner it was opened at (160 ms, 100 ms out). A
-   * menu opened from the keyboard (`animate` false) appears without motion.
+   * It scales in from 97 % and fades in from the corner it was opened at
+   * (120 ms, 100 ms out). A menu opened from the keyboard (`animate` false)
+   * appears without motion.
    */
   let {
     open,
@@ -89,23 +90,20 @@
   // towards the room there is, scaling from the corner at the anchor.
   $effect(() => {
     if (!menu || !open) return;
-    const box = menu.getBoundingClientRect();
+    // The layout size: `getBoundingClientRect` would be 3 % short while the
+    // menu is still at its 97 % starting scale, and the edge margin with it.
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
     const margin = 8;
     const { x: ax, y: ay } = view;
-    const wantsLeft = view.align === 'right' ? ax - box.width : ax;
-    const clampedLeft = Math.max(
-      margin,
-      Math.min(wantsLeft, window.innerWidth - box.width - margin),
-    );
-    const flipUp = ay + box.height > window.innerHeight - margin && ay - box.height >= margin;
-    const wantsTop = flipUp ? ay - box.height : ay;
-    const clampedTop = Math.max(
-      margin,
-      Math.min(wantsTop, window.innerHeight - box.height - margin),
-    );
+    const wantsLeft = view.align === 'right' ? ax - width : ax;
+    const clampedLeft = Math.max(margin, Math.min(wantsLeft, window.innerWidth - width - margin));
+    const flipUp = ay + height > window.innerHeight - margin && ay - height >= margin;
+    const wantsTop = flipUp ? ay - height : ay;
+    const clampedTop = Math.max(margin, Math.min(wantsTop, window.innerHeight - height - margin));
     left = clampedLeft;
     top = clampedTop;
-    const horizontal = clampedLeft + box.width / 2 > ax ? 'left' : 'right';
+    const horizontal = clampedLeft + width / 2 > ax ? 'left' : 'right';
     origin = `${flipUp ? 'bottom' : 'top'} ${horizontal}`;
   });
 
@@ -236,7 +234,7 @@
     max-width: min(360px, calc(100vw - 16px));
     display: flex;
     flex-direction: column;
-    padding: 6px;
+    padding: var(--termru-space-4);
     border: var(--termru-border-w) solid var(--termru-border);
     border-radius: var(--termru-radius-pane);
     background: var(--termru-raised);
@@ -279,10 +277,10 @@
     justify-content: space-between;
     gap: var(--termru-space-24);
     width: 100%;
-    min-height: 34px;
-    padding: 0 10px;
+    min-height: 32px;
+    padding: 0 var(--termru-space-10);
     border: none;
-    border-radius: var(--termru-radius-button);
+    border-radius: var(--termru-radius-sm);
     background: transparent;
     color: var(--termru-text);
     font-size: var(--termru-text-control-size);
@@ -290,7 +288,6 @@
     font-weight: 450;
     text-align: left;
     cursor: pointer;
-    transition: background-color var(--motion-fast) ease;
   }
 
   /* The ring sits inside the entry so the menu's edge does not clip it. */
@@ -299,7 +296,12 @@
     outline-offset: -2px;
   }
 
+  /* The highlight fades under a pointer only: the arrow keys move it at once. */
   @media (hover: hover) and (pointer: fine) {
+    .item {
+      transition: background-color var(--motion-fast) ease;
+    }
+
     .item:hover:not([aria-disabled='true']) {
       background: var(--termru-raised-2);
     }
@@ -312,6 +314,16 @@
 
   .item.danger {
     color: var(--termru-err-text);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .item.danger:hover:not([aria-disabled='true']) {
+      background: var(--termru-err-soft);
+    }
+  }
+
+  .item.danger:focus-visible {
+    background: var(--termru-err-soft);
   }
 
   .text {
@@ -342,7 +354,7 @@
 
   .rule {
     height: 1px;
-    margin: 6px 4px;
-    background: var(--termru-border);
+    margin: var(--termru-space-4) var(--termru-space-6);
+    background: var(--termru-line);
   }
 </style>

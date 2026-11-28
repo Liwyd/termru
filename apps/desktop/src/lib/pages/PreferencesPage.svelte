@@ -732,7 +732,9 @@
       <button type="button" class="quiet" data-autofocus onclick={() => (restoreOpen = false)}>
         Cancel
       </button>
-      <button type="button" class="danger" onclick={() => void restore()}>Restore defaults</button>
+      <button type="button" class="danger-fill" onclick={() => void restore()}>
+        Restore defaults
+      </button>
     {/snippet}
   </SessionDialog>
 </div>

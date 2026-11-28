@@ -16,7 +16,10 @@
     | 'caret'
     | 'up'
     | 'down'
-    | 'search';
+    | 'search'
+    | 'more'
+    | 'forward'
+    | 'alert';
 
   let { name, size = 16 }: { name: IconName; size?: number } = $props();
 </script>
@@ -70,6 +73,16 @@
   {:else if name === 'search'}
     <circle cx="7" cy="7" r="4.2" />
     <path d="m10.2 10.2 3.3 3.3" />
+  {:else if name === 'more'}
+    <circle cx="3.5" cy="8" r=".6" />
+    <circle cx="8" cy="8" r=".6" />
+    <circle cx="12.5" cy="8" r=".6" />
+  {:else if name === 'forward'}
+    <path d="M2.5 5.5h10M10 3l2.5 2.5L10 8" />
+    <path d="M13.5 10.5h-10M6 8l-2.5 2.5L6 13" />
+  {:else if name === 'alert'}
+    <path d="M8 2.2 14 12.8H2z" />
+    <path d="M8 6.5v2.8M8 11.1v.1" />
   {/if}
 </svg>
 

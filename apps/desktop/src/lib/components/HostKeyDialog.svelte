@@ -155,7 +155,7 @@
       type="button"
       class="verify"
       class:primary={!changed}
-      class:danger={changed}
+      class:danger-fill={changed}
       onclick={() => answer(true)}
     >
       <Icon name="arrow-up-right" size={16} />
@@ -224,12 +224,11 @@
 
   .callout {
     padding: var(--termru-space-12) var(--termru-space-16);
-    border-left: 2px solid var(--termru-warn-text);
+    border-radius: var(--termru-radius-input);
     background: var(--termru-warn-soft);
   }
 
   .callout.danger {
-    border-left-color: var(--termru-err-text);
     background: var(--termru-err-soft);
   }
 
@@ -262,12 +261,5 @@
     display: inline-flex;
     align-items: center;
     gap: var(--termru-space-8);
-  }
-
-  /* A changed key is not a button to press lightly: filled, in danger. */
-  :global(.sx-dialog) .verify.danger {
-    background: var(--termru-err-text);
-    border-color: var(--termru-err-text);
-    color: var(--termru-on-err);
   }
 </style>

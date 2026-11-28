@@ -2,35 +2,29 @@
   import { acceleratorFor, acceleratorLabel } from '../keybindings';
   import type { MenuEntry } from '../menu';
   import { connectFlow } from '../stores/connect.svelte';
-  import { hosts } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { sessions, type Tab } from '../stores/sessions.svelte';
   import { terminalUi } from '../stores/terminal-ui.svelte';
   import { notify } from '../notify.svelte';
   import { copyText } from '../terminal/links';
   import { getTerminal } from '../terminal/registry';
-  import { sshCommand, sshTarget } from '../terminal/session-view';
+  import { reconnectState, sshCommand } from '../terminal/session-view';
   import { execApproval } from '../stores/exec-approval.svelte';
   import ForwardsIndicator from './ForwardsIndicator.svelte';
   import PopMenu from './PopMenu.svelte';
   import SessionIcon from './SessionIcon.svelte';
-  import StatusBadge from './StatusBadge.svelte';
 
   /**
-   * The bar under the tabs (frame 2): the state of the session you are
-   * looking at, where it is, and what you can do with it: Split H, Split V,
-   * Duplicate, Detach (move to a window of its own) and More.
+   * The tools at the right of the tab strip, for the session on screen: the
+   * forwards chip, the notice that synced settings are off, Split right,
+   * Split down, Duplicate, Detach (move to a window of its own) and More,
+   * which holds every other action. They are icon buttons with names and
+   * tooltips; the strip and the tools share one 46 px row (`SessionsPage`).
    */
   let { tab }: { tab: Tab } = $props();
 
   const pane = $derived(sessions.activePaneOf(tab));
   const host = $derived(pane?.host ?? null);
-  const folder = $derived(
-    host?.group_id
-      ? (hosts.folderOptions.find((option) => option.id === host.group_id)?.label ?? null)
-      : null,
-  );
-
   /** Duplicate and Detach work from a session that is connected. */
   const connected = $derived(pane?.status.state === 'ready' && pane.sessionId !== null);
   const full = $derived(tab.panes.length >= 16);
@@ -65,18 +59,13 @@
     }
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
     // `detail` is 0 for a click made with the keyboard: that opens without motion.
-    more = { x: box.right, y: box.bottom + 6, animate: event.detail > 0 };
+    more = { x: box.right, y: box.bottom + 4, animate: event.detail > 0 };
   }
 
   const entries = $derived.by((): MenuEntry[] => {
-    const ready = pane?.status.state === 'ready';
+    const again = reconnectState(pane);
     const list: MenuEntry[] = [
-      {
-        id: 'reconnect',
-        label: 'Reconnect',
-        disabled: !pane?.host || ready,
-        reason: ready ? 'The session is connected' : 'There is no session to reconnect',
-      },
+      { id: 'reconnect', label: 'Reconnect', disabled: !again.can, reason: again.reason },
       { id: 'find', label: 'Find in terminal', disabled: !pane?.host, reason: 'No terminal here' },
       { id: 'clear', label: 'Clear scrollback', disabled: !pane?.host, reason: 'No terminal here' },
       {
@@ -86,6 +75,9 @@
         reason: 'No host in this pane',
       },
     ];
+    if (pane?.execPending && host) {
+      list.push({ id: 'review-settings', label: 'Review synced settings…', separatorBefore: true });
+    }
     if (tab.panes.length > 1) {
       list.push({ id: 'close-pane', label: 'Close pane', separatorBefore: true });
     }
@@ -120,6 +112,9 @@
           );
         }
         break;
+      case 'review-settings':
+        if (host) void execApproval.show(host.id);
+        break;
       case 'close-pane':
         sessions.requestClosePane(pane);
         break;
@@ -130,92 +125,78 @@
   }
 </script>
 
-<div class="toolbar" role="toolbar" aria-label="Session">
-  <div class="where">
-    {#if pane}<StatusBadge {pane} />{/if}
-    {#if host}
-      <span class="target" title={host.name}>{sshTarget(host)}</span>
-      {#if folder}<span class="folder" title="Folder">{folder}</span>{/if}
-      <ForwardsIndicator {pane} />
-      {#if pane?.execPending}
-        <button
-          type="button"
-          class="approval sx-press"
-          title="Synced settings of this host are not approved on this device, so this session runs without them. Review them."
-          onclick={() => void execApproval.show(host.id)}
-        >
-          <span class="glyph" aria-hidden="true">▲</span>
-          Synced settings off
-        </button>
-      {/if}
-    {:else}
-      <span class="folder">No host in this pane yet</span>
-    {/if}
-  </div>
+<div class="tools" role="toolbar" aria-label="Session">
+  {#if pane?.execPending && host}
+    <button
+      type="button"
+      class="approval sx-press"
+      title="Synced settings of this host are not approved on this device, so this session runs without them. Review them."
+      onclick={() => void execApproval.show(host.id)}
+    >
+      <SessionIcon name="alert" size={13} />
+      Synced settings off
+      <span class="review">Review</span>
+    </button>
+  {/if}
+  <ForwardsIndicator {pane} />
 
-  <div class="actions">
-    <button
-      type="button"
-      class="action sx-press"
-      aria-label="Split H, new pane below"
-      aria-disabled={!pane || full ? 'true' : undefined}
-      title={full ? splitReason : `Split the pane, new pane below (${downChord})`}
-      onclick={splitDown}
-    >
-      <SessionIcon name="split-h" />
-      <span class="label">Split H</span>
-    </button>
-    <button
-      type="button"
-      class="action sx-press"
-      aria-label="Split V, new pane to the right"
-      aria-disabled={!pane || full ? 'true' : undefined}
-      title={full ? splitReason : `Split the pane, new pane to the right (${rightChord})`}
-      onclick={splitRight}
-    >
-      <SessionIcon name="split-v" />
-      <span class="label">Split V</span>
-    </button>
-    <button
-      type="button"
-      class="action sx-press"
-      aria-label="Duplicate"
-      aria-disabled={connected ? undefined : 'true'}
-      title={connected
-        ? 'Open a second session to the same host in a new tab'
-        : needsSession('Duplicate')}
-      onclick={() => {
-        if (connected) sessions.duplicate(tab);
-      }}
-    >
-      <SessionIcon name="duplicate" />
-      <span class="label">Duplicate</span>
-    </button>
-    <button
-      type="button"
-      class="action sx-press"
-      aria-label="Detach"
-      aria-disabled={connected ? undefined : 'true'}
-      title={connected ? 'Move this session to a window of its own' : needsSession('Detach')}
-      onclick={() => {
-        if (connected) void sessions.moveToNewWindow(tab);
-      }}
-    >
-      <SessionIcon name="detach" />
-      <span class="label">Detach</span>
-    </button>
-    <button
-      type="button"
-      class="action sx-press"
-      aria-label="More"
-      aria-haspopup="menu"
-      aria-expanded={more !== null}
-      onclick={toggleMore}
-    >
-      <span class="label">More</span>
-      <SessionIcon name="caret" size={14} />
-    </button>
-  </div>
+  <button
+    type="button"
+    class="tool sx-press"
+    aria-label="Split right, new pane to the right"
+    aria-disabled={!pane || full ? 'true' : undefined}
+    title={full ? splitReason : `Split right (${rightChord})`}
+    onclick={splitRight}
+  >
+    <SessionIcon name="split-v" />
+  </button>
+  <button
+    type="button"
+    class="tool sx-press"
+    aria-label="Split down, new pane below"
+    aria-disabled={!pane || full ? 'true' : undefined}
+    title={full ? splitReason : `Split down (${downChord})`}
+    onclick={splitDown}
+  >
+    <SessionIcon name="split-h" />
+  </button>
+  <button
+    type="button"
+    class="tool sx-press"
+    aria-label="Duplicate"
+    aria-disabled={connected ? undefined : 'true'}
+    title={connected
+      ? 'Open a second session to the same host in a new tab'
+      : needsSession('Duplicate')}
+    onclick={() => {
+      if (connected) sessions.duplicate(tab);
+    }}
+  >
+    <SessionIcon name="duplicate" />
+  </button>
+  <button
+    type="button"
+    class="tool sx-press"
+    aria-label="Detach"
+    aria-disabled={connected ? undefined : 'true'}
+    title={connected ? 'Move this session to a window of its own' : needsSession('Detach')}
+    onclick={() => {
+      if (connected) void sessions.moveToNewWindow(tab);
+    }}
+  >
+    <SessionIcon name="detach" />
+  </button>
+  <button
+    type="button"
+    class="tool sx-press"
+    aria-label="More"
+    aria-haspopup="menu"
+    aria-expanded={more !== null}
+    title="More session actions"
+    onclick={toggleMore}
+  >
+    <SessionIcon name="more" />
+  </button>
 </div>
 
 <PopMenu
@@ -231,124 +212,77 @@
 />
 
 <style>
-  .toolbar {
+  .tools {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--termru-space-16);
-    min-height: var(--termru-toolbar-h);
-    padding: 0 var(--termru-space-12) 0 28px;
-    background: var(--termru-base);
+    gap: 2px;
+    flex: none;
   }
 
-  .where {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-12);
-    min-width: 0;
-  }
-
-  .target {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--termru-font-mono);
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text);
-  }
-
-  .folder {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--termru-text-secondary-size);
-    line-height: var(--termru-text-secondary-lh);
-    color: var(--termru-text-2);
-  }
-
+  /* Synced settings are off: warn-tinted, like the forwards chip, with the way
+     to review them in the same button. */
   .approval {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    min-height: 28px;
-    padding: 0 var(--termru-space-12);
-    border: 1px solid var(--termru-warn-text);
-    border-radius: 999px;
-    background: transparent;
+    gap: 6px;
+    min-height: 26px;
+    margin-right: var(--termru-space-6);
+    padding: 0 9px;
+    border: none;
+    border-radius: var(--termru-radius-sm);
+    background: var(--termru-warn-soft);
     color: var(--termru-warn-text);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
+    font-weight: var(--termru-text-meta-weight);
     white-space: nowrap;
   }
 
-  .approval .glyph {
-    font-size: 8px;
+  .approval .review {
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .approval:hover {
-      background: var(--termru-side);
+    button.approval:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--termru-warn) 20%, transparent);
     }
   }
 
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--termru-space-4);
-    flex: none;
-  }
-
-  .action {
+  .tool {
     display: inline-flex;
     align-items: center;
-    gap: var(--termru-space-8);
-    min-height: var(--termru-control-h);
-    padding: 0 var(--termru-space-12);
+    justify-content: center;
+    width: var(--termru-tool-size);
+    height: var(--termru-tool-size);
+    min-height: 0;
+    padding: 0;
     border: none;
-    border-radius: var(--termru-radius-button);
+    border-radius: var(--termru-radius-input);
     background: transparent;
-    color: var(--termru-text);
-    font-weight: 500;
+    color: var(--termru-text-2);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .action:hover:not([aria-disabled='true']) {
-      background: var(--termru-side);
-      border-color: transparent;
+    button.tool:hover:not(:disabled):not([aria-disabled='true']) {
+      background: var(--termru-raised);
+      color: var(--termru-text);
+    }
+
+    /* A disabled tool is read, not lit. */
+    button.tool[aria-disabled='true']:hover {
+      background: transparent;
     }
   }
 
-  .action[aria-expanded='true'] {
-    background: var(--termru-side);
+  .tool[aria-expanded='true'] {
+    background: var(--termru-raised);
+    color: var(--termru-text);
   }
 
-  .action[aria-disabled='true'] {
+  .tool[aria-disabled='true'] {
     color: var(--termru-text-3);
     cursor: default;
-  }
-
-  /* Narrow windows: icons only (the buttons keep their names). */
-  @media (max-width: 960px) {
-    .folder {
-      display: none;
-    }
-  }
-
-  @media (max-width: 900px) {
-    .label {
-      display: none;
-    }
-
-    .action {
-      padding: 0 10px;
-    }
-
-    .toolbar {
-      padding-left: var(--termru-space-16);
-    }
   }
 </style>

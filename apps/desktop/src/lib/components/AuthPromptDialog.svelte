@@ -225,7 +225,7 @@
   .retry {
     margin: 0;
     padding: var(--termru-space-12) var(--termru-space-16);
-    border-left: 2px solid var(--termru-err-text);
+    border-radius: var(--termru-radius-input);
     background: var(--termru-err-soft);
     color: var(--termru-err-text);
     font-size: var(--termru-text-secondary-size);

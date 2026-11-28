@@ -6,20 +6,30 @@
   import { route } from '../stores/route.svelte';
   import { terminalUi } from '../stores/terminal-ui.svelte';
   import { focusIsFree } from '../terminal/focus';
-  import { inputLine, shellLabel, sizeLabel, statusTone } from '../terminal/session-view';
+  import { forwardFootLine, forwardRows } from '../forwards';
+  import {
+    inputLine,
+    reconnectState,
+    shellLabel,
+    sizeLabel,
+    sshTarget,
+    statusTone,
+  } from '../terminal/session-view';
   import SessionIcon from './SessionIcon.svelte';
   import Terminal from './Terminal.svelte';
   import TerminalSearch from './TerminalSearch.svelte';
   import type { Pane } from '../stores/sessions.svelte';
 
   /**
-   * One pane of a tab (frames 2 and 3).
+   * One pane of a tab: a 12 px card on the terminal colour.
    *
-   * Header: `host / shell / active` in mono, accent while the pane has the
-   * focus. Alone in its tab the header carries `ACTIVE PANE` and the grid;
-   * in a split it carries Expand and Close, and the grid moves to the
-   * footer (`INPUT READY · UTF-8 · LF` on the left). The focused pane has a
-   * 2px accent rule on top, the others a 2px rule of the border colour.
+   * Header (34 px, mono 11): `host · title`, the grid, and in a split Expand
+   * and Close. Footer (28 px): the state of the session on the left (with
+   * Reconnect when it is over), the forwards on the right. The focused pane
+   * of a split has a 1 px champagne line inside its edge and an accent
+   * header; a pane alone in its tab has neither (there is nothing to tell it
+   * from). A change of focus does not animate: a key moves it as often as a
+   * click does.
    */
   let {
     pane,
@@ -55,14 +65,24 @@
     void connectFlow.pick(pane, host);
   }
 
-  const path = $derived(
-    pane.host
-      ? `${pane.title} / ${shellLabel(pane)}${focused && !single ? ' / active' : ''}`
-      : 'empty pane',
-  );
+  const path = $derived(pane.host ? `${pane.title} · ${shellLabel(pane)}` : 'empty pane');
+  /** Where the session is: the tooltip of the header (`user@host:22 · Folder`). */
+  const where = $derived.by(() => {
+    const host = pane.host;
+    if (!host) return 'empty pane';
+    const folder = host.group_id
+      ? hosts.folderOptions.find((option) => option.id === host.group_id)?.label
+      : null;
+    return folder ? `${sshTarget(host)} · ${folder}` : sshTarget(host);
+  });
   const size = $derived(sizeLabel(pane.cols ?? 0, pane.rows ?? 0));
   const footer = $derived(inputLine(pane));
-  const tone = $derived(statusTone(pane.status));
+  /** An empty pane is waiting for a host, not in trouble: no tone. */
+  const tone = $derived(pane.host ? statusTone(pane.status) : 'empty');
+  const reconnect = $derived(reconnectState(pane));
+  const forwards = $derived(
+    forwardFootLine(forwardRows(pane.host, pane.forwards, pane.execPending === true)),
+  );
 
   // A new empty pane waits for a host: the search takes the keyboard.
   $effect(() => {
@@ -75,9 +95,10 @@
 
 <section
   class="pane"
-  class:focused
+  class:focused={focused && !single}
   class:single
   aria-label={pane.title}
+  aria-current={focused && !single ? 'true' : undefined}
   data-pane-id={pane.id}
   onpointerdowncapture={() => sessions.focusPane(pane)}
   onfocusin={() => {
@@ -85,12 +106,9 @@
   }}
 >
   <header class="head">
-    <span class="path" title={pane.host ? `${pane.host.address}` : 'empty pane'}>{path}</span>
-
-    {#if single && pane.host}
-      <span class="flag">Active pane</span>
-      {#if size}<span class="size">{size}</span>{/if}
-    {:else}
+    <span class="path" title={where}>{path}</span>
+    {#if size}<span class="size">{size}</span>{/if}
+    {#if !single}
       {#if pane.host}
         <button
           type="button"
@@ -99,7 +117,7 @@
           title={zoomed ? 'Restore the panes' : 'Expand the pane'}
           onclick={() => sessions.toggleZoom(pane)}
         >
-          <SessionIcon name={zoomed ? 'collapse' : 'expand'} />
+          <SessionIcon name={zoomed ? 'collapse' : 'expand'} size={14} />
         </button>
       {/if}
       <button
@@ -109,7 +127,7 @@
         title="Close the pane"
         onclick={() => sessions.requestClosePane(pane)}
       >
-        <SessionIcon name="close" />
+        <SessionIcon name="close" size={14} />
       </button>
     {/if}
   </header>
@@ -124,7 +142,7 @@
       {/if}
     {:else}
       <div class="empty">
-        <p>No session in this pane.</p>
+        <p class="lead">No session in this pane</p>
         {#if hosts.hosts.length > 0}
           <input
             type="search"
@@ -144,8 +162,8 @@
             <ul>
               {#each candidates as host (host.id)}
                 <li>
-                  <button type="button" class="sx-press" onclick={() => pick(host)}>
-                    {host.name}
+                  <button type="button" class="pick sx-press" onclick={() => pick(host)}>
+                    <span class="name">{host.name}</span>
                     <span class="address">{host.username}@{host.address}</span>
                   </button>
                 </li>
@@ -164,49 +182,64 @@
     {/if}
   </div>
 
-  {#if !single}
-    <footer class="foot {tone}">
-      <span class="state">{footer}</span>
-      {#if size}<span class="size">{size}</span>{/if}
-    </footer>
-  {/if}
+  <footer class="foot {tone}">
+    <span class="state">{footer}</span>
+    {#if reconnect.can}
+      <button
+        type="button"
+        class="again sx-press"
+        title={reconnect.reason}
+        onclick={() => void connectFlow.reconnect(pane)}
+      >
+        Reconnect
+      </button>
+    {/if}
+    {#if forwards}<span class="fwd" title="Port forwards of this session">{forwards}</span>{/if}
+  </footer>
 </section>
 
 <style>
   .pane {
-    --pane-pad-x: 24px;
+    --pane-pad-x: 18px;
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
+    border-radius: var(--termru-radius-pane);
     background: var(--termru-terminal);
-    border-top: var(--termru-pane-rule-w) solid var(--termru-border);
   }
 
-  .pane.single {
-    --pane-pad-x: 28px;
-  }
-
-  .pane.focused {
-    border-top-color: var(--termru-accent);
+  /* The focused pane of a split: a 1 px champagne line inside its edge. It is
+     drawn over the pane and takes no clicks. */
+  .pane.focused::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--termru-accent) 45%, transparent);
+    pointer-events: none;
   }
 
   .head {
     display: flex;
     align-items: center;
-    gap: var(--termru-space-12);
-    height: 36px;
+    gap: var(--termru-space-8);
+    height: var(--termru-pane-head-h);
     flex: none;
-    padding: 0 calc(var(--pane-pad-x) - 8px) 0 var(--pane-pad-x);
+    padding: 0 var(--termru-space-6) 0 var(--termru-space-16);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    color: var(--termru-text-2);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
   }
 
   .pane.single .head {
-    padding-right: var(--pane-pad-x);
+    padding-right: var(--termru-space-16);
   }
 
   .path {
@@ -217,16 +250,8 @@
     white-space: nowrap;
   }
 
-  .pane.focused:not(.single) .path,
-  .flag,
-  .pane.single .size {
+  .pane.focused .path {
     color: var(--termru-accent-text);
-  }
-
-  .flag {
-    flex: none;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
   }
 
   .size {
@@ -240,20 +265,19 @@
     align-items: center;
     justify-content: center;
     min-height: 0;
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     border: none;
-    border-radius: var(--termru-radius-button);
+    border-radius: var(--termru-radius-sm);
     background: none;
-    color: var(--termru-text-2);
+    color: var(--termru-text-3);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .tool:hover {
+    button.tool:hover:not(:disabled) {
       background: color-mix(in srgb, var(--termru-text) 7%, transparent);
       color: var(--termru-text);
-      border-color: transparent;
     }
   }
 
@@ -266,17 +290,15 @@
   .foot {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--termru-space-16);
+    gap: var(--termru-space-12);
     flex: none;
-    height: 30px;
-    padding: 0 var(--pane-pad-x);
-    background: var(--termru-side);
+    height: var(--termru-pane-foot-h);
+    padding: 0 var(--termru-space-16);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
     line-height: var(--termru-text-meta-lh);
-    letter-spacing: 0.02em;
-    color: var(--termru-text-2);
+    font-weight: var(--termru-text-meta-weight);
+    color: var(--termru-text-3);
   }
 
   .foot.busy .state {
@@ -291,11 +313,40 @@
     color: var(--termru-warn-text);
   }
 
-  .foot .state {
+  .state,
+  .fwd {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* The state keeps its words; the forwards give way first, at the right. */
+  .state {
+    flex: 0 1 auto;
+  }
+
+  .fwd {
+    flex: 1 1 0;
+    text-align: right;
+  }
+
+  /* Reconnect, in the footer of a session that is over. */
+  .again {
+    flex: none;
+    min-height: 0;
+    height: 20px;
+    padding: 0 var(--termru-space-8);
+    border-radius: var(--termru-radius-sm);
+    background: var(--termru-accent-soft);
+    color: var(--termru-accent-text);
+    font: inherit;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    button.again:hover:not(:disabled) {
+      background-color: color-mix(in srgb, var(--termru-accent) 20%, transparent);
+    }
   }
 
   .empty {
@@ -316,13 +367,18 @@
     margin: 0;
   }
 
+  .empty .lead {
+    color: var(--termru-text);
+    font-weight: var(--termru-text-control-weight);
+  }
+
   .empty ul {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--termru-space-4);
+    gap: 2px;
     width: min(24rem, 90%);
     min-height: 0;
     overflow-y: auto;
@@ -334,6 +390,7 @@
     border: var(--termru-border-w) solid var(--termru-border);
     background: var(--termru-base);
     color: var(--termru-text);
+    font-family: var(--termru-font-ui);
   }
 
   .empty .new {
@@ -341,18 +398,37 @@
     text-align: center;
   }
 
-  .empty li button {
+  /* A host to put in the pane: a borderless row, raised under the pointer. */
+  .pick {
+    display: flex;
+    align-items: baseline;
+    gap: var(--termru-space-8);
     width: 100%;
     min-height: 36px;
+    padding: 0 var(--termru-space-12);
+    border-radius: var(--termru-radius-row);
+    background: transparent;
     text-align: left;
-    background: var(--termru-base);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    button.pick:hover:not(:disabled) {
+      background: var(--termru-raised);
+    }
+  }
+
+  .pick .name {
+    flex: none;
   }
 
   .address {
-    color: var(--termru-text-2);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--termru-text-3);
     font-family: var(--termru-font-mono);
     font-size: var(--termru-text-meta-size);
-    margin-left: var(--termru-space-8);
   }
 
   .hint {

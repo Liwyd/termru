@@ -190,15 +190,22 @@ describe('design tokens', () => {
           ).toBeGreaterThanOrEqual(4.5);
         }
       }
-      // The key caps and the terminal: text and secondary text.
+      // The key caps: text and secondary text.
       for (const ink of ['--termru-text', '--termru-text-2']) {
-        for (const surface of ['--termru-raised-2', '--termru-terminal']) {
-          const ratio = contrast(solid(ink, scope), solid(surface, scope));
-          expect(
-            ratio,
-            `${ink} on ${surface} = ${ratio.toFixed(2)}:1 in ${label}`,
-          ).toBeGreaterThanOrEqual(4.5);
-        }
+        const ratio = contrast(solid(ink, scope), solid('--termru-raised-2', scope));
+        expect(
+          ratio,
+          `${ink} on --termru-raised-2 = ${ratio.toFixed(2)}:1 in ${label}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      // The terminal pane carries the pane header and footer (labels, state in
+      // champagne, warn and error) as well as the terminal text.
+      for (const ink of INK) {
+        const ratio = contrast(solid(ink, scope), solid('--termru-terminal', scope));
+        expect(
+          ratio,
+          `${ink} on --termru-terminal = ${ratio.toFixed(2)}:1 in ${label}`,
+        ).toBeGreaterThanOrEqual(4.5);
       }
     }
   });
@@ -209,7 +216,8 @@ describe('design tokens', () => {
       ['light', LIGHT],
     ] as const) {
       for (const [ink, fill] of SOFT) {
-        for (const surface of SURFACES) {
+        // The terminal pane carries a Reconnect button on the soft champagne.
+        for (const surface of [...SURFACES, '--termru-terminal']) {
           const under = solid(surface, scope);
           const ratio = contrast(solid(ink, scope), solid(fill, scope, under));
           expect(
@@ -270,6 +278,14 @@ describe('design tokens', () => {
     expect(DARK['--termru-header-h']).toBe('56px');
     expect(DARK['--termru-row-h']).toBe('52px');
     expect(DARK['--termru-status-h']).toBe('28px');
+    // The Sessions page: one 46 px row for tabs and tools, panes 6 px apart (the
+    // gap is the split divider), a 34 px pane header and a 28 px footer.
+    expect(DARK['--termru-tabstrip-h']).toBe('46px');
+    expect(DARK['--termru-tab-h']).toBe('32px');
+    expect(DARK['--termru-pane-gap']).toBe('6px');
+    expect(DARK['--termru-divider-w']).toBe('var(--termru-pane-gap)');
+    expect(DARK['--termru-pane-head-h']).toBe('34px');
+    expect(DARK['--termru-pane-foot-h']).toBe('28px');
     expect(DARK['--termru-border-w']).toBe('1px');
     expect(DARK['--termru-focus-w']).toBe('2px');
     // Type: Geist 13/20, 12 secondary, 11 labels, page title 15/600,

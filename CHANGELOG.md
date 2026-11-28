@@ -376,6 +376,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     editor) keep their layouts on the new tokens and shell; their own redesign
     follows in parts 2 and 3. Their section labels are sentence case now.
   * Dev mock: `&palette[=text]` opens the command palette on start.
+* **Obsidian redesign, part 2 of 4: the Sessions page and every overlay.**
+  * **Sessions.** The tab strip and the tools share one 46 px row: tabs (a dot
+    in the colour of the session, the name, `N panes` for a split, a close
+    button; a session that is not connected says so in a word, a connected one
+    says it to a screen reader only), a `+`, and at the right the forwards
+    chip (champagne-soft; red or amber when a forward failed or needs
+    approval), a `Synced settings off · Review` chip when the settings of the
+    host are not approved on this device, Split right, Split down, Duplicate,
+    Detach and More. Renaming (double-click or F2), drag to reorder and Detach
+    work as before. There is no Files button: no SFTP exists yet.
+  * **Panes** are 12 px cards on the terminal colour with a 6 px gap on the
+    page colour; the gap is the divider (drag it, double-click to even the
+    panes, or move it with the arrow keys; a 2 px champagne bar shows under the
+    pointer, on focus and while it is held). The focused pane of a split has a
+    1 px champagne line inside its edge and an accent header, and says
+    `aria-current`. The header (34 px, mono 11) reads `host · title` with the
+    grid, Expand and Close (a pane alone in its tab has the grid only; the
+    tooltip carries `user@host:port` and the folder). The footer (28 px)
+    carries the state (`Ready · UTF-8`, `Reconnecting · attempt 2`,
+    `Disconnected · input off`, in sentence case) with a Reconnect button when
+    the session is over, and the first forward (`L 127.0.0.1:5432 → db:5432
+    +2`) at the right.
+  * The **split hint banner** and the **bar at the foot** are gone: Reconnect
+    and Close session are in the pane footer, the More menu and the tab's close
+    button, the way between panes (`Ctrl+Alt+←/→`) is in the palette and the
+    shortcut table, and the More menu gained "Review synced settings…" and a
+    Reconnect that says why it is disabled. The empty state offers New session,
+    Open Hosts and the palette chord.
+  * **Overlays.** Every menu (row, terminal, More, forwards), dialog, notice and
+    the find bar is a raised surface (12 px, 14 px for dialogs) with the one soft
+    shadow. Champagne is the single primary action of a dialog; a destructive
+    confirm is the error colour, filled (`danger-fill`: close session, delete
+    host, folder and identity, discard changes, restore defaults, a changed
+    host key); Cancel is quiet everywhere. The delete confirmation of the Hosts
+    page is a `SessionDialog` like the rest. Notices are compact (20 rem, a 16 px
+    icon, 12 px padding) at the top right. The find bar's icon sits in the
+    field, so the focus ring goes round both. The callouts of the host-key and
+    sign-in dialogs are soft tints, not a bar on the side.
+  * **Motion.** Menus scale in from 97 % and fade, from the corner they opened
+    at, 120 ms in and 100 ms out, and the highlight of an entry fades under a
+    pointer only (the arrow keys move it at once); a dialog opened or closed
+    with a key, and a notice that follows a key, do not move at all
+    (`input-modality.ts`; a click or a tap still plays 120 ms at 98 %); a pane,
+    its focus line and the terminal never animate; the divider's bar fades in
+    for a pointer only. A menu now keeps its 8 px margin from the
+    window edge (it was measured while 3 % small).
+  * Removed: `SessionBar`, `SplitBanner`, `terminalUi.hintDismissed`, `splitKind`
+    and `paneMoveHint`, the `--termru-pane-rule-w` and `--termru-toolbar-h`
+    tokens. New tokens: `--termru-tab-h`, `--termru-tool-size`,
+    `--termru-pane-gap`, `--termru-pane-head-h`, `--termru-pane-foot-h`.
 
 ## [0.2.0] — 2026-10-25
 

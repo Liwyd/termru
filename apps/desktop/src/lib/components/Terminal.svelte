@@ -213,11 +213,10 @@
   }
 
   /* The padding sits on this wrapper: the fit addon measures the terminal
-     surface inside it, which has none. The pane sets the side padding
-     (24px in a split, 28px alone, to line up with the toolbar). */
+     surface inside it, which has none. The pane sets the side padding (18px). */
   .terminal {
     height: 100%;
-    padding: var(--termru-space-12) var(--pane-pad-x, 24px) var(--termru-space-12);
+    padding: var(--termru-space-6) var(--pane-pad-x, 18px);
     background: var(--termru-terminal);
     overflow: hidden;
   }

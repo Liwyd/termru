@@ -136,3 +136,38 @@ export function forwardRows(
   });
   return rows;
 }
+
+/** What the forwards of a session amount to: the glyph, the colour and the words. */
+export type ForwardsTone = 'bad' | 'warn' | 'ok' | 'wait';
+
+export interface ForwardsSummary {
+  tone: ForwardsTone;
+  /** `2 forwards`, `1 of 2 failed`, `1 needs approval`. */
+  label: string;
+}
+
+/** The state of the whole set of forwards of a session (the toolbar chip). */
+export function forwardsSummary(rows: readonly ForwardRow[]): ForwardsSummary {
+  const failed = rows.filter((row) => row.status.state === 'failed').length;
+  const blocked = rows.filter((row) => row.status.state === 'blocked').length;
+  const up = rows.filter((row) => row.status.state === 'listening').length;
+  if (failed > 0) return { tone: 'bad', label: `${failed} of ${rows.length} failed` };
+  if (blocked > 0) {
+    return { tone: 'warn', label: `${blocked} need${blocked === 1 ? 's' : ''} approval` };
+  }
+  return {
+    tone: up === rows.length ? 'ok' : 'wait',
+    label: `${rows.length} ${rows.length === 1 ? 'forward' : 'forwards'}`,
+  };
+}
+
+/**
+ * The forwards in the pane footer, in one line: the first forward as it is
+ * written (`L 127.0.0.1:5432 → db:5432`) and how many more there are
+ * (`+2`). Empty when the host has none.
+ */
+export function forwardFootLine(rows: readonly ForwardRow[]): string {
+  if (rows.length === 0) return '';
+  const rest = rows.length - 1;
+  return rest > 0 ? `${rows[0].line} +${rest}` : rows[0].line;
+}

@@ -895,8 +895,10 @@
     onclose={() => unsaved.keep()}
   >
     {#snippet actions()}
-      <button type="button" data-autofocus onclick={() => unsaved.keep()}>Keep editing</button>
-      <button type="button" class="danger" onclick={() => unsaved.discard()}>
+      <button type="button" class="quiet" data-autofocus onclick={() => unsaved.keep()}>
+        Keep editing
+      </button>
+      <button type="button" class="danger-fill" onclick={() => unsaved.discard()}>
         {lastKind === 'close' ? 'Discard and close' : 'Discard changes'}
       </button>
     {/snippet}

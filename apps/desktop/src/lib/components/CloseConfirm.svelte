@@ -54,19 +54,16 @@
   onclose={() => sessions.cancelClose()}
 >
   {#snippet actions()}
-    <button type="button" class="sx-press" data-autofocus onclick={() => sessions.cancelClose()}>
+    <button
+      type="button"
+      class="quiet sx-press"
+      data-autofocus
+      onclick={() => sessions.cancelClose()}
+    >
       Cancel
     </button>
-    <button type="button" class="sx-press danger-fill" onclick={() => void sessions.confirmClose()}>
+    <button type="button" class="danger-fill sx-press" onclick={() => void sessions.confirmClose()}>
       {copy.confirm}
     </button>
   {/snippet}
 </SessionDialog>
-
-<style>
-  button.danger-fill {
-    border-color: var(--termru-err-text);
-    background: var(--termru-err-text);
-    color: var(--termru-on-err);
-  }
-</style>

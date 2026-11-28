@@ -631,8 +631,10 @@
     onclose={() => (deleteOpen = false)}
   >
     {#snippet actions()}
-      <button type="button" data-autofocus onclick={() => (deleteOpen = false)}>Cancel</button>
-      <button type="button" class="danger" onclick={() => void confirmDelete()}
+      <button type="button" class="quiet" data-autofocus onclick={() => (deleteOpen = false)}>
+        Cancel
+      </button>
+      <button type="button" class="danger-fill" onclick={() => void confirmDelete()}
         >Delete folder</button
       >
     {/snippet}

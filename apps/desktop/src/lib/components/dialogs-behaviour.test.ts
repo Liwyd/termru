@@ -271,7 +271,7 @@ describe('HostKeyDialog', () => {
     await tick();
     expect(document.activeElement).toBe(findButton(target, 'Cancel'));
     // The accepting button is there, and says what it does.
-    expect(findButton(target, 'Verify & connect').classList.contains('danger')).toBe(true);
+    expect(findButton(target, 'Verify & connect').classList.contains('danger-fill')).toBe(true);
   });
 
   it('shows what the server sent as plain text', async () => {

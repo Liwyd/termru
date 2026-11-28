@@ -50,7 +50,7 @@
   </label>
 
   {#snippet actions()}
-    <button type="button" class="sx-press" onclick={() => pasteGate.cancel()}>Cancel</button>
+    <button type="button" class="quiet sx-press" onclick={() => pasteGate.cancel()}>Cancel</button>
     <button
       type="button"
       class="sx-press primary"

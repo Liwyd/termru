@@ -153,12 +153,14 @@
     min-height: 0;
   }
 
-  /* The rule between two panes. It is a hairline of the border colour with
-     a wider hit area, and it takes the accent while it is held or focused. */
+  /* The divider is the gap between two panes (6 px, on the page colour). A few
+     pixels either side take the pointer too; the line that shows under the
+     pointer, on focus and while it is held is a 2 px champagne bar inside the
+     gap. */
   .divider {
     position: relative;
     flex: 0 0 var(--termru-divider-w);
-    background: var(--termru-border);
+    background: transparent;
     cursor: col-resize;
     touch-action: none;
   }
@@ -167,29 +169,45 @@
     cursor: row-resize;
   }
 
-  /* A few pixels either side take the pointer too. */
   .divider::before {
     content: '';
     position: absolute;
-    inset: 0 -4px;
+    inset: 0 -3px;
   }
 
   .split.rows > .divider::before {
-    inset: -4px 0;
+    inset: -3px 0;
+  }
+
+  .divider::after {
+    content: '';
+    position: absolute;
+    inset: 0 calc(50% - 1px);
+    border-radius: 1px;
+    background: var(--termru-accent);
+    opacity: 0;
+  }
+
+  .split.rows > .divider::after {
+    inset: calc(50% - 1px) 0;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .divider:hover {
-      background: var(--termru-accent);
+    .divider::after {
+      transition: opacity var(--motion-fast) ease;
+    }
+
+    .divider:hover::after {
+      opacity: 0.7;
     }
   }
 
   .divider:focus-visible {
-    background: var(--termru-accent);
-    outline-offset: 0;
+    outline: none;
   }
 
-  .divider.dragging {
-    background: var(--termru-accent);
+  .divider:focus-visible::after,
+  .divider.dragging::after {
+    opacity: 1;
   }
 </style>

@@ -123,16 +123,19 @@ Unfiled) is chosen in the sidebar.
 ### Sessions
 
 Order: the open sessions (each: its name, then its close button), New session,
-the toolbar (Split H, Split V, Duplicate, Detach, More), the panes, the session
-bar (Reconnect, Close session).
+the toolbar (the synced-settings notice when there is one, the forwards chip,
+Split right, Split down, Duplicate, Detach, More), the panes (each: its header
+buttons, the terminal, its footer with Reconnect when the session is over).
+The tabs, the new-session button and the toolbar are one row.
 
 | Control | How | Operate |
 |---|---|---|
-| Session list | Tab through name and close buttons | Enter or Space on the name switches to it (`aria-current` marks the open one); `F2` renames (Enter keeps, Escape cancels); the close button asks first when the session is live |
-| Toolbar | Tab | Enter or Space. A disabled button says why in its title |
-| Pane | `Ctrl+Alt+Right`, `Ctrl+Alt+Left` or click | The terminal has the focus: typing goes to the shell. `Ctrl+Shift+E` and `Ctrl+Shift+O` split, `Ctrl+Shift+Q` closes the pane |
-| Pane header | Tab | Expand or Restore the pane, Close the pane |
-| Divider | Tab (it is a focusable separator with a value) | Arrow keys resize by 5 %; double-click evens the panes |
+| Session list | Tab through name and close buttons | Enter or Space on the name switches to it (`aria-current` marks the open one); `F2` renames (Enter keeps, Escape cancels); the close button asks first when the session is live. The state of a session is the colour of its dot and, when it is not connected, a word after the name; a connected session says "Connected" to a screen reader |
+| Toolbar | Tab | Enter or Space. A disabled button says why in its title. More holds Reconnect, Find, Clear scrollback, Copy SSH command, Review synced settings (when they are not approved), Close pane and Close session |
+| Pane | `Ctrl+Alt+Right`, `Ctrl+Alt+Left` or click | The terminal has the focus: typing goes to the shell. The focused pane of a split says `aria-current` and has a champagne line inside its edge. `Ctrl+Shift+E` and `Ctrl+Shift+O` split, `Ctrl+Shift+Q` closes the pane |
+| Pane header | Tab | Expand or Restore the pane, Close the pane (a pane alone in its tab has neither). The tooltip of the title is `user@host:port` and the folder |
+| Pane footer | Tab | Reconnect, for a session that is over. The state and the forwards are text |
+| Divider | Tab (it is a focusable separator with a value) | Arrow keys resize by 5 %; double-click evens the panes. The 6 px gap between the panes is the divider; a champagne bar shows when it has the focus |
 | Terminal menu | the Menu key or `Shift+F10` in the terminal | Copy, Paste, Select all, Clear scrollback, Find, Split. Same keys as every menu |
 | Find in terminal | `Ctrl+Shift+F` in the terminal | Enter next, `Shift+Enter` previous, Escape closes and returns to the terminal |
 | Paste | `Ctrl+Shift+V` | A paste of several lines asks first |

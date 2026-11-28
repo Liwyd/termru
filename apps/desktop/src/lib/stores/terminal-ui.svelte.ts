@@ -1,7 +1,5 @@
 import { getTerminal } from '../terminal/registry';
 
-const HINT_KEY = 'termru.sessions.splitHintDismissed';
-
 /** A context menu on a terminal. */
 export interface TerminalMenuState {
   paneId: string;
@@ -14,17 +12,9 @@ export interface TerminalMenuState {
   animate: boolean;
 }
 
-function readHintDismissed(): boolean {
-  try {
-    return localStorage.getItem(HINT_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The transient state around the terminals: which pane shows its find bar,
- * the open context menu, and whether the split hint was put away. The terminal
+ * and the open context menu. The terminal
  * contents themselves live in the registry, not here.
  */
 class TerminalUi {
@@ -34,8 +24,6 @@ class TerminalUi {
   searchFocusTick = $state(0);
   /** The open terminal context menu, or null. */
   menu = $state.raw<TerminalMenuState | null>(null);
-  /** The split hint banner was dismissed (remembered on this device). */
-  hintDismissed = $state(readHintDismissed());
 
   isSearchOpen(paneId: string): boolean {
     return this.#searching[paneId] === true;
@@ -76,15 +64,6 @@ class TerminalUi {
 
   closeMenu(): void {
     this.menu = null;
-  }
-
-  dismissHint(): void {
-    this.hintDismissed = true;
-    try {
-      localStorage.setItem(HINT_KEY, '1');
-    } catch {
-      // Not remembered across restarts; fine.
-    }
   }
 }
 

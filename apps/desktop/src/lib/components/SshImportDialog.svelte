@@ -230,7 +230,9 @@
         {store.phase === 'ready' && !choosing ? 'Close' : 'Cancel'}
       </button>
       {#if store.phase === 'error'}
-        <button type="button" data-autofocus onclick={() => void store.show()}>Try again</button>
+        <button type="button" class="primary" data-autofocus onclick={() => void store.show()}>
+          Try again
+        </button>
       {:else if choosing && (store.phase === 'ready' || store.phase === 'importing')}
         <button
           type="submit"
@@ -386,10 +388,12 @@
     color: var(--termru-text-2);
   }
 
+  /* A host that can be imported: a neutral chip. Champagne is the dialog's one
+     primary button and the ticks. */
   .chip.new {
-    border-color: var(--termru-accent);
-    background: var(--termru-accent-soft);
-    color: var(--termru-accent-text);
+    border-color: transparent;
+    background: var(--termru-raised-2);
+    color: var(--termru-text);
   }
 
   .target {

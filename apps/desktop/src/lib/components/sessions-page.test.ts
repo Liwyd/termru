@@ -9,6 +9,7 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionsPage from '../pages/SessionsPage.svelte';
+import { acceleratorFor, compactChord } from '../keybindings';
 import { hosts } from '../stores/hosts.svelte';
 import { defaultPrefs, prefs } from '../stores/prefs.svelte';
 import { route } from '../stores/route.svelte';
@@ -74,7 +75,6 @@ beforeEach(() => {
   notices.reset();
   route.route = 'sessions';
   terminalUi.menu = null;
-  terminalUi.hintDismissed = false;
   pasteGate.pending = null;
   prefs.prefs = defaultPrefs();
   prefs.prefs = { ...prefs.prefs, keybindings: {} };
@@ -656,10 +656,11 @@ describe('closing a tab', () => {
     expect(tab.panes).toHaveLength(2);
   });
 
-  it('the Close session button and the shortcut path ask too', () => {
+  it('Close session in the More menu and the shortcut path ask too', () => {
     const { tab } = openTab('web-1');
     mountPage();
-    click(findButton(document.body, 'Close session'));
+    click(document.querySelector('[role="toolbar"] [aria-label="More"]') as HTMLElement);
+    click(item('Close session'));
     expect(sessions.closeRequest?.tabId).toBe(tab.id);
     sessions.cancelClose();
     flushSync();
@@ -709,20 +710,62 @@ describe('pane header and footer', () => {
       .trim();
   const headerOf = (pane: Pane) =>
     document.querySelector(`[data-pane-id="${pane.id}"] header`) as HTMLElement;
+  const paneEl = (pane: Pane) =>
+    document.querySelector(`[data-pane-id="${pane.id}"]`) as HTMLElement;
 
-  it('alone in its tab: ACTIVE PANE and the grid in the header, no footer, no split controls', () => {
+  it('alone in its tab: `host · title` and the grid in the header, no split controls', () => {
     const { pane } = openTab('atlas-prod');
     mountPage();
     terminalOf(pane).term.resize(132, 32);
     flushSync();
-    expect(pathOf(pane)).toBe('atlas-prod / shell');
-    expect(headerOf(pane).textContent).toContain('Active pane');
+    expect(pathOf(pane)).toBe('atlas-prod · shell');
     expect(headerOf(pane).textContent).toContain('132 × 32');
-    expect(footerOf(pane)).toBeUndefined();
     expect(headerOf(pane).querySelector('button')).toBeNull();
+    // Nothing to tell it from: no focus mark.
+    expect(paneEl(pane).classList.contains('focused')).toBe(false);
+    expect(paneEl(pane).hasAttribute('aria-current')).toBe(false);
   });
 
-  it('in a split: the focused pane says active, and the footer carries state and grid', () => {
+  it('has a footer with the state, in the one-pane tab as well', () => {
+    const { pane } = openTab('atlas-prod');
+    mountPage();
+    expect(footerOf(pane)).toBe('Ready · UTF-8');
+  });
+
+  it('says where the session is in the tooltip of the header: user@host:port and the folder', () => {
+    hosts.groups = [
+      {
+        id: 'g1',
+        name: 'Production',
+        parent_id: null,
+        sort_order: 0,
+        created_at: '',
+        updated_at: '',
+        deleted: false,
+      },
+      {
+        id: 'g2',
+        name: 'Europe',
+        parent_id: 'g1',
+        sort_order: 0,
+        created_at: '',
+        updated_at: '',
+        deleted: false,
+      },
+    ];
+    const tab = sessions.open(
+      host('atlas-prod', { group_id: 'g2', address: '192.0.2.10', username: 'ops' }),
+      {},
+    );
+    const pane = sessions.activePaneOf(sessions.tabs.find((entry) => entry.id === tab.id) as Tab);
+    mountPage();
+    expect(
+      document.querySelector(`[data-pane-id="${pane?.id}"] .path`)?.getAttribute('title'),
+    ).toBe('ops@192.0.2.10:22 · Production / Europe');
+    hosts.groups = [];
+  });
+
+  it('in a split: the focused pane is marked, and the footer carries the state', () => {
     const { tab, pane } = openTab('atlas-prod');
     mountPage();
     const second = sessions.splitActive('columns') as Pane;
@@ -736,15 +779,14 @@ describe('pane header and footer', () => {
     flushSync();
 
     expect(tab.panes).toHaveLength(2);
-    expect(pathOf(pane)).toBe('atlas-prod / shell / active');
-    expect(pathOf(second)).toBe('atlas-prod / shell');
-    expect(footerOf(pane)).toBe('INPUT READY · UTF-8 · LF 66 × 24');
-    expect(
-      document.querySelector(`[data-pane-id="${pane.id}"]`)?.classList.contains('focused'),
-    ).toBe(true);
-    expect(
-      document.querySelector(`[data-pane-id="${second.id}"]`)?.classList.contains('focused'),
-    ).toBe(false);
+    expect(pathOf(pane)).toBe('atlas-prod · shell');
+    expect(pathOf(second)).toBe('atlas-prod · shell');
+    expect(footerOf(pane)).toBe('Ready · UTF-8');
+    expect(headerOf(pane).textContent).toContain('66 × 24');
+    expect(paneEl(pane).classList.contains('focused')).toBe(true);
+    expect(paneEl(pane).getAttribute('aria-current')).toBe('true');
+    expect(paneEl(second).classList.contains('focused')).toBe(false);
+    expect(paneEl(second).hasAttribute('aria-current')).toBe(false);
     // Expand and Close, with names.
     expect(headerOf(pane).querySelector('[aria-label="Expand the pane"]')).not.toBeNull();
     expect(headerOf(pane).querySelector('[aria-label="Close the pane"]')).not.toBeNull();
@@ -755,13 +797,13 @@ describe('pane header and footer', () => {
     mountPage();
     sessions.setPaneTitle(pane.id, 'ops@atlas: /srv/atlas\u0007');
     flushSync();
-    expect(pathOf(pane)).toBe('atlas-prod / ops@atlas: /srv/atlas');
+    expect(pathOf(pane)).toBe('atlas-prod · ops@atlas: /srv/atlas');
     sessions.setPaneTitle(pane.id, '');
     flushSync();
-    expect(pathOf(pane)).toBe('atlas-prod / shell');
+    expect(pathOf(pane)).toBe('atlas-prod · shell');
   });
 
-  it('says why a split pane takes no input', () => {
+  it('says why a pane takes no input, in sentence case', () => {
     const { pane } = openTab('atlas-prod');
     mountPage();
     sessions.splitActive('columns');
@@ -773,11 +815,42 @@ describe('pane header and footer', () => {
       last_error: 'reset',
     });
     flushSync();
-    expect(footerOf(pane)).toContain('RECONNECTING · ATTEMPT 2');
+    expect(footerOf(pane)).toContain('Reconnecting · attempt 2');
 
     sessions.applyStatus(pane, { state: 'failed', category: 'auth', message: 'denied' });
     flushSync();
-    expect(footerOf(pane)).toContain('CONNECTION FAILED · INPUT OFF');
+    expect(footerOf(pane)).toContain('Connection failed · input off');
+  });
+
+  it('shows the forwards of the host in the footer, the first one and how many more', () => {
+    const forwards = [
+      {
+        kind: 'local' as const,
+        bind_address: '127.0.0.1',
+        bind_port: 5432,
+        target_host: 'db',
+        target_port: 5432,
+        enabled: true,
+      },
+      { kind: 'dynamic' as const, bind_port: 1080, enabled: true },
+    ];
+    const { pane } = openTab('atlas-prod');
+    pane.host = host('atlas-prod', { forwards });
+    mountPage();
+    expect(footerOf(pane)).toBe('Ready · UTF-8 L 127.0.0.1:5432 → db:5432 +1');
+  });
+
+  it('offers Reconnect in the footer of a session that is over, and only then', () => {
+    const { pane } = openTab('atlas-prod');
+    mountPage();
+    const again = () =>
+      document.querySelector<HTMLButtonElement>(`[data-pane-id="${pane.id}"] footer button`);
+    expect(again()).toBeNull();
+
+    sessions.applyStatus(pane, { state: 'failed', category: 'network', message: 'down' });
+    flushSync();
+    expect(again()?.textContent?.trim()).toBe('Reconnect');
+    expect(footerOf(pane)).toContain('Connection failed');
   });
 
   it('shows the pane picker for an empty pane', () => {
@@ -786,7 +859,7 @@ describe('pane header and footer', () => {
     const created = sessions.splitActive('columns') as Pane;
     flushSync();
     expect(pathOf(created)).toBe('empty pane');
-    expect(footerOf(created)).toContain('NO SESSION');
+    expect(footerOf(created)).toContain('No session');
     // An empty pane has nothing to expand.
     expect(headerOf(created).querySelector('[aria-label="Expand the pane"]')).toBeNull();
   });
@@ -825,51 +898,80 @@ describe('pane header and footer', () => {
   });
 });
 
+describe('the tab strip and the tools share one row', () => {
+  const topbar = () => document.querySelector('.topbar') as HTMLElement;
+
+  it('holds the tabs, the new-session button and the toolbar of the open session', () => {
+    openTab('web-1');
+    openTab('web-2');
+    mountPage();
+    const bar = topbar();
+    expect(bar.querySelectorAll('nav[aria-label="Open sessions"] li.tab')).toHaveLength(2);
+    expect(bar.querySelector('nav [aria-label="New session"]')).not.toBeNull();
+    expect(bar.querySelector('[role="toolbar"][aria-label="Session"]')).not.toBeNull();
+    // One toolbar, whatever the number of tabs.
+    expect(document.querySelectorAll('[role="toolbar"]')).toHaveLength(1);
+  });
+
+  it('says N panes after the name of a split tab, and the state of one that is not connected', () => {
+    const { tab, pane } = openTab('web-1');
+    mountPage();
+    const label = () => document.querySelector('li.tab .label') as HTMLElement;
+    expect(label().textContent).not.toContain('panes');
+    // Connected is said to a screen reader only: the tab stays quiet.
+    expect(label().querySelector('.state.quiet')?.textContent).toBe('Connected');
+    sessions.splitActive('columns');
+    flushSync();
+    expect(tab.panes).toHaveLength(2);
+    expect(label().textContent).toContain('2 panes');
+
+    sessions.focusPane(pane);
+    sessions.applyStatus(pane, { state: 'failed', category: 'network', message: 'down' });
+    flushSync();
+    expect(label().querySelector('.state')?.classList.contains('quiet')).toBe(false);
+    expect(label().textContent).toContain('Error');
+  });
+
+  it('has neither a split hint banner nor a bar at the foot', () => {
+    openTab('web-1');
+    mountPage();
+    sessions.splitActive('columns');
+    flushSync();
+    expect(document.querySelector('[aria-label="Split view hint"]')).toBeNull();
+    expect(document.querySelector('.bar')).toBeNull();
+    expect(document.querySelector('[aria-label="Session actions"]')).toBeNull();
+  });
+});
+
 describe('the toolbar', () => {
   const button = (label: string) =>
     document.querySelector<HTMLButtonElement>(
       `[role="toolbar"] [aria-label^="${label}"]`,
     ) as HTMLButtonElement;
 
-  it('says where the session is: status, user@host:port and the folder', () => {
-    hosts.groups = [
-      {
-        id: 'g1',
-        name: 'Production',
-        parent_id: null,
-        sort_order: 0,
-        created_at: '',
-        updated_at: '',
-        deleted: false,
-      },
-      {
-        id: 'g2',
-        name: 'Europe',
-        parent_id: 'g1',
-        sort_order: 0,
-        created_at: '',
-        updated_at: '',
-        deleted: false,
-      },
-    ];
-    sessions.open(
-      host('atlas-prod', { group_id: 'g2', address: '192.0.2.10', username: 'ops' }),
-      {},
-    );
+  it('has the tools of the session: split right and down, duplicate, detach, more', () => {
+    openTab('web-1');
     mountPage();
-    const bar = document.querySelector('[role="toolbar"]') as HTMLElement;
-    expect(bar.textContent).toContain('ops@192.0.2.10:22');
-    expect(bar.textContent).toContain('Production / Europe');
-    expect(bar.textContent).toContain('Connecting');
-    hosts.groups = [];
+    const names = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="toolbar"] > button'),
+    ).map((tool) => tool.getAttribute('aria-label'));
+    expect(names).toEqual([
+      'Split right, new pane to the right',
+      'Split down, new pane below',
+      'Duplicate',
+      'Detach',
+      'More',
+    ]);
+    // No file browser exists yet: no button pretends to be one.
+    expect(document.querySelector('[role="toolbar"] [aria-label*="Files"]')).toBeNull();
   });
 
-  it('Split H puts a pane below, Split V to the right', () => {
+  it('Split down puts a pane below, Split right to the right', () => {
     const { tab } = openTab('web-1');
     mountPage();
-    click(button('Split V'));
+    click(button('Split right'));
     expect(tab.root.kind === 'split' && tab.root.direction).toBe('columns');
-    click(button('Split H'));
+    click(button('Split down'));
     expect(tab.panes).toHaveLength(3);
   });
 
@@ -879,8 +981,8 @@ describe('the toolbar', () => {
     for (let i = 0; i < 15; i += 1) sessions.splitActive('columns');
     flushSync();
     expect(tab.panes).toHaveLength(16);
-    expect(button('Split V').getAttribute('aria-disabled')).toBe('true');
-    expect(button('Split V').title).toBe('A tab holds at most 16 panes');
+    expect(button('Split right').getAttribute('aria-disabled')).toBe('true');
+    expect(button('Split right').title).toBe('A tab holds at most 16 panes');
   });
 
   it('the More menu: entries, reasons, keyboard, and the focus coming back', async () => {
@@ -912,6 +1014,23 @@ describe('the toolbar', () => {
     expect(document.activeElement).toBe(more);
   });
 
+  it('the More menu reconnects a session that is over, and waits for one that is connecting', () => {
+    const { pane } = openTab('web-1');
+    mountPage();
+    sessions.applyStatus(pane, { state: 'connecting' });
+    flushSync();
+    click(button('More'));
+    expect(item('Reconnect').getAttribute('aria-disabled')).toBe('true');
+    expect(item('Reconnect').title).toBe('The session is still connecting');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    flushSync();
+
+    sessions.applyStatus(pane, { state: 'failed', category: 'network', message: 'down' });
+    flushSync();
+    click(button('More'));
+    expect(item('Reconnect').getAttribute('aria-disabled')).toBeNull();
+  });
+
   it('the More menu copies the SSH command and asks before closing', async () => {
     const { tab } = openTab('web-1');
     mountPage();
@@ -932,71 +1051,20 @@ describe('the toolbar', () => {
     click(button('More'));
     expect(items()).toContain('Close pane');
   });
-});
 
-describe('the session bar', () => {
-  const bar = () => document.querySelector('.bar') as HTMLElement;
-  const reconnect = () => findButton(bar(), 'Reconnect');
-
-  it('Reconnect is for a session that is not connected, and says so otherwise', () => {
+  it('the More menu can review synced settings that are not approved', () => {
     const { pane } = openTab('web-1');
     mountPage();
-    expect(reconnect().getAttribute('aria-disabled')).toBe('true');
-    expect(reconnect().title).toBe('The session is connected');
-
-    sessions.applyStatus(pane, { state: 'failed', category: 'network', message: 'down' });
+    sessions.applyUpdate(pane, { kind: 'exec_pending' });
     flushSync();
-    expect(reconnect().getAttribute('aria-disabled')).toBeNull();
-    expect(bar().textContent).toContain('CONNECTION FAILED');
-  });
-
-  it('is still connecting: Reconnect waits', () => {
-    openTab('web-1', { state: 'connecting' });
-    mountPage();
-    expect(reconnect().title).toBe('The session is still connecting');
-  });
-
-  it('shows the split hint line when there are two panes', () => {
-    openTab('web-1');
-    mountPage();
-    expect(bar().textContent).toContain('INPUT READY');
-    sessions.splitActive('columns');
-    flushSync();
-    expect(bar().textContent).toContain('Closing a pane leaves the other running.');
-  });
-});
-
-describe('the split hint', () => {
-  const banner = () => document.querySelector('[aria-label="Split view hint"]');
-
-  it('appears with two panes, names the split and the chord, and can be put away', () => {
-    openTab('web-1');
-    mountPage();
-    expect(banner()).toBeNull();
-    sessions.splitActive('columns');
-    flushSync();
-    expect(banner()?.textContent).toContain('Vertical split');
-    expect(banner()?.textContent).toContain('Ctrl Alt ← →');
-
-    const store: Record<string, string> = {};
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
-      store[key] = value;
-    });
-    click(banner()?.querySelector('[aria-label="Dismiss this hint"]') as HTMLElement);
-    expect(banner()).toBeNull();
-    expect(Object.values(store)).toEqual(['1']);
-    vi.restoreAllMocks();
-  });
-
-  it('is not shown while a pane is expanded', () => {
-    const { tab, pane } = openTab('web-1');
-    mountPage();
-    sessions.splitActive('columns');
-    flushSync();
-    sessions.toggleZoom(pane);
-    flushSync();
-    expect(tab.zoomedPaneId).toBe(pane.id);
-    expect(banner()).toBeNull();
+    // The chip and the menu entry both reach the review.
+    expect(
+      Array.from(document.querySelectorAll('[role="toolbar"] button')).some((b) =>
+        b.textContent?.includes('Synced settings off'),
+      ),
+    ).toBe(true);
+    click(button('More'));
+    expect(items()).toContain('Review synced settings…');
   });
 });
 
@@ -1020,9 +1088,16 @@ describe('leaving the page', () => {
 });
 
 describe('the page without sessions', () => {
-  it('offers a new session and the Hosts page', () => {
+  it('offers a new session, the palette and the Hosts page', () => {
     mountPage();
     expect(document.body.textContent).toContain('No open sessions');
+    // The chord is the one the palette is bound to (Ctrl Shift P on a PC, as the sidebar says).
+    expect(document.querySelector('.empty kbd')?.textContent).toBe(
+      compactChord(acceleratorFor('palette.open', {})),
+    );
+    expect(findButton(document.body, 'New session')).toBeTruthy();
+    // No toolbar without a session to act on.
+    expect(document.querySelector('[role="toolbar"]')).toBeNull();
     click(findButton(document.body, 'Open Hosts'));
     expect(route.route).toBe('hosts');
   });

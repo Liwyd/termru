@@ -4,12 +4,11 @@ import type { Pane, Tab } from '../stores/sessions.svelte';
 import type { Host, Identity, SessionStatus } from '../types';
 import {
   inputLine,
-  paneMoveHint,
+  reconnectState,
   relativeAge,
   sessionsContext,
   shellLabel,
   sizeLabel,
-  splitKind,
   sshCommand,
   sshTarget,
   statusLabel,
@@ -77,33 +76,59 @@ describe('status words', () => {
 });
 
 describe('the pane footer line', () => {
-  it('says INPUT READY with the encoding while the session takes input', () => {
-    expect(inputLine(pane({ state: 'ready' }))).toBe('INPUT READY · UTF-8 · LF');
+  it('says Ready with the encoding while the session takes input', () => {
+    expect(inputLine(pane({ state: 'ready' }))).toBe('Ready · UTF-8');
   });
 
   it('says why there is no input otherwise', () => {
-    expect(inputLine(pane({ state: 'connecting' }))).toBe('CONNECTING · INPUT OFF');
-    expect(inputLine(pane({ state: 'authenticating' }))).toBe('AUTHENTICATING · INPUT OFF');
+    expect(inputLine(pane({ state: 'connecting' }))).toBe('Connecting · input off');
+    expect(inputLine(pane({ state: 'authenticating' }))).toBe('Authenticating · input off');
     expect(
       inputLine(pane({ state: 'reconnecting', attempt: 3, delay_ms: 1000, last_error: 'x' })),
-    ).toBe('RECONNECTING · ATTEMPT 3');
+    ).toBe('Reconnecting · attempt 3');
     expect(inputLine(pane({ state: 'failed', category: 'network', message: 'x' }))).toBe(
-      'CONNECTION FAILED · INPUT OFF',
+      'Connection failed · input off',
     );
     expect(inputLine(pane({ state: 'closed', reason: 'x' }, { dead: true }))).toBe(
-      'DISCONNECTED · INPUT OFF',
+      'Disconnected · input off',
     );
     expect(inputLine(pane({ state: 'closed', reason: 'x' }, { awaitingReconnect: true }))).toBe(
-      'CONNECTION LOST · RETRYING',
+      'Connection lost · retrying',
     );
     expect(inputLine(pane({ state: 'closed', reason: 'x' }, { restored: true, dead: true }))).toBe(
-      'NOT CONNECTED · INPUT OFF',
+      'Not connected · input off',
     );
-    expect(inputLine(pane({ state: 'closed', reason: 'x' }, { host: null }))).toBe('NO SESSION');
+    expect(inputLine(pane({ state: 'closed', reason: 'x' }, { host: null }))).toBe('No session');
   });
 
   it('does not offer input to a ready pane that is marked dead', () => {
-    expect(inputLine(pane({ state: 'ready' }, { dead: true }))).toBe('DISCONNECTED · INPUT OFF');
+    expect(inputLine(pane({ state: 'ready' }, { dead: true }))).toBe('Disconnected · input off');
+  });
+});
+
+describe('Reconnect', () => {
+  it('is for a session that is over, and says why not otherwise', () => {
+    expect(reconnectState(pane({ state: 'ready' }))).toEqual({
+      can: false,
+      reason: 'The session is connected',
+    });
+    expect(reconnectState(pane({ state: 'connecting' }))).toEqual({
+      can: false,
+      reason: 'The session is still connecting',
+    });
+    expect(reconnectState(pane({ state: 'failed', category: 'network', message: 'x' })).can).toBe(
+      true,
+    );
+    expect(reconnectState(pane({ state: 'closed', reason: 'x' })).can).toBe(true);
+    expect(reconnectState(pane({ state: 'ready' }, { dead: true })).can).toBe(true);
+  });
+
+  it('has nothing to reconnect in an empty pane', () => {
+    expect(reconnectState(pane({ state: 'closed', reason: 'x' }, { host: null }))).toEqual({
+      can: false,
+      reason: 'There is no session to reconnect',
+    });
+    expect(reconnectState(null).can).toBe(false);
   });
 });
 
@@ -133,31 +158,6 @@ describe('small labels', () => {
     expect(relativeAge(now - 2 * 86_400_000, now)).toBe('2 d ago');
     // A clock that went backwards is not a negative age.
     expect(relativeAge(now + 5_000, now)).toBe('just now');
-  });
-});
-
-describe('the split hint', () => {
-  const leaf = (id: string) => leafTree(id);
-  const split = (direction: 'columns' | 'rows', first = leaf('a'), second = leaf('b')) => ({
-    kind: 'split' as const,
-    id: `s-${direction}`,
-    direction,
-    ratio: 0.5,
-    first,
-    second,
-  });
-
-  it('calls side-by-side panes a vertical split, as the frame does', () => {
-    expect(splitKind(split('columns'))).toBe('Vertical split');
-    expect(splitKind(split('rows'))).toBe('Horizontal split');
-    expect(splitKind(split('columns', split('rows')))).toBe('Mixed split');
-  });
-
-  it('writes the chord that moves between panes', () => {
-    expect(paneMoveHint('Ctrl+Alt+ArrowRight', 'Ctrl+Alt+ArrowLeft')).toBe('Ctrl Alt ← →');
-    expect(paneMoveHint('⌘⌥ArrowRight', '⌘⌥ArrowLeft')).toBe('⌘⌥ ← →');
-    // A rebinding that is not a pair of arrows is written out in full.
-    expect(paneMoveHint('Ctrl+J', 'Ctrl+K')).toBe('Ctrl+K / Ctrl+J');
   });
 });
 

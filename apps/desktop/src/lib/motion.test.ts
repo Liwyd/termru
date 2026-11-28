@@ -192,3 +192,78 @@ describe('what arrives and what is pressed (4d)', () => {
     }
   });
 });
+
+describe('the Sessions page and the overlays (O2)', () => {
+  const read = (path: string) =>
+    readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+  const style = (source: string) =>
+    source.slice(source.indexOf('<style>')).replace(/\/\*[\s\S]*?\*\//g, '');
+
+  const OVERLAYS = [
+    './components/PopMenu.svelte',
+    './components/SessionDialog.svelte',
+    './components/Toasts.svelte',
+    './components/TerminalSearch.svelte',
+    './components/ForwardsIndicator.svelte',
+    './components/SessionToolbar.svelte',
+    './components/TabBar.svelte',
+    './components/PaneView.svelte',
+    './components/SplitView.svelte',
+    './pages/SessionsPage.svelte',
+  ];
+
+  it('takes every duration from the motion tokens', () => {
+    for (const path of OVERLAYS) {
+      for (const match of style(read(path)).matchAll(/(?:transition|animation)\s*:([^;]*);/g)) {
+        const value = match[1];
+        if (value.trim() === 'none') continue;
+        // No literal times (`120ms`, `0.2s`): `var(--motion-*)` only.
+        const literal = value.replace(/var\([^)]*\)/g, '').match(/\b\d*\.?\d+m?s\b/);
+        expect(literal, `${path}: ${match[0]}`).toBeNull();
+      }
+    }
+  });
+
+  it('scales a menu in from 97 % and a dialog from 98 %, 120 ms in and 100 ms out', () => {
+    const menu = style(read('./components/PopMenu.svelte'));
+    expect(menu).toMatch(/\.menu \{[^}]*transform: scale\(var\(--pop-scale\)\)/);
+    expect(menu).toMatch(/\.menu \{[^}]*transform var\(--motion-fast\) var\(--ease-out\)/);
+    expect(menu).toMatch(
+      /\.menu\.shown \{[^}]*transform var\(--motion-context\) var\(--ease-out\)/,
+    );
+    const dialog = style(read('./components/SessionDialog.svelte'));
+    expect(dialog).toMatch(/\.dialog \{[^}]*transform: scale\(var\(--dialog-scale\)\)/);
+    expect(dialog).toMatch(/\.backdrop\.shown \.dialog \{[^}]*var\(--motion-context\)/);
+  });
+
+  it('starts a notice above its place and moves it by the notice shift', () => {
+    const notices = style(read('./components/Toasts.svelte'));
+    expect(notices).toMatch(/\.notice \{[^}]*transform: translateY\(var\(--notice-shift\)\)/);
+  });
+
+  it('never animates a pane: focus, the divider while it is held and the terminal stay put', () => {
+    const pane = style(read('./components/PaneView.svelte'));
+    // The pane, its focus line and its header carry no transition; the only
+    // moving parts are the small buttons (press, hover).
+    expect(/\.pane[^{]*\{[^}]*transition/.test(pane)).toBe(false);
+    expect(/\.head[^{]*\{[^}]*transition/.test(pane)).toBe(false);
+    const split = style(read('./components/SplitView.svelte'));
+    // The divider's line fades in under a pointer that can hover, nowhere else;
+    // the panes follow the pointer directly while it is dragged.
+    expect(split.match(/transition/g)).toHaveLength(1);
+    expect(split).toMatch(
+      /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.divider::after \{\s*transition: opacity var\(--motion-fast\)/,
+    );
+    expect(/\.side[^{]*\{[^}]*transition/.test(split)).toBe(false);
+    // The terminal wrapper: the connecting spinner is the only animation.
+    const terminal = style(read('./components/Terminal.svelte'));
+    expect(terminal.match(/animation\s*:/g)).toHaveLength(1);
+    expect(/\.terminal(-wrap)? \{[^}]*transition/.test(terminal)).toBe(false);
+  });
+
+  it('keeps a tab, its close button and a pane tool from moving the layout', () => {
+    // Switching tabs is a key as often as a click: no transition on the tab.
+    const tab = style(read('./components/TabBar.svelte'));
+    expect(/\.tab[^{]*\{[^}]*transition/.test(tab)).toBe(false);
+  });
+});

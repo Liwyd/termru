@@ -55,7 +55,8 @@
   /* Text on a filled danger control. */
   --termru-on-err: #17140e;
 
-  /* A floating layer: a menu, a dialog, the palette. One soft shadow. */
+  /* A floating layer: a menu, a dialog, a notice, the find bar, the palette.
+     Raised, a 1 px edge (`--termru-border`), this one soft shadow. */
   --termru-shadow-float: 0 14px 36px rgba(0, 0, 0, 0.42), 0 1px 3px rgba(0, 0, 0, 0.32);
   --termru-scrim: rgba(0, 0, 0, 0.55);
 
@@ -104,11 +105,16 @@
   --termru-page-inset-x: 28px;
   --termru-page-inset-top: 4px;
 
-  /* Geometry: the Sessions page. */
-  --termru-pane-rule-w: 2px;
-  --termru-divider-w: 4px;
+  /* Geometry: the Sessions page. One 46 px row holds the tabs and the tools;
+     the panes are 12 px cards with a 6 px gap, and the gap is the split divider
+     (it can be dragged and moved with the arrow keys). */
   --termru-tabstrip-h: 46px;
-  --termru-toolbar-h: 58px;
+  --termru-tab-h: 32px;
+  --termru-tool-size: 30px;
+  --termru-pane-gap: 6px;
+  --termru-divider-w: var(--termru-pane-gap);
+  --termru-pane-head-h: 34px;
+  --termru-pane-foot-h: 28px;
 
   /* Type. Geist for the interface (13/20, 12 secondary, 11 labels), Geist
      Mono for addresses, data and the terminal. Labels are sentence case. */
@@ -338,6 +344,20 @@ button.danger {
   color: var(--termru-err-text);
 }
 
+/* A destructive confirm: the error colour, filled. Champagne is for the one
+   primary action of a surface, never for a danger. */
+button.danger-fill {
+  background: var(--termru-err-text);
+  color: var(--termru-on-err);
+  font-weight: 550;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  button.danger-fill:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--termru-err-text) 88%, var(--termru-text));
+  }
+}
+
 input,
 select,
 textarea {
@@ -469,6 +489,17 @@ kbd {
   :is(.workpage, .sx-dialog) button.quiet:hover:not(:disabled) {
     background: var(--termru-raised);
   }
+
+  /* A dialog is raised itself: a quiet button lights one step up, and keeps
+     its ink (champagne is the primary action's alone). */
+  .sx-dialog button.quiet:hover:not(:disabled) {
+    background: var(--termru-raised-2);
+    color: var(--termru-text);
+  }
+
+  .sx-dialog button.link:hover:not(:disabled) {
+    color: var(--termru-text);
+  }
 }
 
 :is(.workpage, .sx-dialog) button:disabled {
@@ -492,6 +523,11 @@ kbd {
   text-decoration: underline;
   text-underline-offset: 2px;
   border-radius: 2px;
+}
+
+/* In a dialog, text that acts is underlined ink, not champagne. */
+.sx-dialog button.link {
+  color: var(--termru-text-2);
 }
 
 :is(.workpage, .sx-dialog) button.danger.quiet {

@@ -22,13 +22,19 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Not supported yet: GSSAPI, FIDO security keys (`sk-*`), SSH host certificates, the server-initiated password change.
 
 ### Sessions page (Phase 4a, frames 2 and 3)
-- [x] Tab strip, toolbar, pane header/footer, split hint, 2px focus rule, draggable divider, expand/restore pane.
+- [x] Tab strip, toolbar, pane header/footer, split hint, 2px focus rule, draggable divider, expand/restore pane. (Rebuilt in Obsidian part 2: one 46 px row for tabs and tools, 12 px panes with a 6 px gap, 1 px champagne focus line, no hint banner and no bottom bar; see below.)
 - [x] Terminal context menu, find in terminal, multi-line paste confirmation, close confirmation for a live session.
 - [x] One resize owner per pane (fit on `requestAnimationFrame`, debounced backend resize).
 - [x] Terminal links open in the system browser (`tauri-plugin-opener`, `opener:allow-open-url` scoped to http, https and mailto). Try it on a real desktop session (Linux `xdg-open`, Windows, macOS): it has only been exercised through a fake.
 - [x] "Don't ask again" for multi-line paste is the preference `terminal.confirm_multiline_paste` (Rust DTO, sync, Preferences switch).
 - [ ] The pane header shows the title the remote shell sets (OSC 0/2) or `shell`; the frame's `bash · /srv/atlas` needs the remote shell name and working directory (OSC 7 or a backend probe).
 - [ ] Look at the page on a real desktop session (WebKitGTK, WebView2, WKWebView): menus, focus rings, divider drag and the find bar have only been checked in headless Chrome.
+
+### Obsidian redesign, part 2: Sessions and overlays
+- [x] Sessions page to the mockup (`~/.claude/plans/obsidian`): tab strip and tools in one 46 px row, forwards and synced-settings chips, split right / down, duplicate, detach, More; 12 px panes, 6 px gaps that are the dividers, 1 px champagne focus line, 34 px header, 28 px footer with the state, Reconnect and the forwards; empty state with the palette chord.
+- [x] Every menu, dialog, notice and the find bar on raised surfaces (12 / 14 px, one shadow), one champagne primary action, danger confirms in the error colour (`danger-fill`), a dialog opened or closed by a key does not animate.
+- [ ] Files / SFTP button of the Sessions toolbar: there is no SFTP yet (the mockup has one).
+- [ ] Look at the page on a real desktop session (WebKitGTK, WebView2, WKWebView): the rounded clip of the WebGL terminal, the divider bar and the focus line have only been checked in headless Chrome with the DOM renderer (`--disable-3d-apis`).
 
 ### Editor, folders and identities pages (Phase 4b, frames 4 and 5)
 - [x] Host editor page: numbered sections, rail (unsaved indicator, local credential with Forget, connection preview), Cancel / Save host / Save & connect, inline validation with aria wiring, unsaved-changes guard on a page change and on the window closing.
