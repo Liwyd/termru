@@ -400,3 +400,60 @@ describe('late updates', () => {
     expect(terminals[0].writes).toHaveLength(0);
   });
 });
+
+describe('jump hosts, forwards and approvals in a session', () => {
+  it('sends the passwords typed for the jump hosts, and only those', async () => {
+    const pane = openPane(host('app', { type: 'agent' }), {});
+    pane.hopSecrets = {
+      'host-bastion': { password: 'hop-pw' },
+      'host-empty': {},
+    };
+    await startConnection(pane, terminalFor(pane), pane.generation);
+    const options = callsOf('session_open')[0].args?.options as Record<string, unknown>;
+    expect(options.hop_secrets).toEqual({ 'host-bastion': { password: 'hop-pw' } });
+  });
+
+  it('sends no hop_secrets when nothing was typed for a hop', async () => {
+    const pane = openPane(host('app', { type: 'agent' }), {});
+    await startConnection(pane, terminalFor(pane), pane.generation);
+    const options = callsOf('session_open')[0].args?.options as Record<string, unknown>;
+    expect(options).not.toHaveProperty('hop_secrets');
+  });
+
+  it('applies the forward and the approval updates of the session to its pane', async () => {
+    const pane = openPane(host('app', { type: 'agent' }), {});
+    await startConnection(pane, terminalFor(pane), pane.generation);
+    const channel = channels.find((entry) => entry.cmd === 'session_open')?.channel;
+    const send = channel?.onmessage as (update: SessionUpdate) => void;
+    send({ kind: 'exec_pending' });
+    send({ kind: 'status', status: { state: 'ready' } });
+    send({
+      kind: 'forward',
+      forward: { state: 'listening', id: 0, kind: 'local', address: '127.0.0.1', port: 8080 },
+    });
+    expect(pane.execPending).toBe(true);
+    expect(pane.forwards).toEqual([
+      { state: 'listening', id: 0, kind: 'local', address: '127.0.0.1', port: 8080 },
+    ]);
+  });
+
+  it('learns the forwards and the missing approval of a running session it shows again', async () => {
+    const pane = openPane(host('app', { type: 'agent' }), {});
+    pane.sessionId = 'running';
+    answers.set('session_list', [
+      {
+        id: 'running',
+        host_id: 'host-app',
+        status: { state: 'ready' },
+        forwards: [
+          { state: 'listening', id: 1, kind: 'dynamic', address: '127.0.0.1', port: 1080 },
+        ],
+        exec_pending: true,
+      },
+    ] satisfies SessionInfo[]);
+    await startConnection(pane, terminalFor(pane), pane.generation);
+    expect(callsOf('session_attach')).toHaveLength(1);
+    expect(pane.forwards).toHaveLength(1);
+    expect(pane.execPending).toBe(true);
+  });
+});

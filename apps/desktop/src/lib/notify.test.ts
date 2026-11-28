@@ -369,6 +369,32 @@ describe('the button of a notice', () => {
     expect(notices.visible[0].leaving).toBe(true);
   });
 
+  it('tells the handler what the notice was about (a host), when it says', () => {
+    const review = vi.fn();
+    notices.setActions({ 'review-host-exec': review });
+    const { id } = notify({
+      key: 'host.exec-pending',
+      entityId: 'host-7',
+      values: { name: 'atlas-prod' },
+      action: 'review-host-exec',
+    });
+    expect(notices.visible[0].kind).toBe('warning');
+    expect(notices.visible[0].title).toBe('Approval needed');
+    expect(notices.visible[0].description).toBe(
+      'Synced settings for atlas-prod need your approval on this device',
+    );
+    expect(notices.visible[0].action).toEqual({ id: 'review-host-exec', label: 'Review' });
+    notices.runAction(id);
+    expect(review).toHaveBeenCalledWith('host-7');
+  });
+
+  it('says what an import brought in, and a copied forward address', () => {
+    notify({ key: 'hosts.imported', values: { count: 1, skipped: 2 } });
+    expect(notices.visible[0].description).toBe('1 host added from your SSH config · 2 skipped');
+    notify({ key: 'forward.address-copied', values: { place: '127.0.0.1:8080' } });
+    expect(notices.visible[1].description).toBe('127.0.0.1:8080');
+  });
+
   it('does nothing for a notice that has no action', () => {
     const retry = vi.fn();
     notices.setActions({ 'retry-sync': retry });

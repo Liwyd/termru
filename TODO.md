@@ -15,7 +15,7 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] Tag `v0.1.0` (or subsequent production tag) using credentials on a push-enabled host with release permissions.
 
 ### SSH authentication follow-ups (see ADR 0008)
-- [x] A per-host method order (`auth_order`, a synced field with a serde default; Phase 5a). The editor control is Phase 5b.
+- [x] A per-host method order (`auth_order`, a synced field with a serde default; Phase 5a). The editor control is in the host editor (Phase 5b).
 - [x] `AuthPromptDialog`, `HostKeyDialog` and `ConnectDialog` restyled on the session dialog (Phase 4c).
 - [ ] Windows: try the OpenSSH named-pipe agent and the Pageant fallback on a real Windows host (implemented, never run).
 - [ ] Try keyboard-interactive against a real PAM/2FA server (the tests use an in-process server; the private `sshd` of the tests runs without PAM).
@@ -38,19 +38,30 @@ This authoritative file tracks the remaining roadmap items and operational rules
 - [ ] "Choose hosts" is a searchable list of up to 50 hosts, not a multi-select; moving several hosts at once is still one at a time.
 - [ ] Generated keys are ed25519 only; RSA/ECDSA generation, importing a key into the app's folder and deleting a generated key's file with its identity are not offered (deleting the identity leaves the file).
 - [ ] The window-close guard (`onCloseRequested`) is only exercised against a fake window in tests; try it on a real desktop session (WebKitGTK, WebView2, WKWebView).
-- [ ] Phase 5b: the Jump host, Forwards and Advanced sections of the host editor (`04 / ADVANCED` already exists for them), the forward status in the session toolbar, the `~/.ssh/config` import dialog and the jump-host password prompt (`hop_secrets`). The backend is done (below).
+- [x] Phase 5b: the Jump hosts, Port forwards and Advanced sections of the host editor, the forwards chip and menu in the session toolbar, the `~/.ssh/config` import dialog, the jump-host password prompt (`hop_secrets`) and the local approval of synced fields that act (below).
 - [ ] A password typed in the editor is sent to the backend over IPC as a plain string and is not zeroized on the frontend side (as in the connect dialog).
 
 ### Data model v2, jump hosts, forwards, session setup (Phase 5a, ADR 0010)
 - [x] `Host` gets `jump_chain`, `forwards`, `env`, `startup_command`, `agent_forward`, `auth_order` (serde defaults, unused fields not serialized); validation incl. IPv6 zone ids, per-kind forwards, env names, jump cycles and length; store migration 2 (v1 fixture database), `Hosts::import` in one transaction; the sync server needs no change (opaque payload, same entity validation).
 - [x] Engine: jump chains (every hop verified and authenticated, errors name the hop), local / remote / dynamic (SOCKS5) forwards with per-forward status events, `SetEnv`, startup command, agent forwarding, read-only `~/.ssh/known_hosts`; sshd integration tests for all of them.
 - [x] `~/.ssh/config` parser (pure) and the `ssh_config_preview` / `ssh_config_import` commands.
-- [ ] Decide whether a device-local switch should make a device ignore synced startup commands, agent forwarding and non-loopback forwards (a synced record can otherwise change what a connection does on every device, see ADR 0010).
 - [ ] A setting to turn the read-only `~/.ssh/known_hosts` source off.
 - [ ] Windows: the agent-forwarding proxy (OpenSSH named pipe) and the forwards were never run on Windows.
 - [ ] Preserve unknown host fields across versions (an older app editing a v2 host drops them).
 - [ ] Re-check the routes of the hosts that depend on an edited or deleted jump host at save time (today: at connect time).
 - [ ] The cloud-server test for v2 host payloads needs PostgreSQL; it was compiled but not run locally.
+
+### Host editor v2, forwards status, import and approval (Phase 5b, ADR 0010)
+- [x] Host editor: `04 / JUMP HOSTS` (ordered picker, reorder, remove, the resolved route `you → bastion → app`, cycle / missing hop / over 8 hops), `05 / PORT FORWARDS` (L/R/D rows, bind address with a non-loopback warning, enabled switch, inline validation mirrored from `validate.rs`), `06 / ADVANCED` (environment variables, startup command, agent forwarding with its risk, authentication order); the command preview in the rail shows `-J`, `-L`/`-R`/`-D` and `-A`.
+- [x] Session toolbar: a forwards chip (`2 forwards`, `1 of 2 failed`, `1 needs approval`) with a menu of one line per forward (`L 127.0.0.1:8080 → db:5432 · listening`, or the reason it failed); choosing a listening one copies its address.
+- [x] Jump-host secrets: the connect dialog has one password field per password hop with nothing stored, and a "keep in the credential store" box per hop; sent as `hop_secrets`, stored only after the session is ready.
+- [x] Import from `~/.ssh/config`: a secondary action on the Hosts page, a dialog with the candidates (new / already in the library / cannot import, with the reason), jump routes, key files that are referenced and never copied, file warnings, a summary and a notice; missing file, empty file and read error states.
+- [x] Local approval of synced fields that act (`host_exec_review`, `host_exec_approve`, `host_save` with `approve_exec`, migration 3): a host whose startup command, agent forwarding, environment or non-loopback forwards this device has not approved connects without them and says so; the review dialog shows exactly the fields.
+- [ ] Approval applies to the next connection: a session that is open keeps its parameters, and so do its reconnects and duplicates. A "reconnect with the approved settings" action would need the connection parameters rebuilt from the store (they hold secrets today).
+- [ ] The approval hash is of the fields as stored; a host edited on another device and approved there asks again here (per device, by design). A "approve all synced hosts" action does not exist.
+- [ ] Look at the new editor sections, the forwards menu and the import and review dialogs on a real desktop session (WebKitGTK, WebView2, WKWebView): they have only been checked in headless Chrome and jsdom.
+- [ ] The jump-host picker is a native select (it lists every host by name and address); a library of thousands of hosts needs a searchable list.
+- [ ] Hosts that only exist in the import file as `ProxyJump user@host:port` (not an alias of the file) are imported as the address they name; the dialog lists the route as written.
 
 ### Sync, Preferences, dialogs and notices (Phase 4c, frame 8 and the specification C.03-C.04)
 - [x] Sync page (status, conflicts, this device, sign in, change account, sign out, offline copy), Preferences page (every field, live preview, shortcut table with record / unbind / reset, Restore defaults, About), connect / host-key / sign-in dialogs, the notify facade (ADR 0009) and the opener plugin.

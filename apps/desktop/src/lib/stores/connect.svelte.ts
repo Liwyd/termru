@@ -1,14 +1,29 @@
 import { api } from '../ipc';
+import { resolveRoute } from '../jump';
 import { hosts } from './hosts.svelte';
 import { route } from './route.svelte';
-import { sessions, type Pane } from './sessions.svelte';
-import type { Host, SessionSecrets } from '../types';
+import { sessions, type HopAnswers, type Pane } from './sessions.svelte';
+import type { HopSecrets, Host, SessionSecrets } from '../types';
+
+/** A jump host the dialog asks a password for. */
+export interface HopPrompt {
+  host: Host;
+  /** The credential store holds a password for it (an empty answer uses that one). */
+  stored: boolean;
+}
 
 /** What the connect dialog is collecting a secret for. */
 export interface ConnectRequest {
   host: Host;
   /** A secret for this host already sits in the credential store. */
   secretStored: boolean;
+  /** The host itself needs a password typed (false: only its jump hosts do). */
+  askTarget: boolean;
+  /**
+   * The jump hosts of the route that sign in with a password nobody has
+   * given yet, in route order: the dialog has one field for each.
+   */
+  hops: HopPrompt[];
   /**
    * The pane the connection is for: null opens a new tab; otherwise the
    * pane is connected (it was empty) or reconnected (it was closed).
@@ -34,28 +49,28 @@ export interface ConnectRequest {
 class ConnectFlow {
   pending = $state.raw<ConnectRequest | null>(null);
 
-  /** Opens a new tab for a host (asking for the secret when needed). */
+  /** Opens a new tab for a host (asking for the secrets when needed). */
   async request(host: Host): Promise<void> {
-    if (!needsSecretUpFront(host)) {
+    const stored = needsSecretUpFront(host) && (await this.#hasStoredSecret(host));
+    const askTarget = needsSecretUpFront(host) && !stored;
+    const hops = await this.#hopsToAsk(host, {});
+    if (!askTarget && hops.length === 0) {
       this.#openTab(host, {}, false);
       return;
     }
-    const stored = await this.#hasStoredSecret(host);
-    if (stored) {
-      this.#openTab(host, {}, false);
-      return;
-    }
-    this.pending = { host, secretStored: stored, pane: null, reconnecting: false };
+    this.pending = { host, secretStored: stored, askTarget, hops, pane: null, reconnecting: false };
   }
 
   /** Connects a host in an empty pane (the pane picker). */
   async pick(pane: Pane, host: Host): Promise<void> {
     const stored = needsSecretUpFront(host) && (await this.#hasStoredSecret(host));
-    if (!needsSecretUpFront(host) || stored) {
+    const askTarget = needsSecretUpFront(host) && !stored;
+    const hops = await this.#hopsToAsk(host, {});
+    if (!askTarget && hops.length === 0) {
       await sessions.connectPane(pane, host, {}, false);
       return;
     }
-    this.pending = { host, secretStored: stored, pane, reconnecting: false };
+    this.pending = { host, secretStored: stored, askTarget, hops, pane, reconnecting: false };
   }
 
   /**
@@ -66,36 +81,47 @@ class ConnectFlow {
     const host = pane.host;
     if (!host) return;
     const target = sessions.paneById(pane.id) ?? pane;
-    if (!needsSecretUpFront(host)) {
-      sessions.retry(target);
-      return;
-    }
-    const stored = await this.#hasStoredSecret(host);
     const authFailed = target.lastFailure?.category === 'auth';
-    const haveSecret = Boolean(target.secrets.password || target.secrets.passphrase);
-    // The backend keeps the credentials of a session it still knows, and
-    // reconnects it without them.
+    // The backend keeps the credentials of a session it still knows (the
+    // jump hosts' too), and reconnects it without them.
     const backendHolds = await this.#backendKnows(target.sessionId);
-    const needsPrompt =
-      authFailed || (host.auth.type === 'password' && !stored && !haveSecret && !backendHolds);
-    if (!needsPrompt) {
+    const hops = backendHolds
+      ? []
+      : await this.#hopsToAsk(host, target.hopSecrets ?? {}, authFailed);
+    if (!needsSecretUpFront(host) && hops.length === 0) {
       sessions.retry(target);
       return;
     }
-    this.pending = { host, secretStored: stored, pane: target, reconnecting: true };
+    const stored = needsSecretUpFront(host) && (await this.#hasStoredSecret(host));
+    const haveSecret = Boolean(target.secrets.password || target.secrets.passphrase);
+    const askTarget =
+      needsSecretUpFront(host) && (authFailed || (!stored && !haveSecret && !backendHolds));
+    if (!askTarget && hops.length === 0) {
+      sessions.retry(target);
+      return;
+    }
+    this.pending = {
+      host,
+      secretStored: stored,
+      askTarget,
+      hops,
+      pane: target,
+      reconnecting: true,
+    };
   }
 
-  /** The dialog collected the secret: go on with the connection. */
-  submit(secrets: SessionSecrets, remember: boolean): void {
+  /** The dialog collected the secrets: go on with the connection. */
+  submit(secrets: SessionSecrets, remember: boolean, hops?: HopAnswers): void {
     const request = this.pending;
     this.pending = null;
     if (!request) return;
+    const typed = hops && Object.keys(hops.secrets).length > 0 ? hops : undefined;
     if (!request.pane) {
-      this.#openTab(request.host, secrets, remember);
+      this.#openTab(request.host, secrets, remember, typed);
     } else if (request.reconnecting) {
-      sessions.retry(request.pane, secrets, remember);
+      sessions.retry(request.pane, secrets, remember, typed);
     } else {
-      void sessions.connectPane(request.pane, request.host, secrets, remember);
+      void sessions.connectPane(request.pane, request.host, secrets, remember, typed);
     }
   }
 
@@ -103,8 +129,8 @@ class ConnectFlow {
     this.pending = null;
   }
 
-  #openTab(host: Host, secrets: SessionSecrets, remember: boolean): void {
-    sessions.open(host, secrets, remember);
+  #openTab(host: Host, secrets: SessionSecrets, remember: boolean, hops?: HopAnswers): void {
+    sessions.open(host, secrets, remember, hops);
     this.pending = null;
     // The session is the point of the app: show it right away.
     route.go('sessions');
@@ -126,6 +152,38 @@ class ConnectFlow {
     return stored;
   }
 
+  /**
+   * The jump hosts of the route to `host` that sign in with a password
+   * nobody has given: not typed already (`have`) and not in the credential
+   * store. `all` asks for every password hop (a sign-in failed and it is
+   * not known which one). A route that cannot be resolved asks nothing: the
+   * backend reports why when it builds the connection.
+   */
+  async #hopsToAsk(host: Host, have: HopSecrets, all = false): Promise<HopPrompt[]> {
+    const chain = host.jump_chain ?? [];
+    if (chain.length === 0) return [];
+    const found = resolveRoute(host.id, host.name, chain, (id) => {
+      const hop = hosts.hosts.find((entry) => entry.id === id && !entry.deleted);
+      return hop ? { name: hop.name, jump_chain: hop.jump_chain ?? [] } : undefined;
+    });
+    if (!found.ok) return [];
+    const asked: HopPrompt[] = [];
+    for (const id of found.route) {
+      const hop = hosts.hosts.find((entry) => entry.id === id);
+      if (!hop || !hopNeedsPassword(hop)) continue;
+      if (have[id]?.password && !all) continue;
+      let stored = false;
+      try {
+        stored = (await api.secretHas(id, 'password')) === true;
+      } catch {
+        stored = false;
+      }
+      if (stored && !all) continue;
+      asked.push({ host: hop, stored });
+    }
+    return asked;
+  }
+
   async #backendKnows(sessionId: string | null): Promise<boolean> {
     if (!sessionId) return false;
     try {
@@ -143,6 +201,15 @@ class ConnectFlow {
  */
 function needsSecretUpFront(host: Host): boolean {
   return host.auth.type === 'password';
+}
+
+/**
+ * Whether a jump host needs a password from the user: it signs in with one
+ * (and an explicit order, if it has one, lists it).
+ */
+export function hopNeedsPassword(host: Host): boolean {
+  if (host.auth.type !== 'password') return false;
+  return !host.auth_order || host.auth_order.includes('password');
 }
 
 export const connectFlow = new ConnectFlow();

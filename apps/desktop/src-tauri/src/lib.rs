@@ -85,6 +85,8 @@ fn build() -> tauri::Result<tauri::App> {
             commands::app_info::app_info,
             commands::hosts::host_list,
             commands::hosts::host_save,
+            commands::hosts::host_exec_review,
+            commands::hosts::host_exec_approve,
             commands::hosts::host_delete,
             commands::hosts::recent_list,
             commands::hosts::host_set_favorite,

@@ -9,6 +9,10 @@ export interface MenuEntry {
   disabled?: boolean;
   /** Why it is disabled (read out and shown as a tooltip). */
   reason?: string;
+  /** A second line under the label (a reason, a state). */
+  detail?: string;
+  /** The label is code (an address, a command): mono. */
+  mono?: boolean;
   /** A rule above this entry. */
   separatorBefore?: boolean;
 }

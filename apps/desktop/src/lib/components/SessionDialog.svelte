@@ -27,6 +27,7 @@
     actions,
     role = 'alertdialog',
     wide = false,
+    xwide = false,
     monoDescription = false,
     tone = 'default',
     backdropCloses = true,
@@ -42,6 +43,8 @@
     actions: Snippet;
     role?: 'dialog' | 'alertdialog';
     wide?: boolean;
+    /** Room for a list (the import of the SSH config). */
+    xwide?: boolean;
     /** The description is an address or a path: mono. */
     monoDescription?: boolean;
     tone?: 'default' | 'danger';
@@ -76,6 +79,7 @@
     <div
       class="dialog sx-dialog"
       class:wide
+      class:xwide
       class:danger={tone === 'danger'}
       {role}
       aria-modal={open ? 'true' : undefined}
@@ -140,6 +144,10 @@
 
   .dialog.wide {
     width: min(32rem, 100%);
+  }
+
+  .dialog.xwide {
+    width: min(44rem, 100%);
   }
 
   .dialog.danger {

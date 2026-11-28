@@ -32,6 +32,20 @@
  *   &many[=N]        N more hosts (default 10 000, at most 100 000), in a few
  *                    folders, with recent connections on the first few: the
  *                    scroll, filter and window of a very large library
+ *   &v2              data model v2 on top of the fixtures: a `bastion` host
+ *                    (password, nothing stored) that atlas-prod jumps
+ *                    through, four port forwards (one fails when its session
+ *                    opens), environment variables and a startup command,
+ *                    all approved on this device
+ *   &approval        like `v2`, but the synced startup command, environment
+ *                    and the exposed forward of atlas-prod are NOT approved on
+ *                    this device: its sessions open without them and say so
+ *   &review[=atlas-prod]
+ *                    the approval review dialog opens for that host on start
+ *                    (implies `approval`)
+ *   &menu            the forwards menu of the toolbar opens as soon as a session
+ *                    shows one (use with `&demo&v2` on `#sessions`)
+ *   &import          the "Import from SSH config" dialog opens on start
  *   &long            the worst realistic data on top of the fixtures: names
  *                    at the 128 character limit, a folder five levels deep with
  *                    long names, long identity names and comments, a 2 000
@@ -51,12 +65,16 @@ import type {
   UnlistenFn,
   WindowHandle,
 } from '../ipc-backend';
+import { execFieldsOf, hasExecFields } from '../forwards';
+import { resolveRoute } from '../jump';
+import { isIpv4Literal, isIpv6, isLoopbackBind } from '../validation';
 import type {
   AuthPromptMessage,
   ConflictView,
   Group,
   Host,
   HostKeyPromptMessage,
+  HostExecReview,
   HostKeyPromptRequest,
   GeneratedIdentity,
   Identity,
@@ -64,6 +82,7 @@ import type {
   Preferences,
   PublicKeyInfo,
   RecentHost,
+  ForwardUpdate,
   SessionInfo,
   SessionStatus,
   SessionUpdate,
@@ -105,6 +124,16 @@ export interface MockFlags {
   many: number;
   /** The worst-case fixtures are added. */
   long: boolean;
+  /** Data model v2 fixtures (a bastion, forwards, environment, startup command). */
+  v2: boolean;
+  /** The synced exec-like fields of atlas-prod are not approved on this device (implies `v2`). */
+  approval: boolean;
+  /** The host (by name) whose approval review opens on start, or null. */
+  review: string | null;
+  /** The SSH config import dialog opens on start. */
+  importConfig: boolean;
+  /** The forwards menu of the Sessions toolbar opens once there is one. */
+  menu: boolean;
 }
 
 function readFlags(): MockFlags {
@@ -138,6 +167,11 @@ function readFlags(): MockFlags {
       ? Math.min(100_000, Math.max(1, Number.parseInt(params.get('many') || '', 10) || 10_000))
       : 0,
     long: params.has('long'),
+    approval: params.has('approval') || params.has('review'),
+    v2: params.has('v2') || params.has('approval') || params.has('review'),
+    review: params.has('review') ? params.get('review') || 'atlas-prod' : null,
+    importConfig: params.has('import'),
+    menu: params.has('menu'),
   };
 }
 
@@ -163,6 +197,7 @@ const ID = {
   staging: fixtureId(0x103),
   build: fixtureId(0x104),
   archive: fixtureId(0x105),
+  bastion: fixtureId(0x106),
   production: fixtureId(0x201),
   europe: fixtureId(0x202),
   edge: fixtureId(0x203),
@@ -270,6 +305,72 @@ function fixtureHosts(): Host[] {
       auth: { type: 'password' },
       group_id: null,
     }),
+  ];
+}
+
+/**
+ * `?v2`: the data model of ADR 0010 on top of the fixtures. atlas-prod is
+ * reached through a password-only bastion (nothing stored for it, so the
+ * connect dialog asks), forwards three ports and a SOCKS proxy (one of them
+ * binds all interfaces, one is refused), sets two variables and starts tmux.
+ */
+function withV2(hosts: Host[]): Host[] {
+  const bastion = fixtureHost(5, {
+    id: ID.bastion,
+    name: 'bastion',
+    address: 'bastion.corp.example',
+    port: 2222,
+    username: 'ops',
+    auth: { type: 'password' },
+    group_id: null,
+    description: 'Jump host for the production network',
+  });
+  return [
+    ...hosts.map((host) =>
+      host.id === ID.atlas
+        ? {
+            ...host,
+            jump_chain: [ID.bastion],
+            forwards: [
+              {
+                kind: 'local' as const,
+                bind_address: '127.0.0.1',
+                bind_port: 5433,
+                target_host: 'db.internal',
+                target_port: 5432,
+                enabled: true,
+              },
+              {
+                kind: 'dynamic' as const,
+                bind_port: 1080,
+                enabled: true,
+              },
+              {
+                kind: 'local' as const,
+                bind_address: '0.0.0.0',
+                bind_port: 9090,
+                target_host: 'metrics.internal',
+                target_port: 9090,
+                enabled: true,
+              },
+              {
+                kind: 'remote' as const,
+                bind_port: 80,
+                target_host: 'localhost',
+                target_port: 3000,
+                enabled: true,
+              },
+            ],
+            env: [
+              { name: 'LANG', value: 'en_US.UTF-8' },
+              { name: 'TERMRU_PROFILE', value: 'ops' },
+            ],
+            startup_command: 'tmux new -A -s atlas',
+            agent_forward: false,
+          }
+        : host,
+    ),
+    bastion,
   ];
 }
 
@@ -623,12 +724,14 @@ interface MockState {
   sync: SyncStatus;
   conflicts: ConflictView[];
   layout: WorkspaceDoc | null;
+  /** host id -> the hash of the exec-like fields this device approved (device-local). */
+  execApproved: Map<string, string>;
 }
 
 function seed(flags: MockFlags): MockState {
   const prefs = defaultPreferences();
   if (flags.theme) prefs.theme = flags.theme;
-  const hosts = flags.empty ? [] : fixtureHosts();
+  const hosts = flags.empty ? [] : flags.v2 ? withV2(fixtureHosts()) : fixtureHosts();
   const groups = fixtureGroups();
   const identities = fixtureIdentities();
   const tags: Tag[] = [];
@@ -668,7 +771,29 @@ function seed(flags: MockFlags): MockState {
     sync: seedSync(flags),
     conflicts: flags.sync === 'conflicts' ? fixtureConflicts() : [],
     layout: flags.demo ? demoLayout() : null,
+    // What was saved here is approved: every host starts that way, unless the
+    // harness plays "these arrived through sync".
+    execApproved: new Map(
+      hosts
+        .filter((host) => !(flags.approval && host.id === ID.atlas))
+        .map((host) => [host.id, mockExecHash(host)]),
+    ),
   };
+}
+
+/** The mock's stand-in for `Host::exec_hash`: the same fields, a different hash function. */
+function mockExecHash(host: Host): string {
+  const text = JSON.stringify(execFieldsOf(host));
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(index)) | 0;
+  }
+  return `mock-${(hash >>> 0).toString(16).padStart(8, '0')}-${text.length}`;
+}
+
+function execStatusOf(host: Host): { hash: string; approved: boolean } {
+  const hash = mockExecHash(host);
+  return { hash, approved: !hasExecFields(host) || state.execApproved.get(host.id) === hash };
 }
 
 let flags: MockFlags = readFlags();
@@ -812,6 +937,10 @@ interface MockSession {
   /** The `journalctl -f` stream: it ignores input until Ctrl C. */
   following: boolean;
   timers: Set<ReturnType<typeof setTimeout>>;
+  /** What became of the port forwards (cleared by every status but `ready`). */
+  forwards: ForwardUpdate[];
+  /** The session runs without the synced exec-like fields (not approved here). */
+  execPending: boolean;
 }
 
 const sessions = new Map<string, MockSession>();
@@ -921,7 +1050,42 @@ function sendData(session: MockSession, text: string): void {
 
 function setStatus(session: MockSession, status: SessionStatus): void {
   session.status = status;
+  // The forwards live and die with the connection.
+  if (status.state !== 'ready') session.forwards = [];
   send(session, { kind: 'status', status });
+}
+
+/**
+ * What the engine reports once the session is ready: every enabled forward
+ * is listening, except one on a privileged port (refused). A session that
+ * lacks the approval of this device skips the forwards that are exposed.
+ */
+function startForwards(session: MockSession, host: Host): void {
+  (host.forwards ?? []).forEach((forward, id) => {
+    if (!forward.enabled) return;
+    if (session.execPending && !isLoopbackBind(forward.bind_address)) return;
+    const update: ForwardUpdate =
+      forward.bind_port < 1024
+        ? {
+            state: 'failed',
+            id,
+            kind: forward.kind,
+            reason:
+              forward.kind === 'remote'
+                ? 'the server refused the forward (administratively prohibited)'
+                : 'Permission denied (os error 13)',
+          }
+        : {
+            state: 'listening',
+            id,
+            kind: forward.kind,
+            address:
+              forward.bind_address ?? (forward.kind === 'remote' ? 'localhost' : '127.0.0.1'),
+            port: forward.bind_port,
+          };
+    session.forwards = [...session.forwards.filter((entry) => entry.id !== id), update];
+    send(session, { kind: 'forward', forward: update });
+  });
 }
 
 function later(session: MockSession, ms: number, run: () => void): void {
@@ -956,6 +1120,8 @@ function createSession(host: Host, variant: SessionVariant): MockSession {
     cwd: '~',
     following: false,
     timers: new Set(),
+    forwards: [],
+    execPending: false,
   };
   sessions.set(session.id, session);
   return session;
@@ -971,6 +1137,7 @@ function startSession(session: MockSession): void {
   later(session, 320, () => {
     setStatus(session, { state: 'ready' });
     state.recents.set(host.id, Date.now());
+    later(session, 40, () => startForwards(session, host));
   });
   transcript(session, host).forEach((chunk, index) => {
     later(session, 420 + index * 35, () => sendData(session, chunk));
@@ -981,13 +1148,32 @@ function setStatusLater(session: MockSession, ms: number, status: SessionStatus)
   later(session, ms, () => setStatus(session, status));
 }
 
-function openSession(hostId: string, view: ChannelLike): MockSession {
+function openSession(
+  hostId: string,
+  view: ChannelLike,
+  hopSecrets: Record<string, { password?: string }> = {},
+  inherited = false,
+): MockSession {
   const host = hostOf(hostId);
+  // Like the backend: a jump host that signs in with a password needs one,
+  // typed now or in the credential store.
+  for (const hopId of inherited ? [] : (host.jump_chain ?? [])) {
+    const hop = state.hosts.find((entry) => entry.id === hopId);
+    if (hop?.auth.type === 'password' && !hopSecrets[hopId]?.password) {
+      if (!state.secrets.has(`${hopId}:password`)) {
+        commandError(`jump host: host "${hop.name}" requires a password`);
+      }
+    }
+  }
   const variants = variantsFor(host);
   const count = openCounts.get(host.id) ?? 0;
   openCounts.set(host.id, count + 1);
   const session = createSession(host, variants[count % variants.length]);
   session.views.push(view);
+  if (!execStatusOf(host).approved) {
+    session.execPending = true;
+    send(session, { kind: 'exec_pending' });
+  }
   startSession(session);
   return session;
 }
@@ -1100,7 +1286,10 @@ function scheduleStartup(): void {
     flags.edit !== null ||
     flags.folder !== null ||
     flags.identity !== null ||
-    flags.connect !== null;
+    flags.connect !== null ||
+    flags.review !== null ||
+    flags.importConfig ||
+    flags.menu;
   if (startupScheduled || !acts) return;
   startupScheduled = true;
   // After the app has applied the layout it just received.
@@ -1109,6 +1298,9 @@ function scheduleStartup(): void {
       if (flags.demo) await connectRestoredPanes();
       if (flags.edit !== null) await openEditor(flags.edit);
       if (flags.connect !== null) await openConnect(flags.connect);
+      if (flags.review !== null) await openReview(flags.review);
+      if (flags.importConfig) (await import('../stores/ssh-import.svelte')).sshImport.show();
+      if (flags.menu) openForwardsMenu();
       await selectEntities();
     })();
   }, 0);
@@ -1125,6 +1317,8 @@ function connectedSession(host: Host): MockSession {
   openCounts.set(host.id, count + 1);
   const session = createSession(host, variants[count % variants.length]);
   session.status = { state: 'ready' };
+  session.execPending = !execStatusOf(host).approved;
+  startForwards(session, host);
   for (const chunk of transcript(session, host)) sendData(session, chunk);
   return session;
 }
@@ -1186,6 +1380,42 @@ async function openConnect(name: string): Promise<void> {
   ]);
   const host = hosts.hosts.find((entry) => entry.name === name);
   if (host) await connectFlow.request(host);
+}
+
+/**
+ * `?menu`: clicks the forwards chip of the toolbar once the session has
+ * reported what became of its forwards and the layout has settled (a menu
+ * closes when the window is resized, which the terminals do while they fit).
+ */
+function openForwardsMenu(): void {
+  let tries = 0;
+  let settledAt = 0;
+  const timer = setInterval(() => {
+    tries += 1;
+    const chip = document.querySelector<HTMLElement>(
+      'button[title="Port forwards of this session"]',
+    );
+    const reported = /failed|approval/.test(chip?.textContent ?? '');
+    if (chip && reported) {
+      settledAt = settledAt || Date.now();
+      if (Date.now() - settledAt > 1200) {
+        clearInterval(timer);
+        chip.click();
+      }
+    } else if (tries > 100) {
+      clearInterval(timer);
+    }
+  }, 100);
+}
+
+/** `?review`: opens the approval review of a host. */
+async function openReview(name: string): Promise<void> {
+  const [{ hosts }, { execApproval }] = await Promise.all([
+    import('../stores/hosts.svelte'),
+    import('../stores/exec-approval.svelte'),
+  ]);
+  const host = hosts.hosts.find((entry) => entry.name === name);
+  if (host) await execApproval.show(host.id);
 }
 
 /** `?edit`: opens the host editor, as the "Edit" row action does. */
@@ -1263,6 +1493,86 @@ function validateHostLikeBackend(host: Host): void {
   }
   if (host.keepalive_seconds > 3600) {
     commandError('keepalive interval must be 0 (automatic) or at most 3600 seconds');
+  }
+  validateV2LikeBackend(host);
+}
+
+/** The v2 rules of `validate.rs` and of the store's route check, in their words. */
+function validateV2LikeBackend(host: Host): void {
+  const chain = host.jump_chain ?? [];
+  if (chain.length > 8) commandError('a jump chain may have at most 8 hops');
+  chain.forEach((hop, index) => {
+    if (hop === host.id) commandError('a host cannot be its own jump host');
+    if (chain.indexOf(hop) !== index) commandError('a jump chain lists the same host twice');
+  });
+  if (chain.length > 0) {
+    const route = resolveRoute(host.id, host.name, chain, (id) => {
+      const found = state.hosts.find((entry) => entry.id === id && !entry.deleted);
+      return found ? { name: found.name, jump_chain: found.jump_chain ?? [] } : undefined;
+    });
+    // The store's wording is the core's, which starts lower case and has no full stop.
+    if (!route.ok)
+      commandError(route.error.replace(/^./, (c) => c.toLowerCase()).replace(/\.$/, ''));
+  }
+
+  const forwards = host.forwards ?? [];
+  if (forwards.length > 32) commandError('a host may have at most 32 port forwards');
+  const claimed = new Set<string>();
+  for (const forward of forwards) {
+    if (forward.bind_port === 0) commandError('forward bind port must be between 1 and 65535');
+    const bind = forward.bind_address;
+    if (bind) {
+      const bare = bind.replace(/^\[|\]$/g, '').split('%')[0];
+      const literal = bare.toLowerCase() === 'localhost' || isIpv4Literal(bare) || isIpv6(bare);
+      if (forward.kind !== 'remote' && !literal) {
+        commandError('a local listener needs an IP address (or localhost) as its bind address');
+      }
+    }
+    if (forward.kind === 'dynamic') {
+      if (forward.target_host || forward.target_port) {
+        commandError('a dynamic (SOCKS) forward has no target: the client of the proxy names it');
+      }
+    } else {
+      if (!forward.target_host) commandError(`a ${forward.kind} forward needs a target host`);
+      if (!forward.target_port) {
+        commandError(`a ${forward.kind} forward needs a target port between 1 and 65535`);
+      }
+    }
+    const key = `${forward.kind === 'remote' ? 'r' : 'l'}|${bind ?? ''}|${forward.bind_port}`;
+    if (claimed.has(key)) {
+      commandError(`two forwards listen on ${bind ?? 'localhost'}:${forward.bind_port}`);
+    }
+    claimed.add(key);
+  }
+
+  const env = host.env ?? [];
+  if (env.length > 32) commandError('a host may have at most 32 environment variables');
+  const names = new Set<string>();
+  for (const variable of env) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable.name)) {
+      commandError(
+        `environment variable name "${variable.name}" is invalid (use letters, digits and '_', not starting with a digit)`,
+      );
+    }
+    if (names.has(variable.name)) {
+      commandError(`environment variable ${variable.name} is listed twice`);
+    }
+    names.add(variable.name);
+  }
+
+  if (host.startup_command != null) {
+    if (host.startup_command.trim().length === 0) {
+      commandError('startup command must not be empty (leave it unset instead)');
+    }
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/u.test(host.startup_command)) {
+      commandError('startup command must be a single line without control characters');
+    }
+  }
+  if (host.auth_order != null && host.auth_order.length === 0) {
+    commandError(
+      'the authentication order must name at least one method (leave it unset for the default)',
+    );
   }
 }
 
@@ -1369,7 +1679,30 @@ const handlers: Record<string, Handler> = {
     const host = { ...arg<Host>(args, 'host'), updated_at: now() };
     validateHostLikeBackend(host);
     state.hosts = upsert(state.hosts, host);
+    // Only a save from the editor approves; any other save leaves it alone.
+    if (args.approveExec === true) state.execApproved.set(host.id, mockExecHash(host));
     return host;
+  },
+  host_exec_review: (args): HostExecReview => {
+    const host = hostOf(arg<string>(args, 'id'));
+    const status = execStatusOf(host);
+    return {
+      host_id: host.id,
+      host_name: host.name,
+      hash: status.hash,
+      pending: !status.approved,
+      fields: execFieldsOf(host),
+    };
+  },
+  host_exec_approve: (args) => {
+    const host = hostOf(arg<string>(args, 'id'));
+    if (mockExecHash(host) !== arg<string>(args, 'hash')) {
+      return commandError(
+        'The synced settings of this host changed after you opened the review. Review them again.',
+      );
+    }
+    state.execApproved.set(host.id, mockExecHash(host));
+    return null;
   },
   host_delete: (args) => {
     const id = arg<string>(args, 'id');
@@ -1508,9 +1841,17 @@ const handlers: Record<string, Handler> = {
 
   // Sessions
   session_open: (args) => {
-    const options = arg<{ cols: number; rows: number }>(args, 'options');
+    const options = arg<{
+      cols: number;
+      rows: number;
+      hop_secrets?: Record<string, { password?: string }>;
+    }>(args, 'options');
     validateGeometry(options.cols, options.rows);
-    return openSession(arg<string>(args, 'hostId'), arg<ChannelLike>(args, 'channel')).id;
+    return openSession(
+      arg<string>(args, 'hostId'),
+      arg<ChannelLike>(args, 'channel'),
+      options.hop_secrets,
+    ).id;
   },
   session_retry: (args) => {
     const geometry = arg<{ cols: number; rows: number }>(args, 'geometry');
@@ -1526,7 +1867,8 @@ const handlers: Record<string, Handler> = {
     const geometry = arg<{ cols: number; rows: number }>(args, 'geometry');
     validateGeometry(geometry.cols, geometry.rows);
     const source = sessionOf(arg<string>(args, 'id'));
-    return openSession(source.hostId, arg<ChannelLike>(args, 'channel')).id;
+    // A duplicate re-uses what the original was opened with, hop secrets included.
+    return openSession(source.hostId, arg<ChannelLike>(args, 'channel'), undefined, true).id;
   },
   session_close: (args) => {
     closeSession(sessionOf(arg<string>(args, 'id')));
@@ -1551,6 +1893,8 @@ const handlers: Record<string, Handler> = {
       id: session.id,
       host_id: session.hostId,
       status: session.status,
+      ...(session.forwards.length > 0 ? { forwards: session.forwards } : {}),
+      ...(session.execPending ? { exec_pending: true } : {}),
     })),
   session_attach: (args) => {
     const session = sessionOf(arg<string>(args, 'id'));
@@ -1559,6 +1903,8 @@ const handlers: Record<string, Handler> = {
     if (session.buffer.length > 0)
       view.onmessage({ kind: 'data', base64: toBase64(session.buffer) });
     view.onmessage({ kind: 'status', status: session.status });
+    for (const forward of session.forwards) view.onmessage({ kind: 'forward', forward });
+    if (session.execPending) view.onmessage({ kind: 'exec_pending' });
     session.views.push(view);
     return null;
   },
@@ -1795,6 +2141,11 @@ export function resetMock(next: Partial<MockFlags> = {}): void {
     theme: null,
     many: 0,
     long: false,
+    v2: false,
+    approval: false,
+    review: null,
+    importConfig: false,
+    menu: false,
     ...next,
   };
   state = seed(flags);

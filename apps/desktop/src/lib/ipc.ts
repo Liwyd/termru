@@ -7,6 +7,7 @@ import type {
   Group,
   Host,
   HopSecrets,
+  HostExecReview,
   HostKeyPromptRequest,
   Identity,
   IdentityBinding,
@@ -34,7 +35,21 @@ export const api = {
 
   hostList: () => invoke<Host[]>('host_list'),
   recentList: () => invoke<RecentHost[]>('recent_list'),
-  hostSave: (host: Host) => invoke<Host>('host_save', { host }),
+  /**
+   * Saves a host. `approveExec` is for a save the user made in the editor
+   * of this device: it also approves the host's startup command, agent
+   * forwarding, environment and exposed forwards as saved. Any other save
+   * (a folder move) leaves the approval alone.
+   */
+  hostSave: (host: Host, approveExec = false) =>
+    invoke<Host>('host_save', approveExec ? { host, approveExec: true } : { host }),
+  /** The exec-like fields of a host and whether this device approved them. */
+  hostExecReview: (id: string) => invoke<HostExecReview>('host_exec_review', { id }),
+  /**
+   * Approves the fields the review showed. The backend recomputes the hash
+   * from the stored host and refuses it when the fields changed meanwhile.
+   */
+  hostExecApprove: (id: string, hash: string) => invoke<void>('host_exec_approve', { id, hash }),
   hostDelete: (id: string) => invoke<void>('host_delete', { id }),
   hostSetFavorite: (id: string, favorite: boolean) =>
     invoke<void>('host_set_favorite', { id, favorite }),

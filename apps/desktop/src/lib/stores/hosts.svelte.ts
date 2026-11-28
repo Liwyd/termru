@@ -314,11 +314,15 @@ export class HostsStore {
    * Saves a host. Returns null when the store refused it; the reason is in
    * `saveError` for the editor to show next to the form. A failed mutation
    * never replaces the hosts table with an error page.
+   *
+   * `approveExec`: the user saved in this device's editor, so the startup
+   * command, agent forwarding, environment and exposed forwards of the host
+   * are approved as saved (nothing else ever approves them).
    */
-  async save(host: Host): Promise<Host | null> {
+  async save(host: Host, options: { approveExec?: boolean } = {}): Promise<Host | null> {
     this.saveError = null;
     try {
-      const saved = await api.hostSave(host);
+      const saved = await api.hostSave(host, options.approveExec === true);
       // Raw state: the array is replaced, never written into.
       this.hosts = this.hosts.some((entry) => entry.id === saved.id)
         ? this.hosts.map((entry) => (entry.id === saved.id ? saved : entry))

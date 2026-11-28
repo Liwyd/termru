@@ -79,6 +79,8 @@ describe('ConnectDialog', () => {
     const request: ConnectRequest = {
       host: { ...host({ type: 'password' }), name },
       secretStored,
+      askTarget: true,
+      hops: [],
       pane: null,
       reconnecting: false,
     };

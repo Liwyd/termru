@@ -1,6 +1,6 @@
 # ADR 0010: Data model v2: jump hosts, port forwards, environment, startup command, agent forwarding, authentication order
 
-* Status: Accepted
+* Status: Accepted (amended in Phase 5b: local approval of synced fields that act)
 * Date: 2026-11-28
 * Deciders: Termru maintainers
 
@@ -77,6 +77,9 @@ host: `jump_chain`, `forwards`, `env`, `auth_order` as JSON text (like `auth`),
 database is opened inside one transaction; a database from a newer release is
 still refused. Tests build a database from a frozen copy of the v1 schema.
 
+A seventh table, `host_exec_approvals` (migration 3), is device-local and not
+part of the host: see "Local approval of synced fields that act".
+
 A local save checks the route against the store (hops exist, no cycle). Setting
 the favorite flag does not: starring a host must not fail because a jump host
 was deleted since. `Hosts::import` stores identities, key bindings and hosts of
@@ -129,18 +132,58 @@ and port and reused; a key path that is already bound reuses its identity;
 with the reason and takes nothing half-built with it) and stores everything in
 one transaction. Key files are only referenced by path.
 
+### Local approval of synced fields that act (Phase 5b)
+
+The **exec-like fields** are the startup command, agent forwarding, the
+environment and the **enabled forwards that do not bind loopback only**
+(`Host::exec_fields`; loopback means no bind address, `localhost`, or a
+loopback IP literal, `Forward::binds_loopback`). A forward on loopback is
+reachable from this machine only and is not gated.
+
+* **A device-local approval record** (`host_exec_approvals`, migration 3):
+  `host_id` and the **SHA-256 of the exec-like fields** the user approved on
+  this device. It lives in the local database only, in no `Host` field and in
+  no sync payload (a test checks the payload and the sync queue), and is
+  deleted with its host. The hash is of a domain-prefixed canonical JSON of
+  `ExecFields`, pinned by a golden test: a change of the format would make
+  every device ask again, so it is a visible change.
+* **Saving a host in this device's editor approves its current values**
+  (`host_save` with `approve_exec`, in the same transaction as the save): the
+  editor shows every one of these fields, and Save is the user's yes. No other
+  save approves anything: a folder move, a favorite and an import leave the
+  record as it was, so touching a synced host never approves its startup
+  command.
+* **A connection checks the hash** when it is built (`prepare`). A host with
+  no exec-like fields needs nothing. A host whose current fields hash to
+  something else than the approved hash (a record that arrived through sync, or
+  one a sync changed after the approval) connects **without** them: no startup
+  command, no agent forwarding, no environment, no non-loopback forward.
+  Loopback forwards still run, under their own indices. The session says so
+  (`SessionUpdate::ExecPending`, `SessionInfo.exec_pending`, repeated to every
+  view that attaches), and the UI shows a notice with a "Review" button, a
+  toolbar chip and the forwards that were left out.
+* **Approving** is `host_exec_review(id)` (the fields exactly as they are
+  stored, with their hash) and `host_exec_approve(id, hash)`. The backend
+  recomputes the hash from the stored host **in the same transaction** as the
+  write and refuses the approval when it differs, so a frontend (or a sync that
+  lands between the review and the click) cannot approve values the user did
+  not see. The review writes out control and bidirectional characters, so a
+  command cannot look like another.
+* **What approval does not do.** A session that is already open, its
+  automatic reconnects and its duplicates keep the parameters they were
+  started with: approval applies to the next new connection. A forward with a
+  loopback bind can still reach, from the server, whatever its target names
+  when it is a remote forward; that is the same trust as the target a user
+  types, and is not gated.
+
 ## Security considerations
 
 * **Synced fields that act.** `startup_command`, `agent_forward`, `forwards`
   (a listener on a non-loopback address) and `env` do things when a host is
-  connected to. They are part of the synced record, so whoever can write to the
-  sync account can change what a connection does on every device. This is the
-  same trust placed in synced addresses and users (a changed address already
-  redirects a connection), but these fields reach further. Mitigations in this
-  version: strict validation everywhere, loopback by default, agent forwarding
-  off by default, and the fields are shown in the host editor. A device-local
-  "do not apply synced startup commands or agent forwarding" setting is an
-  open item (TODO.md).
+  connected to. They are part of the synced record, so whoever can write to
+  the sync account could change what a connection does on every device. This
+  is more than a synced address does, so each device approves them itself:
+  see "Local approval of synced fields that act" above.
 * **Agent forwarding** lets the server's administrators (and anyone who can
   read the socket it creates) use the agent for as long as the session lives.
   It is off by default, requested only on the target and never on a jump host.
@@ -163,6 +206,14 @@ one transaction. Key files are only referenced by path.
   time (and a refused edit), not a silent direct connection.
 * A hop's own `jump_chain` is only followed for the first hop; a deliberately
   explicit route (`ProxyJump a,b`) stays explicit.
+* A host that arrives through sync with a startup command, agent forwarding,
+  environment variables or an exposed forward connects without them until the
+  user of that device approves them (or saves the host in the editor). A
+  second device of the same user asks once as well: the approval is per
+  device, by design.
+* Migration 3 adds the `host_exec_approvals` table (device-local, cascades
+  with the host). A database from before it has no approvals, so a host that
+  already has such fields asks once.
 
 ## Alternatives considered
 
@@ -172,6 +223,13 @@ one transaction. Key files are only referenced by path.
   hidden hops, and a cycle check becomes a graph search with no use.
 * **A single `exec` startup command**: loses the interactive shell, which is
   the whole point of the tab.
+* **A device-wide switch "ignore synced startup commands and agent
+  forwarding"** (the first idea): all or nothing, and a user who turns it on
+  loses the feature, one who leaves it off is unprotected. A per-host,
+  per-values approval costs one click for what the user wants and refuses
+  what a sync changed afterwards.
+* **Approve on the synced record itself** (a flag in the host): synced, so
+  the account that is not trusted could set it.
 * **Trust the system known_hosts only with a user setting**: safer, but the
   requested behavior is that a key `ssh` already trusts does not prompt again.
   The rules above keep every mismatch blocking.

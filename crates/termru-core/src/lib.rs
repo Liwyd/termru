@@ -5,6 +5,7 @@
 //! database access).
 
 pub mod error;
+pub mod exec_approval;
 pub mod host;
 pub mod identity;
 pub mod ids;
@@ -15,6 +16,7 @@ pub mod validate;
 pub mod workspace;
 
 pub use error::CoreError;
+pub use exec_approval::ExecFields;
 pub use host::{AuthKind, AuthMethod, EnvVar, Forward, ForwardKind, Host};
 pub use identity::Identity;
 pub use preference::Preferences;

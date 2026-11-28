@@ -1,12 +1,18 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import EditorSection from './EditorSection.svelte';
   import Field from './Field.svelte';
+  import HostAdvancedFields from './HostAdvancedFields.svelte';
+  import HostForwardsSection from './HostForwardsSection.svelte';
+  import HostJumpSection from './HostJumpSection.svelte';
   import Icon from './Icon.svelte';
   import PageHeader from './PageHeader.svelte';
   import SessionDialog from './SessionDialog.svelte';
+  import { hasExecFields, sshForwardFlag } from '../forwards';
   import { HostForm } from '../host-form.svelte';
   import { api } from '../ipc';
   import { currentWindow } from '../ipc-backend';
+  import { execApproval } from '../stores/exec-approval.svelte';
   import { connectFlow } from '../stores/connect.svelte';
   import { errorMessage, hosts } from '../stores/hosts.svelte';
   import { identities } from '../stores/identities.svelte';
@@ -36,7 +42,14 @@
    * that was parked while the identities page was open comes back as it was
    * left.
    */
-  const form = new HostForm(route.editHost, { draft: route.draft });
+  const form = new HostForm(route.editHost, {
+    draft: route.draft,
+    // The route through the jump hosts is resolved against the library.
+    lookup: (id) => {
+      const found = hosts.hosts.find((entry) => entry.id === id && !entry.deleted);
+      return found ? { name: found.name, jump_chain: found.jump_chain ?? [] } : undefined;
+    },
+  });
 
   onMount(() => {
     // The parked draft was handed over; it is not kept a second time.
@@ -92,6 +105,29 @@
     } else {
       credential = { ...credential, passphrase: false };
     }
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // A host that came through sync may carry a startup command, agent
+  // forwarding, an environment or an exposed forward this device has not
+  // approved. The editor shows them, and saving is the user's yes: say so.
+  let execPending = $state(false);
+  /** The hash of the fields the review showed: what a Save without changes approves. */
+  let execHash = $state<string | null>(null);
+  onMount(() => {
+    const saved = route.editHost;
+    if (form.isNew || !saved || !hasExecFields(saved)) return;
+    let cancelled = false;
+    void api.hostExecReview(saved.id).then(
+      (review) => {
+        if (cancelled) return;
+        execPending = review?.pending === true;
+        execHash = review?.hash ?? null;
+      },
+      () => undefined,
+    );
     return () => {
       cancelled = true;
     };
@@ -190,7 +226,28 @@
     const address = form.address.trim() || 'host';
     const port = parsePort(form.portText);
     const portPart = port !== null && port !== 22 ? ` -p ${port}` : '';
-    return `ssh ${user}@${address}${portPart}`;
+    return `ssh${flags}${' '}${user}@${address}${portPart}`;
+  });
+  // What the new sections add to the command: `-J`, `-L`/`-R`/`-D`, `-A`.
+  const flags = $derived.by(() => {
+    let text = '';
+    const route = form.route;
+    if (route?.ok && route.route.length > 0) {
+      const hops = route.route.flatMap((id) => {
+        const hop = hosts.hosts.find((entry) => entry.id === id);
+        return hop
+          ? [`${hop.username}@${hop.address}${hop.port === 22 ? '' : `:${hop.port}`}`]
+          : [];
+      });
+      if (hops.length > 0) text += ` -J ${hops.join(',')}`;
+    }
+    for (const row of form.forwardRows) {
+      if (!row.enabled) continue;
+      const flag = sshForwardFlag(row);
+      if (flag) text += ` ${flag}`;
+    }
+    if (form.agentForward) text += ' -A';
+    return text;
   });
   const authSummary = $derived.by(() => {
     if (form.authType === 'agent') return 'SSH agent authentication';
@@ -222,8 +279,20 @@
       term: 'host-term',
       keepalive: 'host-keepalive',
       description: 'host-description',
+      jump: 'host-jump-add',
+      forwards: 'host-forwards-add',
+      env: 'host-env-add',
+      startup: 'host-startup',
+      authOrder: 'host-auth-add',
     };
-    document.getElementById(ids[field])?.focus();
+    // A list of rows: the first row with an error, else the section's own control.
+    const rows: Partial<Record<HostField, string>> = {
+      forwards: '[aria-labelledby="sec-forwards"] [aria-invalid="true"]',
+      env: '[aria-labelledby="sec-advanced"] [id^="host-env-"][aria-invalid="true"]',
+    };
+    const selector = rows[field];
+    const broken = selector ? document.querySelector<HTMLElement>(selector) : null;
+    (broken ?? document.getElementById(ids[field]))?.focus();
   }
 
   async function save(connect: boolean): Promise<void> {
@@ -234,9 +303,26 @@
       if (form.firstInvalid) await focusField(form.firstInvalid);
       return;
     }
-    // Nothing changed on a host that exists: there is nothing to write.
+    // Nothing changed on a host that exists: there is nothing to write. Its
+    // synced settings that are not approved here are the exception: Save is
+    // the yes to what the page shows, so it approves them (the backend checks
+    // that they are still the ones the review listed).
     if (!form.dirty && !form.isNew) {
       const existing = route.editHost;
+      if (existing && execPending && execHash) {
+        try {
+          await api.hostExecApprove(existing.id, execHash);
+          execPending = false;
+          notify({
+            key: 'host.exec-approved',
+            entityId: existing.id,
+            values: { name: existing.name },
+          });
+        } catch (err) {
+          formError = errorMessage(err);
+          return;
+        }
+      }
       if (connect && existing) void connectFlow.request(existing);
       else route.back();
       return;
@@ -244,7 +330,7 @@
     saving = true;
     let saved: Host | null = null;
     try {
-      saved = await hosts.save(form.toHost());
+      saved = await hosts.save(form.toHost(), { approveExec: true });
       if (!saved) {
         const message = hosts.saveError ?? 'Could not save the host.';
         if (form.refuse(message)) {
@@ -390,333 +476,323 @@
       }}
     >
       <div class="sections">
-        <section class="section" aria-labelledby="sec-connection">
-          <div class="meta">
-            <p class="wp-label step"><span>01</span> / CONNECTION</p>
-            <h2 id="sec-connection">Where to connect</h2>
-            <p class="blurb">Use an IP address or hostname. SSH uses port 22 by default.</p>
-          </div>
-          <div class="fields">
-            <div class="row two">
-              <Field label="Name" id="host-name" error={form.errorFor('name')}>
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="text"
-                    autocomplete="off"
-                    spellcheck="false"
-                    bind:value={form.name}
-                    oninput={() => form.edited('name')}
-                    onblur={() => form.touch('name')}
-                  />
-                {/snippet}
-              </Field>
-              <Field label="Username" id="host-username" error={form.errorFor('username')}>
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="text"
-                    autocomplete="off"
-                    autocapitalize="off"
-                    spellcheck="false"
-                    bind:value={form.username}
-                    oninput={() => form.edited('username')}
-                    onblur={() => form.touch('username')}
-                  />
-                {/snippet}
-              </Field>
-            </div>
-            <div class="row address">
-              <Field
-                label="Address"
-                id="host-address"
-                error={form.errorFor('address')}
-                hint={addressNote ? `✓ ${addressNote}` : null}
-              >
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="text"
-                    placeholder="example.com"
-                    autocomplete="off"
-                    autocapitalize="off"
-                    spellcheck="false"
-                    bind:value={form.address}
-                    oninput={() => form.edited('address')}
-                    onblur={() => form.touch('address')}
-                  />
-                {/snippet}
-              </Field>
-              <Field label="Port" id="host-port" error={form.errorFor('port')}>
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="text"
-                    inputmode="numeric"
-                    placeholder="22"
-                    autocomplete="off"
-                    bind:value={form.portText}
-                    oninput={() => form.edited('port')}
-                    onblur={() => {
-                      if (form.portText.trim() === '') form.portText = '22';
-                      form.touch('port');
-                    }}
-                  />
-                {/snippet}
-              </Field>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="sec-auth">
-          <div class="meta">
-            <p class="wp-label step"><span>02</span> / AUTHENTICATION</p>
-            <h2 id="sec-auth">How to sign in</h2>
-            <p class="blurb">
-              Choose a password, a local identity or your SSH agent. Nothing secret is synced.
-            </p>
-          </div>
-          <div class="fields">
-            <div class="choices" role="radiogroup" aria-label="Authentication method">
-              {#each AUTH_CHOICES as choice (choice.value)}
-                <label class="choice" class:selected={form.authType === choice.value}>
-                  <input type="radio" name="auth" value={choice.value} bind:group={form.authType} />
-                  <span class="mark" aria-hidden="true"
-                    >{form.authType === choice.value ? '●' : '○'}</span
-                  >
-                  {choice.label}
-                </label>
-              {/each}
-            </div>
-
-            {#if form.authType === 'password'}
-              <Field label="Password" id="host-password">
-                {#snippet control(attrs)}
-                  <div class="secret">
-                    <input
-                      {...attrs}
-                      type={revealPassword ? 'text' : 'password'}
-                      autocomplete="new-password"
-                      placeholder={credential.password === true
-                        ? 'Saved on this device · type to replace'
-                        : 'Asked on connect unless you type one'}
-                      bind:value={form.password}
-                    />
-                    <button
-                      type="button"
-                      class="reveal quiet"
-                      aria-label={revealPassword ? 'Hide password' : 'Show password'}
-                      onclick={() => (revealPassword = !revealPassword)}
-                    >
-                      {revealPassword ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-                {/snippet}
-              </Field>
-              <label class="check">
-                <input type="checkbox" bind:checked={form.savePassword} />
-                <span
-                  >Save in this device’s credential store
-                  <span class="muted">· Otherwise ask on connect</span></span
-                >
-              </label>
-            {:else if form.authType === 'private_key'}
-              <Field label="Identity" id="host-identity" error={form.errorFor('identity')}>
-                {#snippet control(attrs)}
-                  <select
-                    {...attrs}
-                    bind:value={form.identityId}
-                    onchange={() => form.edited('identity')}
-                    onblur={() => form.touch('identity')}
-                  >
-                    <option value="">Select an identity…</option>
-                    {#each hosts.identities as entry (entry.id)}
-                      <option value={entry.id}>{entry.name}</option>
-                    {/each}
-                  </select>
-                {/snippet}
-              </Field>
-              {#if identity}
-                <p class="keyline">
-                  {#if keyPath}
-                    <span class="muted">Key file</span> <code>{keyPath}</code>
-                  {:else}
-                    <span class="warn">No key file is bound to this identity on this device.</span>
-                  {/if}
-                  {#if keyState?.status === 'ready'}
-                    <br /><span class="muted">Fingerprint</span>
-                    <code>{keyState.info.fingerprint}</code>
-                  {/if}
-                </p>
-              {:else if hosts.identities.length === 0}
-                <p class="blurb">
-                  No identities yet. Create one, or generate a key, in Identities.
-                </p>
-              {/if}
-              <button type="button" class="link" onclick={manageIdentities}
-                >Manage identities…</button
-              >
-            {:else}
-              <p class="blurb">
-                Termru asks your running SSH agent to sign. No key and no password is stored for
-                this host.
-              </p>
-            {/if}
-            <p class="blurb">
-              Servers that ask for a one-time code or a second factor (keyboard-interactive) are
-              handled automatically: Termru asks when the server does.
-            </p>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="sec-org">
-          <div class="meta">
-            <p class="wp-label step"><span>03</span> / ORGANIZATION</p>
-            <h2 id="sec-org">Make it easy to find</h2>
-            <p class="blurb">A host belongs to one folder. Favorites and tags are independent.</p>
-          </div>
-          <div class="fields">
-            <div class="row folder">
-              <Field label="Folder" id="host-folder">
-                {#snippet control(attrs)}
-                  <select {...attrs} bind:value={form.groupId}>
-                    <option value="">No folder</option>
-                    {#each hosts.folderOptions as option (option.id)}
-                      <option value={option.id}>{option.label}</option>
-                    {/each}
-                  </select>
-                {/snippet}
-              </Field>
-              <button
-                type="button"
-                class="favorite"
-                aria-pressed={form.favorite}
-                onclick={() => (form.favorite = !form.favorite)}
-              >
-                <svg
-                  viewBox="0 0 20 20"
-                  width="16"
-                  height="16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path
-                    d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
-                    fill={form.favorite ? 'currentColor' : 'none'}
-                    stroke="currentColor"
-                    stroke-width="1.4"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-                {form.favorite ? 'Favorited' : 'Favorite'}
-              </button>
-            </div>
-
-            <fieldset class="tags">
-              <legend>Tags</legend>
-              {#if hosts.tags.length > 0}
-                <div class="chips">
-                  {#each hosts.tags as tag (tag.id)}
-                    <button
-                      type="button"
-                      class="chip"
-                      class:on={form.tags.includes(tag.id)}
-                      aria-pressed={form.tags.includes(tag.id)}
-                      onclick={() => form.toggleTag(tag.id)}
-                    >
-                      {#if form.tags.includes(tag.id)}<Icon name="check" size={12} />{/if}
-                      {tag.name}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-              <div class="new-tag">
-                <input
-                  type="text"
-                  aria-label="New tag"
-                  aria-invalid={tagError ? 'true' : undefined}
-                  aria-describedby={tagError ? 'host-tag-error' : undefined}
-                  placeholder="New tag"
-                  maxlength="64"
-                  bind:value={newTag}
-                  onkeydown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void addTag();
-                    }
-                  }}
-                />
-                <button type="button" onclick={() => void addTag()}>Add tag</button>
-              </div>
-              {#if tagError}<p class="field-error" id="host-tag-error" role="alert">
-                  {tagError}
-                </p>{/if}
-            </fieldset>
-
-            <Field
-              label="Comment"
-              id="host-description"
-              optional
-              error={form.errorFor('description')}
-            >
+        <EditorSection
+          step="01"
+          label="CONNECTION"
+          id="sec-connection"
+          title="Where to connect"
+          blurb="Use an IP address or hostname. SSH uses port 22 by default."
+        >
+          <div class="row two">
+            <Field label="Name" id="host-name" error={form.errorFor('name')}>
               {#snippet control(attrs)}
                 <input
                   {...attrs}
                   type="text"
                   autocomplete="off"
-                  bind:value={form.description}
-                  oninput={() => form.edited('description')}
-                  onblur={() => form.touch('description')}
+                  spellcheck="false"
+                  bind:value={form.name}
+                  oninput={() => form.edited('name')}
+                  onblur={() => form.touch('name')}
+                />
+              {/snippet}
+            </Field>
+            <Field label="Username" id="host-username" error={form.errorFor('username')}>
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  bind:value={form.username}
+                  oninput={() => form.edited('username')}
+                  onblur={() => form.touch('username')}
                 />
               {/snippet}
             </Field>
           </div>
-        </section>
+          <div class="row address">
+            <Field
+              label="Address"
+              id="host-address"
+              error={form.errorFor('address')}
+              hint={addressNote ? `✓ ${addressNote}` : null}
+            >
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="text"
+                  placeholder="example.com"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  bind:value={form.address}
+                  oninput={() => form.edited('address')}
+                  onblur={() => form.touch('address')}
+                />
+              {/snippet}
+            </Field>
+            <Field label="Port" id="host-port" error={form.errorFor('port')}>
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="22"
+                  autocomplete="off"
+                  bind:value={form.portText}
+                  oninput={() => form.edited('port')}
+                  onblur={() => {
+                    if (form.portText.trim() === '') form.portText = '22';
+                    form.touch('port');
+                  }}
+                />
+              {/snippet}
+            </Field>
+          </div>
+        </EditorSection>
 
-        <section class="section" aria-labelledby="sec-advanced">
-          <div class="meta">
-            <p class="wp-label step"><span>04</span> / ADVANCED</p>
-            <h2 id="sec-advanced">Terminal and keepalive</h2>
-            <p class="blurb">The defaults suit most servers. Change them only for a reason.</p>
+        <EditorSection
+          step="02"
+          label="AUTHENTICATION"
+          id="sec-auth"
+          title="How to sign in"
+          blurb="Choose a password, a local identity or your SSH agent. Nothing secret is synced."
+        >
+          <div class="choices" role="radiogroup" aria-label="Authentication method">
+            {#each AUTH_CHOICES as choice (choice.value)}
+              <label class="choice" class:selected={form.authType === choice.value}>
+                <input type="radio" name="auth" value={choice.value} bind:group={form.authType} />
+                <span class="mark" aria-hidden="true"
+                  >{form.authType === choice.value ? '●' : '○'}</span
+                >
+                {choice.label}
+              </label>
+            {/each}
           </div>
-          <div class="fields">
-            <div class="row two">
-              <Field label="Terminal type" id="host-term" error={form.errorFor('term')}>
-                {#snippet control(attrs)}
+
+          {#if form.authType === 'password'}
+            <Field label="Password" id="host-password">
+              {#snippet control(attrs)}
+                <div class="secret">
                   <input
                     {...attrs}
-                    type="text"
-                    autocomplete="off"
-                    autocapitalize="off"
-                    spellcheck="false"
-                    bind:value={form.term}
-                    oninput={() => form.edited('term')}
-                    onblur={() => form.touch('term')}
+                    type={revealPassword ? 'text' : 'password'}
+                    autocomplete="new-password"
+                    placeholder={credential.password === true
+                      ? 'Saved on this device · type to replace'
+                      : 'Asked on connect unless you type one'}
+                    bind:value={form.password}
                   />
-                {/snippet}
-              </Field>
-              <Field
-                label="Keepalive (seconds)"
-                id="host-keepalive"
-                error={form.errorFor('keepalive')}
-                hint={keepaliveNote}
+                  <button
+                    type="button"
+                    class="reveal quiet"
+                    aria-label={revealPassword ? 'Hide password' : 'Show password'}
+                    onclick={() => (revealPassword = !revealPassword)}
+                  >
+                    {revealPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              {/snippet}
+            </Field>
+            <label class="check">
+              <input type="checkbox" bind:checked={form.savePassword} />
+              <span
+                >Save in this device’s credential store
+                <span class="muted">· Otherwise ask on connect</span></span
               >
-                {#snippet control(attrs)}
-                  <input
-                    {...attrs}
-                    type="text"
-                    inputmode="numeric"
-                    placeholder={keepaliveLabel(0)}
-                    autocomplete="off"
-                    bind:value={form.keepaliveText}
-                    oninput={() => form.edited('keepalive')}
-                    onblur={() => form.touch('keepalive')}
-                  />
-                {/snippet}
-              </Field>
-            </div>
+            </label>
+          {:else if form.authType === 'private_key'}
+            <Field label="Identity" id="host-identity" error={form.errorFor('identity')}>
+              {#snippet control(attrs)}
+                <select
+                  {...attrs}
+                  bind:value={form.identityId}
+                  onchange={() => form.edited('identity')}
+                  onblur={() => form.touch('identity')}
+                >
+                  <option value="">Select an identity…</option>
+                  {#each hosts.identities as entry (entry.id)}
+                    <option value={entry.id}>{entry.name}</option>
+                  {/each}
+                </select>
+              {/snippet}
+            </Field>
+            {#if identity}
+              <p class="keyline">
+                {#if keyPath}
+                  <span class="muted">Key file</span> <code>{keyPath}</code>
+                {:else}
+                  <span class="warn">No key file is bound to this identity on this device.</span>
+                {/if}
+                {#if keyState?.status === 'ready'}
+                  <br /><span class="muted">Fingerprint</span>
+                  <code>{keyState.info.fingerprint}</code>
+                {/if}
+              </p>
+            {:else if hosts.identities.length === 0}
+              <p class="blurb">No identities yet. Create one, or generate a key, in Identities.</p>
+            {/if}
+            <button type="button" class="link" onclick={manageIdentities}>Manage identities…</button
+            >
+          {:else}
+            <p class="blurb">
+              Termru asks your running SSH agent to sign. No key and no password is stored for this
+              host.
+            </p>
+          {/if}
+          <p class="blurb">
+            Servers that ask for a one-time code or a second factor (keyboard-interactive) are
+            handled automatically: Termru asks when the server does.
+          </p>
+        </EditorSection>
+
+        <EditorSection
+          step="03"
+          label="ORGANIZATION"
+          id="sec-org"
+          title="Make it easy to find"
+          blurb="A host belongs to one folder. Favorites and tags are independent."
+        >
+          <div class="row folder">
+            <Field label="Folder" id="host-folder">
+              {#snippet control(attrs)}
+                <select {...attrs} bind:value={form.groupId}>
+                  <option value="">No folder</option>
+                  {#each hosts.folderOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              {/snippet}
+            </Field>
+            <button
+              type="button"
+              class="favorite"
+              aria-pressed={form.favorite}
+              onclick={() => (form.favorite = !form.favorite)}
+            >
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false">
+                <path
+                  d="M10 2.2l2.36 4.97 5.44.7-4 3.76 1.02 5.4L10 14.38 5.18 17.03l1.02-5.4-4-3.76 5.44-.7z"
+                  fill={form.favorite ? 'currentColor' : 'none'}
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              {form.favorite ? 'Favorited' : 'Favorite'}
+            </button>
           </div>
-        </section>
+
+          <fieldset class="tags">
+            <legend>Tags</legend>
+            {#if hosts.tags.length > 0}
+              <div class="chips">
+                {#each hosts.tags as tag (tag.id)}
+                  <button
+                    type="button"
+                    class="chip"
+                    class:on={form.tags.includes(tag.id)}
+                    aria-pressed={form.tags.includes(tag.id)}
+                    onclick={() => form.toggleTag(tag.id)}
+                  >
+                    {#if form.tags.includes(tag.id)}<Icon name="check" size={12} />{/if}
+                    {tag.name}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            <div class="new-tag">
+              <input
+                type="text"
+                aria-label="New tag"
+                aria-invalid={tagError ? 'true' : undefined}
+                aria-describedby={tagError ? 'host-tag-error' : undefined}
+                placeholder="New tag"
+                maxlength="64"
+                bind:value={newTag}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void addTag();
+                  }
+                }}
+              />
+              <button type="button" onclick={() => void addTag()}>Add tag</button>
+            </div>
+            {#if tagError}<p class="field-error" id="host-tag-error" role="alert">
+                {tagError}
+              </p>{/if}
+          </fieldset>
+
+          <Field
+            label="Comment"
+            id="host-description"
+            optional
+            error={form.errorFor('description')}
+          >
+            {#snippet control(attrs)}
+              <input
+                {...attrs}
+                type="text"
+                autocomplete="off"
+                bind:value={form.description}
+                oninput={() => form.edited('description')}
+                onblur={() => form.touch('description')}
+              />
+            {/snippet}
+          </Field>
+        </EditorSection>
+
+        <HostJumpSection {form} />
+
+        <HostForwardsSection {form} />
+
+        <EditorSection
+          step="06"
+          label="ADVANCED"
+          id="sec-advanced"
+          title="Terminal, session and sign-in"
+          blurb="The defaults suit most servers. Change them only for a reason."
+        >
+          <div class="row two">
+            <Field label="Terminal type" id="host-term" error={form.errorFor('term')}>
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  bind:value={form.term}
+                  oninput={() => form.edited('term')}
+                  onblur={() => form.touch('term')}
+                />
+              {/snippet}
+            </Field>
+            <Field
+              label="Keepalive (seconds)"
+              id="host-keepalive"
+              error={form.errorFor('keepalive')}
+              hint={keepaliveNote}
+            >
+              {#snippet control(attrs)}
+                <input
+                  {...attrs}
+                  type="text"
+                  inputmode="numeric"
+                  placeholder={keepaliveLabel(0)}
+                  autocomplete="off"
+                  bind:value={form.keepaliveText}
+                  oninput={() => form.edited('keepalive')}
+                  onblur={() => form.touch('keepalive')}
+                />
+              {/snippet}
+            </Field>
+          </div>
+          <HostAdvancedFields {form} />
+        </EditorSection>
       </div>
 
       <aside class="rail" aria-label="Summary of this host">
@@ -767,6 +843,20 @@
             <p>Authentication goes through your SSH agent. Termru stores nothing for this host.</p>
           {/if}
         </section>
+
+        {#if execPending}
+          <section class="credential approval" aria-labelledby="rail-approval">
+            <p class="wp-label accent" id="rail-approval">NOT APPROVED ON THIS DEVICE</p>
+            <p>
+              This host has a startup command, agent forwarding, environment variables or a forward
+              on another address that came from sync. Connections leave them out until you approve
+              them. Saving approves exactly what this page shows.
+            </p>
+            <button type="button" onclick={() => void execApproval.show(form.hostId)}>
+              Review them…
+            </button>
+          </section>
+        {/if}
 
         <section class="preview" aria-labelledby="rail-preview">
           <p class="wp-label" id="rail-preview">CONNECTION PREVIEW</p>
@@ -890,53 +980,11 @@
     min-width: 0;
   }
 
-  .section {
-    display: grid;
-    grid-template-columns: 208px minmax(0, 1fr);
-    column-gap: 30px;
-    padding: var(--termru-space-5) 0;
-    border-top: 1px solid var(--termru-border);
-  }
-
-  .section:first-child {
-    border-top: none;
-    padding-top: 0;
-  }
-
-  .meta {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-2);
-    min-width: 0;
-  }
-
-  .step span {
-    color: var(--termru-accent);
-  }
-
-  .step {
-    color: var(--termru-accent);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 18px;
-    line-height: 28px;
-    font-weight: var(--termru-text-heading-weight);
-  }
-
   .blurb {
     margin: 0;
     font-size: var(--termru-text-control-size);
     line-height: var(--termru-text-control-lh);
     color: var(--termru-muted);
-  }
-
-  .fields {
-    display: flex;
-    flex-direction: column;
-    gap: var(--termru-space-4);
-    min-width: 0;
   }
 
   .row {
@@ -1242,11 +1290,6 @@
   }
 
   @media (max-width: 860px) {
-    .section {
-      grid-template-columns: minmax(0, 1fr);
-      row-gap: var(--termru-space-4);
-    }
-
     .row.two {
       grid-template-columns: minmax(0, 1fr);
     }

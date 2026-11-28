@@ -129,7 +129,7 @@ bar (Reconnect, Close session).
 
 ### Host editor
 
-Order: the "Hosts" crumb, then the four sections top to bottom, the rail, the
+Order: the "Hosts" crumb, then the six sections top to bottom, the rail, the
 footer.
 
 | Section | Controls |
@@ -137,14 +137,32 @@ footer.
 | 01 Connection | Name, Username, Address, Port |
 | 02 Authentication | Method (three radio buttons: Left and Right move, Space selects), then the password field and "Save in this device's credential store", or the Identity select and "Manage identities…", or nothing for the agent |
 | 03 Organization | Folder, Favorite (a toggle), Tags (one toggle per tag), New tag with Add tag (Enter in the field adds), Comment |
-| 04 Advanced | Terminal type, Keepalive |
-| Rail | Forget password, Forget passphrase (when one is stored) |
+| 04 Jump hosts | Per hop: move earlier, move later, remove (a button at either end says why it does nothing); then the "Add a jump host" select (Arrow keys choose, the host is added at once). The route (`you → bastion → app`) is a polite live region; a problem with the route is the select's error |
+| 05 Port forwards | Per forward: Type (select), Bind address, Bind port, Target host and Target port (not for a SOCKS forward), the Enabled switch, Remove. Then Add forward (the focus goes to the new row's Type) |
+| 06 Advanced | Terminal type, Keepalive; Environment variables (a name and a value per row, Remove, Add variable); Startup command; Forward my SSH agent (a checkbox; its risk is the text under it); Authentication order (two radio buttons, then for a custom order each method with earlier, later and remove, and an Add a method select) |
+| Rail | Forget password, Forget passphrase (when one is stored); "Review them…" when the synced settings of the host are not approved on this device |
 | Footer | Cancel, Save host, Save & connect |
+
+After a row is added, moved or removed the focus stays on the control that was used
+(or on the Add button after a removal). An error of a forward or a variable is
+on the field of its row (`aria-invalid` and `aria-describedby`); an error about a
+whole section (too many, a refusal by the backend) is a message the section's Add
+control points at.
 
 A field is checked when you leave it. Save host with a problem focuses the
 first field that has one and announces "Fix N fields before saving". Leaving
 with unsaved changes (the Hosts crumb, a nav item, Cancel, closing the window)
 asks first: the question focuses Keep editing; Escape keeps editing.
+
+### Forwards menu, approval review and SSH config import
+
+| Control | How | Operate |
+|---|---|---|
+| Forwards chip | Tab in the session toolbar, after the folder | Enter or Space opens a menu with one entry per forward and its state (a failed one is read, not chosen: its reason is on the entry and in its title); choosing a listening one copies its address. Same keys as every menu |
+| "Synced settings off" chip | the next stop | Opens the approval review |
+| Approval review | a dialog; it focuses "Approve on this device" | Enter approves, Escape or "Not now" closes without approving. The fields are text; control and bidirectional characters are written out as `‹U+202E›` |
+| Import from SSH config | Hosts page, next to New host | A dialog with a checkbox per host (a host that cannot be ticked says why under it, and the checkbox points at the reason), "Select all new", "Select none", Cancel, Import N hosts. The result is a summary; Done closes |
+| Connect dialog with jump hosts | a field per hop first, then the host's own | Each hop's field is labelled "Password for *name*" with its own "Save … in this device's credential store" box; an empty one says which hop it is |
 
 ### Folders
 

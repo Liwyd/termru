@@ -1,4 +1,5 @@
-import type { Host } from '../types';
+import type { EnvRow, ForwardRow } from '../host-form.svelte';
+import type { AuthKind, Host } from '../types';
 import { unsaved } from './unsaved.svelte';
 
 /**
@@ -16,6 +17,12 @@ export interface HostEditDraft {
   keepaliveText?: string;
   /** Whether the "keep the password on this device" box was ticked. */
   savePassword?: boolean;
+  /** The sections of data model v2, as typed (rows keep their text). */
+  jumpChain?: string[];
+  forwardRows?: ForwardRow[];
+  envRows?: EnvRow[];
+  /** `null` is "Automatic". */
+  authOrder?: AuthKind[] | null;
 }
 
 /** How many previous pages `back()` remembers. */

@@ -251,3 +251,314 @@ describe('saved, parked and restored', () => {
     expect(form.dirty).toBe(false);
   });
 });
+
+describe('the sections of data model v2', () => {
+  const bastion = { name: 'bastion', jump_chain: [] as string[] };
+  const lookup = (id: string) => (id === 'b1' ? bastion : undefined);
+
+  function rich(): Host {
+    return host({
+      jump_chain: ['b1'],
+      forwards: [
+        {
+          kind: 'local',
+          bind_address: '127.0.0.1',
+          bind_port: 5433,
+          target_host: 'db',
+          target_port: 5432,
+          enabled: true,
+        },
+        { kind: 'dynamic', bind_port: 1080, enabled: false },
+      ],
+      env: [{ name: 'LANG', value: 'C.UTF-8' }],
+      startup_command: 'tmux new -A -s main',
+      agent_forward: true,
+      auth_order: ['agent', 'password'],
+    });
+  }
+
+  it('starts clean with the host as it is and saves it back unchanged', () => {
+    const base = rich();
+    const form = new HostForm(base, { lookup });
+    expect(form.dirty).toBe(false);
+    expect(form.errorCount).toBe(0);
+    expect(form.jumpChain).toEqual(['b1']);
+    expect(form.forwardRows.map((row) => [row.kind, row.bindPortText, row.enabled])).toEqual([
+      ['local', '5433', true],
+      ['dynamic', '1080', false],
+    ]);
+    expect(form.envRows.map((row) => [row.name, row.value])).toEqual([['LANG', 'C.UTF-8']]);
+    expect(form.startupCommand).toBe('tmux new -A -s main');
+    expect(form.agentForward).toBe(true);
+    expect(form.authOrder).toEqual(['agent', 'password']);
+    expect(form.toHost()).toEqual(base);
+  });
+
+  it('leaves a plain host exactly as it was: none of the new keys appear', () => {
+    const form = new HostForm(host(), { lookup });
+    const saved = form.toHost();
+    for (const key of [
+      'jump_chain',
+      'forwards',
+      'env',
+      'startup_command',
+      'agent_forward',
+      'auth_order',
+    ]) {
+      expect(saved, key).not.toHaveProperty(key);
+    }
+    expect(saved).toEqual(host());
+    // An untouched form is clean, and adding then removing something is clean again.
+    const key = form.addForward();
+    expect(form.dirty).toBe(true);
+    form.removeForward(key);
+    expect(form.dirty).toBe(false);
+  });
+
+  it('writes what was emptied as empty, not as the old value', () => {
+    const form = new HostForm(rich(), { lookup });
+    form.jumpChain = [];
+    form.forwardRows = [];
+    form.envRows = [];
+    form.startupCommand = '  ';
+    form.agentForward = false;
+    form.authOrder = null;
+    const saved = form.toHost();
+    expect(saved.jump_chain).toEqual([]);
+    expect(saved.forwards).toEqual([]);
+    expect(saved.env).toEqual([]);
+    expect(saved.startup_command).toBeNull();
+    expect(saved.agent_forward).toBe(false);
+    expect(saved.auth_order).toBeNull();
+  });
+
+  it('counts every section as a change', () => {
+    const form = new HostForm(rich(), { lookup });
+    const dirty = (change: () => void, undo: () => void) => {
+      change();
+      expect(form.dirty).toBe(true);
+      undo();
+      expect(form.dirty).toBe(false);
+    };
+    dirty(
+      () => (form.startupCommand = 'htop'),
+      () => (form.startupCommand = 'tmux new -A -s main'),
+    );
+    dirty(
+      () => (form.agentForward = false),
+      () => (form.agentForward = true),
+    );
+    dirty(
+      () => (form.envRows[0].value = 'C'),
+      () => (form.envRows[0].value = 'C.UTF-8'),
+    );
+    dirty(
+      () => (form.forwardRows[0].bindPortText = '5434'),
+      () => (form.forwardRows[0].bindPortText = '5433'),
+    );
+    dirty(
+      () => form.moveAuth('agent', 1),
+      () => form.moveAuth('agent', -1),
+    );
+    dirty(
+      () => form.removeHop('b1'),
+      () => form.addHop('b1'),
+    );
+  });
+
+  describe('jump hosts', () => {
+    it('adds a hop once, reorders, removes and stays within 8', () => {
+      const form = new HostForm(host({ id: 'me' }), { lookup: () => ({ name: 'x' }) });
+      form.addHop('a');
+      form.addHop('b');
+      form.addHop('a');
+      expect(form.jumpChain).toEqual(['a', 'b']);
+      form.moveHop('b', -1);
+      expect(form.jumpChain).toEqual(['b', 'a']);
+      // The ends do not move past the list.
+      form.moveHop('b', -1);
+      form.moveHop('a', 1);
+      expect(form.jumpChain).toEqual(['b', 'a']);
+      form.removeHop('b');
+      expect(form.jumpChain).toEqual(['a']);
+      for (const id of ['c', 'd', 'e', 'f', 'g', 'h', 'i']) form.addHop(id);
+      expect(form.jumpChain).toHaveLength(8);
+      expect(form.canAddHop).toBe(false);
+    });
+
+    it('resolves the route and says what is wrong with it', () => {
+      const form = new HostForm(host({ id: 'me' }), {
+        lookup: (id) =>
+          id === 'bastion'
+            ? { name: 'bastion', jump_chain: ['gateway'] }
+            : id === 'gateway'
+              ? { name: 'gateway' }
+              : undefined,
+      });
+      expect(form.route).toBeNull();
+      form.addHop('bastion');
+      expect(form.route).toEqual({ ok: true, route: ['gateway', 'bastion'] });
+      expect(form.errors.jump).toBeUndefined();
+      form.addHop('deleted');
+      expect(form.route).toMatchObject({ ok: false });
+      expect(form.errors.jump).toMatch(/does not exist/);
+      expect(form.firstInvalid).toBe('jump');
+      // Adding a hop is an interaction with the section: its error shows at once.
+      expect(form.errorFor('jump')).toMatch(/does not exist/);
+    });
+
+    it('catches a cycle that goes back through the stored hosts', () => {
+      const form = new HostForm(host({ id: 'me', name: 'app' }), {
+        lookup: (id) => (id === 'a' ? { name: 'alpha', jump_chain: ['me'] } : undefined),
+      });
+      form.addHop('a');
+      expect(form.errors.jump).toMatch(/cycle/);
+    });
+  });
+
+  describe('forwards', () => {
+    it('adds a row, edits it and builds the forward from the text', () => {
+      const form = new HostForm(host());
+      const key = form.addForward('local');
+      const row = form.forwardRows.find((entry) => entry.key === key);
+      expect(row).toBeDefined();
+      if (!row) return;
+      // A new row is empty: it cannot be saved yet, and says so on the save.
+      expect(form.errors.forwards).toBeDefined();
+      expect(form.forwardError(0, 'bindPort')).toBeNull();
+      form.submit();
+      expect(form.forwardError(0, 'bindPort')).toBe('Bind port is required.');
+      row.bindPortText = '8080';
+      row.targetHost = ' db ';
+      row.targetPortText = '5432';
+      expect(form.errors.forwards).toBeUndefined();
+      expect(form.toHost().forwards).toEqual([
+        { kind: 'local', bind_port: 8080, target_host: 'db', target_port: 5432, enabled: true },
+      ]);
+      row.bindAddress = ' 0.0.0.0 ';
+      expect(form.toHost().forwards?.[0].bind_address).toBe('0.0.0.0');
+    });
+
+    it('drops the target when a forward becomes dynamic', () => {
+      const form = new HostForm(host());
+      form.addForward('local');
+      const row = form.forwardRows[0];
+      row.bindPortText = '1080';
+      row.targetHost = 'db';
+      row.targetPortText = '5432';
+      form.setForwardKind(row, 'dynamic');
+      expect(row.targetHost).toBe('');
+      expect(form.errors.forwards).toBeUndefined();
+      expect(form.toHost().forwards).toEqual([{ kind: 'dynamic', bind_port: 1080, enabled: true }]);
+    });
+
+    it('shows a row error once the row was left, and not before', () => {
+      const form = new HostForm(host());
+      const key = form.addForward('local');
+      expect(form.forwardError(0, 'bindPort')).toBeNull();
+      form.touchRow(key);
+      expect(form.forwardError(0, 'bindPort')).toBe('Bind port is required.');
+      expect(form.forwardError(5, 'bindPort')).toBeNull();
+    });
+
+    it('refuses two forwards on one listener and more than 32', () => {
+      const form = new HostForm(host());
+      for (const port of ['8080', '8080']) {
+        form.addForward('dynamic');
+        form.forwardRows[form.forwardRows.length - 1].bindPortText = port;
+      }
+      form.submit();
+      expect(form.errors.forwards).toBeDefined();
+      expect(form.forwardError(1, 'bindPort')).toMatch(/already listens/);
+      const many = new HostForm(host());
+      for (let index = 0; index < 32; index += 1) many.addForward();
+      expect(many.canAddForward).toBe(false);
+    });
+  });
+
+  describe('environment', () => {
+    it('adds and removes rows, and checks the names', () => {
+      const form = new HostForm(host());
+      const key = form.addEnv();
+      form.submit();
+      expect(form.envError(0, 'name')).toBe('Name is required.');
+      form.envRows[0].name = '1BAD';
+      expect(form.envError(0, 'name')).toMatch(/not starting with a digit/);
+      form.envRows[0].name = 'GOOD';
+      expect(form.errors.env).toBeUndefined();
+      form.addEnv();
+      form.envRows[1].name = 'GOOD';
+      expect(form.envError(1, 'name')).toBe('GOOD is listed twice.');
+      form.removeEnv(key);
+      expect(form.errors.env).toBeUndefined();
+      expect(form.toHost().env).toEqual([{ name: 'GOOD', value: '' }]);
+    });
+  });
+
+  describe('startup command and agent forwarding', () => {
+    it('trims the command, and refuses a second line', () => {
+      const form = new HostForm(host());
+      form.startupCommand = '  uptime  ';
+      expect(form.toHost().startup_command).toBe('uptime');
+      form.startupCommand = 'a\u0007b';
+      expect(form.errors.startup).toMatch(/single line/);
+      expect(form.firstInvalid).toBe('startup');
+      form.startupCommand = '';
+      expect(form.errors.startup).toBeUndefined();
+    });
+  });
+
+  describe('authentication order', () => {
+    it('starts from the automatic order of the method and edits it', () => {
+      const form = new HostForm(host({ auth: { type: 'agent' } }));
+      expect(form.authOrder).toBeNull();
+      form.setCustomAuthOrder(true);
+      expect(form.authOrder).toEqual(['agent', 'keyboard_interactive']);
+      form.addAuth('password');
+      form.addAuth('password');
+      expect(form.authOrder).toEqual(['agent', 'keyboard_interactive', 'password']);
+      form.moveAuth('password', -1);
+      expect(form.authOrder).toEqual(['agent', 'password', 'keyboard_interactive']);
+      form.removeAuth('agent');
+      form.removeAuth('password');
+      form.removeAuth('keyboard_interactive');
+      expect(form.authOrder).toEqual([]);
+      expect(form.errors.authOrder).toBe('Name at least one method, or choose Automatic.');
+      form.setCustomAuthOrder(false);
+      expect(form.authOrder).toBeNull();
+      expect(form.errors.authOrder).toBeUndefined();
+    });
+  });
+
+  it('puts what the backend refuses next to its section until it is edited', () => {
+    const form = new HostForm(host(), { lookup });
+    expect(form.refuse('two forwards listen on 127.0.0.1:8080')).toBe(true);
+    expect(form.errorFor('forwards')).toBe('two forwards listen on 127.0.0.1:8080');
+    form.addForward();
+    expect(form.serverErrors.forwards).toBeUndefined();
+    expect(form.refuse('a jump host of web does not exist (was it deleted?)')).toBe(true);
+    expect(form.errorFor('jump')).toMatch(/does not exist/);
+    expect(form.refuse('environment variable A is listed twice')).toBe(true);
+    expect(form.errorFor('env')).toMatch(/listed twice/);
+    expect(form.refuse('startup command must be at most 1024 characters')).toBe(true);
+    expect(form.errorFor('startup')).toMatch(/1024/);
+  });
+
+  it('parks the sections as typed and gets them back', () => {
+    const form = new HostForm(rich(), { lookup });
+    form.addForward('remote');
+    form.forwardRows[2].bindPortText = '90';
+    form.addEnv();
+    form.envRows[1].name = 'HALF';
+    form.startupCommand = 'half typed';
+    form.setCustomAuthOrder(true);
+    const draft = form.toDraft();
+    const back = new HostForm(rich(), { lookup, draft });
+    expect(back.dirty).toBe(true);
+    expect(back.forwardRows.map((row) => row.bindPortText)).toEqual(['5433', '1080', '90']);
+    expect(back.envRows.map((row) => row.name)).toEqual(['LANG', 'HALF']);
+    expect(back.startupCommand).toBe('half typed');
+    expect(back.authOrder).toEqual(['password', 'keyboard_interactive']);
+    expect(back.jumpChain).toEqual(['b1']);
+  });
+});

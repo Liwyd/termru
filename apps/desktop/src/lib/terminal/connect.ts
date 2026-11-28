@@ -13,7 +13,7 @@ import { api } from '../ipc';
 import { Channel } from '../ipc-backend';
 import { errorMessage } from '../stores/hosts.svelte';
 import { sessions, type Pane } from '../stores/sessions.svelte';
-import type { SessionGeometry, SessionInfo, SessionUpdate } from '../types';
+import type { HopSecrets, SessionGeometry, SessionInfo, SessionUpdate } from '../types';
 import { decodeBase64 } from './codec';
 import { fitTerminal, terminalSize, whenFontsReady } from './create';
 import type { TerminalHandle } from './registry';
@@ -139,6 +139,14 @@ async function openOrAttach(
   return openFresh(pane, channel, geometry);
 }
 
+/** The secrets typed for the jump hosts of the pane, or null when there are none. */
+function typedHopSecrets(pane: Pane): HopSecrets | null {
+  const typed = Object.entries(pane.hopSecrets ?? {}).filter(
+    ([, secrets]) => secrets.password || secrets.passphrase,
+  );
+  return typed.length > 0 ? Object.fromEntries(typed) : null;
+}
+
 async function openFresh(
   pane: Pane,
   channel: Channel<SessionUpdate>,
@@ -149,9 +157,16 @@ async function openFresh(
     const id = await api.sessionDuplicate(pane.duplicateFrom, geometry, channel);
     return { sessionId: id, created: true };
   }
+  const hops = typedHopSecrets(pane);
   const id = await api.sessionOpen(
     pane.host.id,
-    { cols: geometry.cols, rows: geometry.rows, secrets: pane.secrets },
+    {
+      cols: geometry.cols,
+      rows: geometry.rows,
+      secrets: pane.secrets,
+      // Only what was typed for jump hosts; the others use the credential store.
+      ...(hops ? { hop_secrets: hops } : {}),
+    },
     channel,
   );
   return { sessionId: id, created: true };
@@ -183,6 +198,9 @@ async function reopen(
     // Never close a live session: show it again. The replay would double
     // what is on screen, so the screen starts empty.
     handle.term.reset();
+    // What the session says about its forwards (the attach repeats it).
+    for (const forward of known.forwards ?? []) sessions.applyForward(pane, forward);
+    if (known.exec_pending) sessions.markExecPending(pane);
     await api.sessionAttach(previous, channel);
     return { sessionId: previous, created: false };
   }

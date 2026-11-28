@@ -10,6 +10,8 @@
   import { copyText } from '../terminal/links';
   import { getTerminal } from '../terminal/registry';
   import { sshCommand, sshTarget } from '../terminal/session-view';
+  import { execApproval } from '../stores/exec-approval.svelte';
+  import ForwardsIndicator from './ForwardsIndicator.svelte';
   import PopMenu from './PopMenu.svelte';
   import SessionIcon from './SessionIcon.svelte';
   import StatusBadge from './StatusBadge.svelte';
@@ -134,6 +136,18 @@
     {#if host}
       <span class="target" title={host.name}>{sshTarget(host)}</span>
       {#if folder}<span class="folder" title="Folder">{folder}</span>{/if}
+      <ForwardsIndicator {pane} />
+      {#if pane?.execPending}
+        <button
+          type="button"
+          class="approval sx-press"
+          title="Synced settings of this host are not approved on this device, so this session runs without them. Review them."
+          onclick={() => void execApproval.show(host.id)}
+        >
+          <span class="glyph" aria-hidden="true">▲</span>
+          Synced settings off
+        </button>
+      {/if}
     {:else}
       <span class="folder">No host in this pane yet</span>
     {/if}
@@ -253,6 +267,32 @@
     font-size: var(--termru-text-secondary-size);
     line-height: var(--termru-text-secondary-lh);
     color: var(--termru-muted);
+  }
+
+  .approval {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--termru-space-2);
+    min-height: 28px;
+    padding: 0 var(--termru-space-3);
+    border: 1px solid var(--termru-warning);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--termru-warning);
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    white-space: nowrap;
+  }
+
+  .approval .glyph {
+    font-size: 8px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .approval:hover {
+      background: var(--termru-subtle);
+    }
   }
 
   .actions {

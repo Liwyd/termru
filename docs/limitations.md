@@ -19,11 +19,6 @@ security-relevant part of this list is also tracked in the
   (the tabs, the order and the pane tree), but the sessions do not: the
   user reconnects. A remote shell can not be restored, and Termru never
   claims otherwise.
-* **Forwarding, jump hosts and the other session options have no screens
-  yet.** The engine, the data model and the import of `~/.ssh/config` work
-  (see ADR 0010), but the host editor does not show the Jump host, Forwards
-  and Advanced sections until the next phase: they can only come from an
-  import or a synced record.
 * **No snippets.** The domain has no snippet model, so the search can not
   cover one and the palette can not insert one.
 * **No context menus and no drag & drop of a host onto a tab.** The tabs can
@@ -79,11 +74,14 @@ See [ADR 0010](architecture/0010-data-model-v2.md) and ADR 0002.
   command, agent flag or authentication order in its copy and pushes that.
   There is no unknown-field preservation. Update every device before editing
   hosts that use them.
-* **Synced fields act.** A startup command, agent forwarding and forwards come
-  with the synced record: whoever can write to the sync account can change
-  what a connection does on every device. They are validated everywhere and
-  off or loopback-only by default, but there is no per-device switch that
-  ignores them yet.
+* **Synced fields act, so each device approves them.** A startup command,
+  agent forwarding, environment variables and a forward on a non-loopback
+  address come with the synced record. A device connects without them until
+  its user approves the exact values (or saves the host in the editor), so a
+  second device of the same user asks once as well, and a database from before
+  the approval table asks once for every host that has such fields. The
+  approval applies to the next connection: a session that is already open, its
+  reconnects and its duplicates keep running without the fields.
 * **Agent forwarding is a risk by nature.** The server's administrators can use
   the agent while the session lives. It is off by default and only requested
   on the target, never on a jump host. On Windows only the OpenSSH agent's
@@ -101,6 +99,10 @@ See [ADR 0010](architecture/0010-data-model-v2.md) and ADR 0002.
   explicit choice.
 * **Forward listeners are IPv4 loopback by default** (`localhost` binds
   `127.0.0.1`); an IPv6 listener needs an explicit `::1` bind address.
+* **The jump-host password prompt only knows what the credential store says.**
+  The connect dialog asks for the password of a jump host that signs in with a
+  password and has none stored. A hop that asks for a second factor or a
+  passphrase is asked by the session's own dialogs, like the host itself.
 * **The route is not rechecked for the hosts that depend on an edited host.**
   Editing a jump host so that another host's route becomes a cycle or too long
   is reported when that host is connected, not when the jump host is saved.

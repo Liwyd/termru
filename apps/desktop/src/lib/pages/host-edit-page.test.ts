@@ -161,7 +161,9 @@ describe('the page', () => {
       '01 / CONNECTION',
       '02 / AUTHENTICATION',
       '03 / ORGANIZATION',
-      '04 / ADVANCED',
+      '04 / JUMP HOSTS',
+      '05 / PORT FORWARDS',
+      '06 / ADVANCED',
     ]);
     for (const label of ['Cancel', 'Save host', 'Save & connect']) {
       expect(findButton(target, label)).toBeTruthy();

@@ -165,7 +165,36 @@ and never interpolated into HTML by the app. The scrollback is bounded
 * CI actions are referenced by major version today; they should be pinned to
   commit SHAs (see the residual risks).
 
-### 3.8 Cloud sync (not implemented yet)
+### 3.8 Synced settings that act on connect
+
+A host is a synced record, and some of its fields make a connection do
+something: the **startup command** (typed into the shell), **agent
+forwarding** (the server can use the local SSH agent), the **environment** and
+**forwards that listen on a non-loopback address** (ports reachable from the
+network). Whoever controls the sync account, or a device signed in to it,
+could change them on every device and so have each one run a command or
+expose a port the next time the host is opened.
+
+* **Local approval per device** (ADR 0010, "Local approval of synced fields
+  that act"). Each device stores, outside the synced record, the SHA-256 of
+  the exec-like fields its user approved for each host. A connection whose
+  fields hash to something else connects **without** them (loopback forwards
+  still run) and says so; the review dialog shows exactly the fields, and the
+  approval is for the hash the backend computed and recomputes: it is refused
+  if the stored fields changed after the review.
+* **Saving in the editor of this device approves what the editor showed**;
+  no other write does, so a folder move or an import cannot approve a synced
+  startup command.
+* The review writes out control and bidirectional characters, so a startup
+  command cannot disguise itself.
+* Not covered: a compromised **local** device or webview (it can call the
+  approval command itself; see 3.4), a session that is already open (it keeps
+  its parameters), and a remote forward on loopback, whose target is a
+  destination chosen by whoever wrote the record (the same trust as a synced
+  address).
+* Values of the environment are synced in plain text: no place for secrets.
+
+### 3.9 Cloud sync (not implemented yet)
 
 When the sync server exists, its surface (authentication, per-user
 isolation, rate limiting, conflict handling) is described in ADR 0005 and
@@ -190,6 +219,7 @@ planned.
 | XSS in the frontend executes in the webview | Medium | Minimal capabilities, CSP, text-only rendering of remote data |
 | CI actions referenced by tag, not by SHA | Low | Pin before the release pipeline is enabled |
 | No code signing of release artifacts | Medium | Documented as a trust limitation; to be addressed in Phase 12 |
+| A synced startup command, agent flag, environment or exposed forward acts on every device | High | Per-device approval of the exact values (hash), unapproved fields are left out of the connection (3.8) |
 | Single instance not enforced (two processes may share the database) | Low | SQLite WAL tolerates it; a single-instance plugin is planned |
 
 ## 6. Reporting a vulnerability

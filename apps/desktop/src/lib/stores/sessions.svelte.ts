@@ -16,7 +16,15 @@ import { clearWriteQueue } from '../terminal/write-queue';
 import { errorMessage, hosts } from './hosts.svelte';
 import { route } from './route.svelte';
 import { notify } from '../notify.svelte';
-import type { Host, SessionSecrets, SessionStatus, SessionUpdate, WorkspaceDoc } from '../types';
+import type {
+  ForwardUpdate,
+  HopSecrets,
+  Host,
+  SessionSecrets,
+  SessionStatus,
+  SessionUpdate,
+  WorkspaceDoc,
+} from '../types';
 
 export interface Pane {
   /** Pane id (stable, also used in the persisted layout). */
@@ -29,6 +37,13 @@ export interface Pane {
   status: SessionStatus;
   /** In-memory only; needed to re-open the connection after a failure. */
   secrets: SessionSecrets;
+  /**
+   * Secrets typed for the jump hosts of the route, by host id (in memory
+   * only, like `secrets`). A hop without an entry uses the credential store.
+   */
+  hopSecrets?: HopSecrets;
+  /** The jump hosts whose typed password is to be kept in the credential store. */
+  hopRemember?: string[];
   /** Bumped to force a (re)connect from the terminal view. */
   generation: number;
   exitCode: number | null;
@@ -66,6 +81,26 @@ export interface Pane {
   /** The terminal grid, as the fit settled it (0 until measured). */
   cols?: number;
   rows?: number;
+  /**
+   * What became of the host's port forwards in the running session, by
+   * forward id. Every status other than `ready` clears it (the forwards live
+   * and die with the connection).
+   */
+  forwards?: ForwardUpdate[];
+  /**
+   * The session connected without the host's startup command, agent
+   * forwarding, environment and exposed forwards: this device has not
+   * approved the synced values (ADR 0010).
+   */
+  execPending?: boolean;
+}
+
+/** What the connect dialog collected for the jump hosts of a route. */
+export interface HopAnswers {
+  /** By host id of the hop. */
+  secrets: HopSecrets;
+  /** The ids whose password is to be kept in the credential store. */
+  remember: string[];
 }
 
 export interface Tab {
@@ -161,7 +196,12 @@ export class SessionStore {
   }
 
   /** Creates a pane for a host. */
-  #newPane(host: Host | null, secrets: SessionSecrets, rememberSecret: boolean): Pane {
+  #newPane(
+    host: Host | null,
+    secrets: SessionSecrets,
+    rememberSecret: boolean,
+    hops?: HopAnswers,
+  ): Pane {
     return {
       id: newPaneId(),
       sessionId: null,
@@ -180,15 +220,18 @@ export class SessionStore {
       restored: false,
       attachTo: null,
       rememberSecret,
+      ...(hops ? { hopSecrets: hops.secrets, hopRemember: [...hops.remember] } : {}),
       connectedAt: null,
       terminalTitle: null,
       cols: 0,
       rows: 0,
+      forwards: [],
+      execPending: false,
     };
   }
 
-  open(host: Host, secrets: SessionSecrets, rememberSecret = false): Tab {
-    const pane = this.#newPane(host, secrets, rememberSecret);
+  open(host: Host, secrets: SessionSecrets, rememberSecret = false, hops?: HopAnswers): Tab {
+    const pane = this.#newPane(host, secrets, rememberSecret, hops);
     const tab: Tab = {
       id: newTabId(),
       title: host.name,
@@ -226,10 +269,14 @@ export class SessionStore {
       restored: false,
       attachTo: null,
       rememberSecret: false,
+      hopRemember: [],
       connectedAt: null,
       terminalTitle: null,
       cols: 0,
       rows: 0,
+      // The copy reports its own forwards (and its own missing approval).
+      forwards: [],
+      execPending: false,
     };
     // The duplicate gets its own tab: the original keeps its panes (and
     // their sessions).
@@ -304,6 +351,7 @@ export class SessionStore {
     host: Host,
     secrets: SessionSecrets = {},
     remember = false,
+    hops?: HopAnswers,
   ): Promise<void> {
     const found = this.#resolve(this.tabOfPane(pane.id)?.id ?? '', pane.id);
     if (!found) return;
@@ -315,6 +363,8 @@ export class SessionStore {
     target.errorMessage = null;
     target.secrets = secrets;
     target.rememberSecret = remember;
+    target.hopSecrets = hops?.secrets;
+    target.hopRemember = hops ? [...hops.remember] : [];
     target.generation += 1;
     if (tab.title === 'New pane' || tab.panes.length === 1) tab.title = host.name;
     this.scheduleLayoutSave();
@@ -789,6 +839,9 @@ export class SessionStore {
     if (!target) return;
     target.status = status;
     target.errorMessage = null;
+    // The forwards live and die with the connection (the backend forgets
+    // them on every status but `ready`).
+    if (status.state !== 'ready') target.forwards = [];
 
     // Only `closed` arms the watchdog; any other state settles the wait.
     if (status.state !== 'closed') this.#clearWatchdog(target.id);
@@ -868,6 +921,36 @@ export class SessionStore {
     this.#watchdogs.delete(paneId);
   }
 
+  /** Records what became of one port forward (a newer report replaces the older one). */
+  applyForward(pane: Pane, forward: ForwardUpdate): void {
+    const target = this.#storedPane(pane);
+    if (!target) return;
+    target.forwards = [
+      ...(target.forwards ?? []).filter((entry) => entry.id !== forward.id),
+      forward,
+    ].sort((a, b) => a.id - b.id);
+  }
+
+  /**
+   * The session runs without the synced startup command, agent forwarding,
+   * environment and exposed forwards (this device has not approved them).
+   * The pane remembers it and the user is told once; the notice has a button
+   * that opens the review.
+   */
+  markExecPending(pane: Pane): void {
+    const target = this.#storedPane(pane);
+    if (!target || target.execPending === true) return;
+    target.execPending = true;
+    if (target.host) {
+      notify({
+        key: 'host.exec-pending',
+        entityId: target.host.id,
+        values: { name: target.host.name },
+        action: 'review-host-exec',
+      });
+    }
+  }
+
   /** Applies a channel update to a pane. */
   applyUpdate(pane: Pane, update: SessionUpdate): void {
     switch (update.kind) {
@@ -876,6 +959,12 @@ export class SessionStore {
         break;
       case 'exit':
         pane.exitCode = update.code;
+        break;
+      case 'forward':
+        this.applyForward(pane, update.forward);
+        break;
+      case 'exec_pending':
+        this.markExecPending(pane);
         break;
       case 'data':
         // Terminal bytes are handled by the terminal view itself.
@@ -889,7 +978,7 @@ export class SessionStore {
    * New secrets (collected by the connect dialog) mean the old session, which
    * holds the old credentials, is replaced by a fresh one.
    */
-  retry(pane: Pane, secrets?: SessionSecrets, remember?: boolean): void {
+  retry(pane: Pane, secrets?: SessionSecrets, remember?: boolean, hops?: HopAnswers): void {
     const target = this.#storedPane(pane) ?? pane;
     this.#clearWatchdog(target.id);
     target.dead = false;
@@ -904,6 +993,11 @@ export class SessionStore {
       target.freshConnect = true;
       if (remember !== undefined) target.rememberSecret = remember;
     }
+    if (hops) {
+      target.hopSecrets = hops.secrets;
+      target.hopRemember = [...hops.remember];
+      target.freshConnect = true;
+    }
     target.generation += 1;
   }
 
@@ -913,6 +1007,7 @@ export class SessionStore {
    */
   async rememberSecret(pane: Pane): Promise<void> {
     const target = this.#storedPane(pane) ?? pane;
+    await this.#rememberHopSecrets(target);
     if (!target.rememberSecret || !target.host) return;
     const password = target.secrets.password;
     const passphrase = target.secrets.passphrase;
@@ -930,6 +1025,29 @@ export class SessionStore {
       notify({ key: 'credential.stored' });
     } catch (err) {
       notify({ key: 'credential.store-failed', values: { detail: errorMessage(err) } });
+    }
+  }
+
+  /**
+   * Stores the passwords typed for jump hosts that the user asked to keep, once
+   * the connection through them is established, and drops every typed hop
+   * secret from memory.
+   */
+  async #rememberHopSecrets(target: Pane): Promise<void> {
+    const typed = target.hopSecrets;
+    if (!typed) return;
+    const keep = new Set(target.hopRemember ?? []);
+    for (const [hopId, secrets] of Object.entries(typed)) {
+      const password = secrets.password;
+      if (!password || !keep.has(hopId)) continue;
+      try {
+        await api.secretSet(hopId, 'password', password);
+        hosts.markPasswordStored(hopId, true);
+        secrets.password = undefined;
+        notify({ key: 'credential.stored' });
+      } catch (err) {
+        notify({ key: 'credential.store-failed', values: { detail: errorMessage(err) } });
+      }
     }
   }
 

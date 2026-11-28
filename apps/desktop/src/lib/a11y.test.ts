@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.svelte';
 import { notify, notices } from './notify.svelte';
 import { connectFlow } from './stores/connect.svelte';
+import { execApproval } from './stores/exec-approval.svelte';
+import { sshImport } from './stores/ssh-import.svelte';
 import { hosts } from './stores/hosts.svelte';
 import { palette, commandEntries } from './stores/palette.svelte';
 import { prefs } from './stores/prefs.svelte';
@@ -211,6 +213,14 @@ beforeEach(() => {
   stubBrowserApis();
   bus.handlers.clear();
   connectFlow.cancel();
+  sshImport.close();
+  sshImport.phase = 'loading';
+  sshImport.preview = null;
+  sshImport.report = null;
+  sshImport.error = null;
+  execApproval.close();
+  execApproval.current = null;
+  execApproval.error = null;
   palette.hide();
   shortcuts.cancel();
   notices.reset();
@@ -309,6 +319,63 @@ describe('axe: every route', () => {
     route.edit(HOSTS[0]);
     flushSync();
     await tick();
+    await expectAccessible();
+  });
+
+  it('Host editor with the sections of data model v2 filled in', async () => {
+    await start();
+    route.edit(
+      host('atlas-prod', {
+        jump_chain: ['relay-edge'],
+        forwards: [
+          {
+            kind: 'local',
+            bind_address: '0.0.0.0',
+            bind_port: 5433,
+            target_host: 'db.internal',
+            target_port: 5432,
+            enabled: true,
+          },
+          { kind: 'dynamic', bind_port: 1080, enabled: false },
+          {
+            kind: 'remote',
+            bind_port: 9000,
+            target_host: 'localhost',
+            target_port: 3000,
+            enabled: true,
+          },
+        ],
+        env: [{ name: 'LANG', value: 'en_US.UTF-8' }],
+        startup_command: 'tmux new -A -s main',
+        agent_forward: true,
+        auth_order: ['agent', 'password', 'keyboard_interactive'],
+      }),
+    );
+    flushSync();
+    await tick();
+    await tick();
+    expect(document.querySelector('[aria-labelledby="sec-forwards"]')).not.toBeNull();
+    await expectAccessible();
+  });
+
+  it('Host editor with errors showing in the new sections', async () => {
+    await start();
+    route.edit(
+      host('atlas-prod', {
+        jump_chain: ['vanished'],
+        forwards: [{ kind: 'local', bind_port: 0, enabled: true }],
+        env: [{ name: '1BAD', value: '' }],
+        auth_order: [],
+      }),
+    );
+    flushSync();
+    await tick();
+    click(findButton(target, 'Save host'));
+    await tick();
+    await tick();
+    type(document.getElementById('host-startup') as HTMLInputElement, 'a\u0007b');
+    leave(document.getElementById('host-startup') as HTMLInputElement);
+    expect(expectErrorsWired()).toBeGreaterThanOrEqual(5);
     await expectAccessible();
   });
 
@@ -416,6 +483,181 @@ describe('axe: dialogs and layers', () => {
     await vi.waitFor(() => expect(connectFlow.pending).not.toBeNull());
     await tick();
     expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).not.toBeNull();
+    await expectAccessible();
+  });
+
+  it('the connect dialog with a password for each jump host', async () => {
+    await start();
+    const bastion = host('bastion', { id: 'bastion' } as Partial<Host>);
+    hosts.hosts = [...HOSTS, bastion];
+    answers.set('secret_has', false);
+    void connectFlow.request(host('app', { auth: { type: 'password' }, jump_chain: ['bastion'] }));
+    await vi.waitFor(() => expect(connectFlow.pending?.hops).toHaveLength(1));
+    await tick();
+    expect(document.querySelectorAll('input[type="password"]')).toHaveLength(2);
+    await expectAccessible();
+    // And with the missing password of a hop pointed out.
+    document
+      .querySelector('form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    flushSync();
+    await tick();
+    expect(expectErrorsWired()).toBeGreaterThanOrEqual(1);
+    await expectAccessible();
+  });
+
+  it('the import from SSH config dialog: choosing, the summary, and the empty states', async () => {
+    await start();
+    const candidate = (over: object) => ({
+      alias: 'web',
+      host: 'web.corp.example',
+      user: 'deploy',
+      port: 22,
+      identity_files: ['/home/me/.ssh/work_ed25519'],
+      jump_chain: [],
+      warnings: [],
+      existing_host_id: null,
+      problem: null,
+      ...over,
+    });
+    answers.set('ssh_config_preview', {
+      found: true,
+      path: '/home/me/.ssh/config',
+      candidates: [
+        candidate({ alias: 'bastion' }),
+        candidate({ alias: 'app', jump_chain: ['bastion'], warnings: ['uses ProxyCommand'] }),
+        candidate({ alias: 'known', existing_host_id: 'h1' }),
+        candidate({ alias: 'legacy', problem: 'address contains invalid characters' }),
+      ],
+      warnings: ['a Match block was skipped'],
+    });
+    answers.set('ssh_config_import', {
+      imported: [{ id: 'n1', name: 'bastion' }],
+      identities_created: 1,
+      skipped: [{ alias: 'legacy', reason: 'address contains invalid characters' }],
+      already_present: ['known'],
+      warnings: [],
+    });
+    void sshImport.show();
+    await vi.waitFor(() => expect(sshImport.phase).toBe('ready'));
+    await tick();
+    expect(document.querySelectorAll('li.row')).toHaveLength(4);
+    await expectAccessible();
+    click(findButton(target, 'Import 2 hosts'));
+    await vi.waitFor(() => expect(sshImport.phase).toBe('done'));
+    await tick();
+    await expectAccessible();
+    sshImport.close();
+    await tick();
+    answers.set('ssh_config_preview', {
+      found: false,
+      path: '/home/me/.ssh/config',
+      candidates: [],
+      warnings: [],
+    });
+    void sshImport.show();
+    await vi.waitFor(() => expect(sshImport.phase).toBe('ready'));
+    await tick();
+    expect(document.body.textContent).toContain('No SSH config found');
+    await expectAccessible();
+    sshImport.close();
+    await tick();
+    failures.set('ssh_config_preview', 'permission denied');
+    void sshImport.show();
+    await vi.waitFor(() => expect(sshImport.phase).toBe('error'));
+    await tick();
+    await expectAccessible();
+  });
+
+  it('the review of synced settings, pending and approved', async () => {
+    await start();
+    const fields = {
+      startup_command: 'tmux new -A -s main',
+      agent_forward: true,
+      env: [{ name: 'LANG', value: 'C' }],
+      forwards: [
+        {
+          kind: 'local',
+          bind_address: '0.0.0.0',
+          bind_port: 9090,
+          target_host: 'db',
+          target_port: 5432,
+          enabled: true,
+        },
+      ],
+    };
+    answers.set('host_exec_review', {
+      host_id: 'atlas-prod',
+      host_name: 'atlas-prod',
+      hash: 'h',
+      pending: true,
+      fields,
+    });
+    void execApproval.show('atlas-prod');
+    await vi.waitFor(() => expect(execApproval.open).toBe(true));
+    await tick();
+    await expectAccessible();
+    execApproval.close();
+    await tick();
+    answers.set('host_exec_review', {
+      host_id: 'atlas-prod',
+      host_name: 'atlas-prod',
+      hash: 'h',
+      pending: false,
+      fields,
+    });
+    void execApproval.show('atlas-prod');
+    await vi.waitFor(() => expect(execApproval.open).toBe(true));
+    await tick();
+    await expectAccessible();
+  });
+
+  it('the forwards menu of a session, and its chips', async () => {
+    await start();
+    const withForwards = host('atlas-prod', {
+      forwards: [
+        {
+          kind: 'local',
+          bind_address: '127.0.0.1',
+          bind_port: 8080,
+          target_host: 'db',
+          target_port: 5432,
+          enabled: true,
+        },
+        { kind: 'dynamic', bind_port: 1080, enabled: true },
+        {
+          kind: 'local',
+          bind_address: '0.0.0.0',
+          bind_port: 9090,
+          target_host: 'metrics',
+          target_port: 9090,
+          enabled: true,
+        },
+      ],
+    });
+    const tab = sessions.open(withForwards, {});
+    const stored = sessions.tabs.find((entry) => entry.id === tab.id) as Tab;
+    const pane = sessions.activePaneOf(stored) as Pane;
+    pane.sessionId = 's1';
+    sessions.applyStatus(pane, { state: 'ready' });
+    sessions.applyUpdate(pane, {
+      kind: 'forward',
+      forward: { state: 'listening', id: 0, kind: 'local', address: '127.0.0.1', port: 8080 },
+    });
+    sessions.applyUpdate(pane, {
+      kind: 'forward',
+      forward: { state: 'failed', id: 1, kind: 'dynamic', reason: 'address already in use' },
+    });
+    sessions.applyUpdate(pane, { kind: 'exec_pending' });
+    await visit('sessions');
+    const chip = target.querySelector<HTMLElement>('button[title="Port forwards of this session"]');
+    expect(chip).not.toBeNull();
+    await expectAccessible();
+    click(chip as HTMLElement);
+    await tick();
+    expect(
+      document.querySelectorAll('[role="menu"] [role="menuitem"]').length,
+    ).toBeGreaterThanOrEqual(3);
     await expectAccessible();
   });
 

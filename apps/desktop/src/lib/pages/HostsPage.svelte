@@ -10,6 +10,7 @@
   import { hosts } from '../stores/hosts.svelte';
   import { prefs } from '../stores/prefs.svelte';
   import { route } from '../stores/route.svelte';
+  import { sshImport } from '../stores/ssh-import.svelte';
   import { sessions } from '../stores/sessions.svelte';
   import { sync } from '../stores/sync.svelte';
   import { notify } from '../notify.svelte';
@@ -137,6 +138,9 @@
     description={hosts.error ? 'The saved connections could not be read.' : headerCount}
   >
     {#snippet actions()}
+      <button type="button" class="import" onclick={() => void sshImport.show()}>
+        Import from SSH config
+      </button>
       <button type="button" class="primary new" onclick={() => route.edit(null)}>
         <Icon name="plus" size={17} />
         New host
@@ -317,7 +321,8 @@
     gap: var(--termru-space-5);
   }
 
-  .new {
+  .new,
+  .import {
     display: inline-flex;
     align-items: center;
     gap: var(--termru-space-2);

@@ -194,6 +194,7 @@
     class="menu"
     class:shown={pop.shown}
     class:still={!view.animate}
+    class:wide={view.items.some((entry) => entry.mono)}
     role="menu"
     tabindex="-1"
     aria-label={label}
@@ -217,7 +218,10 @@
         title={entry.disabled ? entry.reason : undefined}
         onclick={() => choose(entry)}
       >
-        <span class="text">{entry.label}</span>
+        <span class="text" class:mono={entry.mono}>
+          {entry.label}
+          {#if entry.detail}<span class="detail">{entry.detail}</span>{/if}
+        </span>
         {#if entry.hint}<span class="hint">{entry.hint}</span>{/if}
       </button>
     {/each}
@@ -244,6 +248,11 @@
     transition:
       opacity var(--motion-fast) var(--ease-out),
       transform var(--motion-fast) var(--ease-out);
+  }
+
+  /* A menu of addresses keeps each on one line where it can. */
+  .menu.wide {
+    max-width: min(480px, calc(100vw - 16px));
   }
 
   .menu.shown {
@@ -303,6 +312,25 @@
 
   .item.danger {
     color: var(--termru-danger);
+  }
+
+  .text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .text.mono {
+    font-family: var(--termru-font-mono);
+    font-size: var(--termru-text-secondary-size);
+  }
+
+  .detail {
+    font-family: var(--termru-font-ui);
+    font-size: var(--termru-text-meta-size);
+    line-height: var(--termru-text-meta-lh);
+    color: var(--termru-muted);
   }
 
   .hint {

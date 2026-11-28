@@ -65,7 +65,7 @@ fn opening_a_v1_database_migrates_it_in_place() {
     assert_eq!(schema_version(&path), 1);
 
     let store = Store::open(&path).expect("open migrates");
-    assert_eq!(schema_version(&path), 2);
+    assert_eq!(schema_version(&path), 3);
 
     let hosts = store.repos().hosts().list().expect("list");
     assert_eq!(hosts.len(), 2);
@@ -169,7 +169,7 @@ fn a_migrated_host_can_use_the_new_features_and_reopen() {
     }
     // A second open runs no migration and still reads everything.
     let store = Store::open(&path).expect("reopen");
-    assert_eq!(schema_version(&path), 2);
+    assert_eq!(schema_version(&path), 3);
     let web = store
         .repos()
         .hosts()
@@ -193,7 +193,7 @@ fn a_database_from_the_future_is_refused() {
     Connection::open(&path)
         .expect("reopen")
         .execute(
-            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'later', 0)",
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'later', 0)",
             [],
         )
         .expect("pretend a newer release ran");

@@ -95,6 +95,12 @@ pub enum SessionUpdate {
     Forward {
         forward: ForwardUpdate,
     },
+    /// The session connected without the host's startup command, agent
+    /// forwarding, environment and forwards that are not loopback only: this
+    /// device has not approved the values that arrived through sync. Sent
+    /// once to the view that opened the session and to every view that
+    /// attaches later.
+    ExecPending,
 }
 
 /// The state of one port forward of a session.
@@ -232,6 +238,10 @@ pub struct SessionInfo {
     /// The forwards that are up (or failed) right now, by `id`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub forwards: Vec<ForwardUpdate>,
+    /// The session runs without the host's exec-like fields because this
+    /// device has not approved them (see [`SessionUpdate::ExecPending`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub exec_pending: bool,
 }
 
 /// One view (a terminal pane in some window) rendering a session. It carries
@@ -253,6 +263,9 @@ struct Stream {
     /// later is told. Emptied by every status but `Ready` (the forwards live
     /// and die with the connection).
     forwards: BTreeMap<u32, ForwardUpdate>,
+    /// The session was started without the host's exec-like fields (they are
+    /// not approved on this device); fixed for the life of the session.
+    exec_pending: bool,
     ring: ReplayRing,
     views: Vec<View>,
     /// Wakes the session's pump when views were removed from outside it. The
@@ -294,6 +307,7 @@ fn session_info(id: &str, entry: &Managed) -> SessionInfo {
         host_id: entry.host_id,
         status: stream.status.clone(),
         forwards: stream.forwards.values().cloned().collect(),
+        exec_pending: stream.exec_pending,
     }
 }
 
@@ -418,6 +432,7 @@ impl SessionManager {
         let stream = Stream {
             status: SessionStatusDto::Connecting,
             forwards: BTreeMap::new(),
+            exec_pending: false,
             ring: ReplayRing::new(REPLAY_LIMIT),
             views: vec![Self::new_view(window, view)],
             views_changed: Arc::new(Notify::new()),
@@ -435,6 +450,16 @@ impl SessionManager {
             },
         );
         cancel_rx
+    }
+
+    /// Marks the session as running without the host's exec-like fields (not
+    /// approved on this device) and tells the views it has now.
+    pub fn set_exec_pending(&self, id: &str) {
+        if let Some(stream) = self.stream(id) {
+            let mut guard = lock_stream(&stream);
+            guard.exec_pending = true;
+            broadcast(&mut guard.views, SessionUpdate::ExecPending);
+        }
     }
 
     /// Called by the connection task when it exits for any reason.
@@ -529,6 +554,9 @@ impl SessionManager {
             let _ = view.channel.send(SessionUpdate::Forward {
                 forward: forward.clone(),
             });
+        }
+        if guard.exec_pending {
+            let _ = view.channel.send(SessionUpdate::ExecPending);
         }
         guard.add_view(view);
         Ok(())
@@ -2058,6 +2086,53 @@ mod tests {
                 "{status:?} forgets the forwards"
             );
         }
+    }
+
+    /// A session started without the host's synced exec-like fields says so to
+    /// the view that opened it, to every view that attaches later and in the
+    /// session list.
+    #[test]
+    fn a_session_without_approved_fields_tells_every_view() {
+        let manager = SessionManager::new();
+        let (first, log) = capturing_channel();
+        let (id, _cancel) = manager.register(HostId::new(), params(), "main", first);
+        assert!(!manager.info(&id).expect("info").exec_pending);
+        manager.set_exec_pending(&id);
+        assert!(
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|update| matches!(update, SessionUpdate::ExecPending))
+        );
+        assert!(manager.info(&id).expect("info").exec_pending);
+
+        let (second, later) = capturing_channel();
+        futures_block(manager.attach_view(&id, "other", second)).expect("attach");
+        assert!(
+            later
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|update| matches!(update, SessionUpdate::ExecPending))
+        );
+
+        // A session that is fine says nothing and serializes no flag.
+        let (plain, _cancel) = manager.register(HostId::new(), params(), "main", test_channel());
+        let (third, quiet) = capturing_channel();
+        futures_block(manager.attach_view(&plain, "other", third)).expect("attach");
+        assert!(
+            !quiet
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|update| matches!(update, SessionUpdate::ExecPending))
+        );
+        let json = serde_json::to_value(manager.info(&plain).expect("info")).unwrap();
+        assert!(json.get("exec_pending").is_none(), "{json}");
+        let json = serde_json::to_value(manager.info(&id).expect("info")).unwrap();
+        assert_eq!(json["exec_pending"], true);
+        let update = serde_json::to_value(SessionUpdate::ExecPending).unwrap();
+        assert_eq!(update, serde_json::json!({ "kind": "exec_pending" }));
     }
 
     #[test]

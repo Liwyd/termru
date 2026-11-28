@@ -11,6 +11,7 @@
   } from './lib/keybindings';
   import { shortcutAllowed } from './lib/shortcut-guard';
   import { connectFlow } from './lib/stores/connect.svelte';
+  import { execApproval } from './lib/stores/exec-approval.svelte';
   import { errorMessage, hosts } from './lib/stores/hosts.svelte';
   import { prefs } from './lib/stores/prefs.svelte';
   import { route } from './lib/stores/route.svelte';
@@ -21,6 +22,8 @@
   import AppShell from './lib/components/AppShell.svelte';
   import CommandPalette from './lib/components/CommandPalette.svelte';
   import ConnectDialog from './lib/components/ConnectDialog.svelte';
+  import ExecApprovalDialog from './lib/components/ExecApprovalDialog.svelte';
+  import SshImportDialog from './lib/components/SshImportDialog.svelte';
   import AuthPromptDialog from './lib/components/AuthPromptDialog.svelte';
   import HostKeyDialog from './lib/components/HostKeyDialog.svelte';
   import Toasts from './lib/components/Toasts.svelte';
@@ -70,7 +73,13 @@
     void sync.load();
 
     // The button of a notice that offers one (a failed sync can be retried).
-    notices.setActions({ 'retry-sync': () => void sync.syncNow() });
+    notices.setActions({
+      'retry-sync': () => void sync.syncNow(),
+      // The notice is about a host: the review opens on that host.
+      'review-host-exec': (hostId) => {
+        if (hostId) void execApproval.show(hostId);
+      },
+    });
 
     // The backend applied a sync (pulled records): the local copies are
     // stale until they are read again.
@@ -285,10 +294,12 @@
 <ConnectDialog
   request={connectFlow.pending}
   oncancel={() => connectFlow.cancel()}
-  onsubmit={(secrets, remember) => connectFlow.submit(secrets, remember)}
+  onsubmit={(secrets, remember, hops) => connectFlow.submit(secrets, remember, hops)}
 />
 
 <HostKeyDialog />
+<ExecApprovalDialog />
+<SshImportDialog />
 <AuthPromptDialog />
 <CommandPalette />
 <Toasts />

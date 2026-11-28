@@ -13,7 +13,9 @@
 #   <route>-760.png         760x1100, light (narrow window)
 #   <route>-dark-1440.png   1440x960, dark theme
 #   state-<name>.png        hosts page states (empty, error), the dialogs (host key,
-#                           connect, sign-in question), the Sync page signed in
+#                           connect, sign-in question, SSH config import, approval
+#                           review), the Sync page signed in, the host editor with
+#                           the sections of data model v2, the forwards menu
 #   frame-N.png             the design frames 1, 2, 3, 4, 5, 8 (re-design/N.svg)
 #
 # The pages are loaded as http://127.0.0.1:PORT/?mock&demo[&theme=dark]#route.
@@ -86,6 +88,19 @@ queue "state-sync-conflicts" 1440 960 "${BASE}?mock&demo&sync=conflicts#sync"
 queue "state-sync-error" 1440 960 "${BASE}?mock&demo&sync=error#sync"
 queue "state-authprompt-dialog" 1440 960 "${BASE}?mock&demo&authprompt#hosts"
 queue "state-passphrase-dialog" 1440 960 "${BASE}?mock&demo&authprompt=passphrase#hosts"
+
+# Data model v2 (ADR 0010, Phase 5b). `v2` adds a bastion, forwards, environment
+# and a startup command to atlas-prod; `approval` makes its synced settings
+# unapproved on this device. The editor is long: the windows are tall.
+queue "state-editor-v2-1440" 1440 3300 "${BASE}?mock&v2&edit=atlas-prod#host-edit"
+queue "state-editor-v2-760" 760 5000 "${BASE}?mock&v2&edit=atlas-prod#host-edit"
+queue "state-editor-v2-dark-1440" 1440 3300 "${BASE}?mock&v2&edit=atlas-prod&theme=dark#host-edit"
+queue "state-editor-approval" 1440 3300 "${BASE}?mock&approval&edit=atlas-prod#host-edit"
+queue "state-forwards-menu" 1440 960 "${BASE}?mock&demo&v2&menu#sessions"
+queue "state-forwards-menu-unapproved" 1440 960 "${BASE}?mock&demo&approval&menu#sessions"
+queue "state-import-dialog" 1440 960 "${BASE}?mock&import#hosts"
+queue "state-approval-dialog" 1440 960 "${BASE}?mock&review#hosts"
+queue "state-connect-hops-dialog" 1440 960 "${BASE}?mock&v2&connect=atlas-prod#hosts"
 
 wait
 echo "design frames:"

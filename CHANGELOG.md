@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* Host editor sections for data model v2 (ADR 0010): **Jump hosts** (an ordered
+  picker of the other hosts, reorder and remove, the route `you → gateway →
+  bastion → app` with the first hop's own jump hosts, and the cycle, missing
+  hop and more-than-8-hops errors next to the picker), **Port forwards** (local,
+  remote and dynamic rows with a bind address, a bind port, a target, an
+  enabled switch and a warning for an address other machines can reach;
+  validated the way `validate.rs` does) and, under Advanced, **environment
+  variables**, the **startup command**, **agent forwarding** with a one-line
+  risk note and the **authentication order** (Automatic or a custom order).
+  The command preview shows `-J`, `-L`/`-R`/`-D` and `-A`.
+* The session toolbar shows a **forwards chip** (`2 forwards`, `1 of 2 failed`)
+  with a menu: `L 127.0.0.1:8080 → db:5432 · listening` or `failed: reason`
+  per forward. The `forward` session updates and `SessionInfo.forwards` feed it.
+* The connect dialog asks for the **password of a jump host** that signs in
+  with one and has none stored (a field per hop, labelled with its name, and a
+  box per hop to keep it in the credential store). They go to the backend as
+  `hop_secrets`.
+* **Import from SSH config** on the Hosts page: lists the hosts of
+  `~/.ssh/config` with a checkbox each (new, already in the library, cannot be
+  imported and why), the jump routes, the key files that will be referenced
+  (never copied) and the file's warnings; imports in one step and shows a
+  summary and a notice. Empty file, missing file and read-error states.
+* **Local approval of synced fields that act** (security): the startup command,
+  agent forwarding, environment variables and forwards that listen on a
+  non-loopback address arrive through sync, so every device keeps its own
+  approval (a SHA-256 of those fields, in a device-local table that is in no
+  sync payload; database migration 3). A host whose fields this device has not
+  approved connects without them, loopback forwards still running, and the
+  session says so with a notice, a toolbar chip and a review dialog that lists
+  exactly the fields. Saving the host in this device's editor approves what it
+  shows; `host_exec_approve(id, hash)` is refused when the stored fields no
+  longer hash to what the user was shown.
+
 * Data model v2 (ADR 0010): a host can name **jump hosts** (`jump_chain`),
   **port forwards** (local `-L`, remote `-R`, dynamic `-D` as a SOCKS5 proxy),
   **environment variables**, a **startup command**, **agent forwarding** (off

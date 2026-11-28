@@ -44,7 +44,12 @@ export type NoticeKey =
   | 'host.moved'
   | 'host.move-failed'
   | 'host.credential-not-stored'
+  | 'host.exec-pending'
+  | 'host.exec-approved'
   | 'hosts.refresh-failed'
+  | 'hosts.imported'
+  | 'hosts.import-failed'
+  | 'forward.address-copied'
   // Folders
   | 'folder.created'
   | 'folder.saved'
@@ -113,6 +118,8 @@ export interface NoticeValues {
   detail?: string;
   /** A number of panes. */
   count?: number;
+  /** How many were left out (an import's skipped hosts). */
+  skipped?: number;
   /** The three numbers of a finished sync. */
   pushed?: number;
   received?: number;
@@ -120,7 +127,7 @@ export interface NoticeValues {
 }
 
 /** What the button of a notice does. The handlers are registered by the app. */
-export type NoticeActionId = 'retry-sync';
+export type NoticeActionId = 'retry-sync' | 'review-host-exec';
 
 export interface Notice {
   key: NoticeKey;
@@ -171,6 +178,7 @@ export const EXIT_MS = 160;
 
 const LABELS: Record<NoticeActionId, string> = {
   'retry-sync': 'Retry',
+  'review-host-exec': 'Review',
 };
 
 const name = (values: NoticeValues): string => values.name ?? 'This item';
@@ -207,10 +215,39 @@ const COPY: Record<NoticeKey, Copy> = {
     description: (v) =>
       `Saved ${name(v)}, but the password was not stored (${detail(v)}). Termru asks for it when you connect.`,
   },
+  'host.exec-pending': {
+    kind: 'warning',
+    title: 'Approval needed',
+    description: (v) => `Synced settings for ${name(v)} need your approval on this device`,
+  },
+  'host.exec-approved': {
+    kind: 'success',
+    title: 'Settings approved',
+    description: (v) => dot(name(v), 'New connections use them'),
+  },
   'hosts.refresh-failed': {
     kind: 'error',
     title: 'Could not refresh the hosts',
     description: detail,
+  },
+  'hosts.imported': {
+    kind: 'success',
+    title: 'Hosts imported',
+    description: (v) =>
+      dot(
+        `${plural(v.count ?? 0, 'host')} added from your SSH config`,
+        `${v.skipped ?? 0} skipped`,
+      ),
+  },
+  'hosts.import-failed': {
+    kind: 'error',
+    title: 'Could not import the hosts',
+    description: detail,
+  },
+  'forward.address-copied': {
+    kind: 'success',
+    title: 'Address copied',
+    description: (v) => v.place ?? '',
   },
 
   'folder.created': { kind: 'success', title: 'Folder created', description: name },
@@ -451,7 +488,7 @@ export function cleanValues(values: NoticeValues | undefined): NoticeValues {
   if (place) out.place = place;
   const detailText = cleanText(values.detail, LIMITS.detail);
   if (detailText) out.detail = detailText;
-  for (const field of ['count', 'pushed', 'received', 'conflicts'] as const) {
+  for (const field of ['count', 'skipped', 'pushed', 'received', 'conflicts'] as const) {
     const value = cleanCount(values[field]);
     if (value !== undefined) out[field] = value;
   }
@@ -472,6 +509,8 @@ function isRoutine(kind: NoticeKind): boolean {
 
 interface Entry extends ActiveNotice {
   signature: string;
+  /** What the notice is about (`Notice.entityId`); handed to its action. */
+  entityId?: string;
   /** Milliseconds the notice stays once it is on screen. */
   duration: number;
 }
@@ -498,7 +537,7 @@ class NoticeCenter {
   #timing = new Map<number, Timing>();
   #next = 1;
   #hidden = false;
-  #actions: Partial<Record<NoticeActionId, () => void>> = {};
+  #actions: Partial<Record<NoticeActionId, (entityId?: string) => void>> = {};
 
   constructor() {
     if (typeof document !== 'undefined') {
@@ -511,7 +550,7 @@ class NoticeCenter {
   }
 
   /** Registers what the button of a notice does (the app wires these once). */
-  setActions(handlers: Partial<Record<NoticeActionId, () => void>>): void {
+  setActions(handlers: Partial<Record<NoticeActionId, (entityId?: string) => void>>): void {
     this.#actions = handlers;
   }
 
@@ -520,7 +559,8 @@ class NoticeCenter {
     const entry = this.#entries.get(id);
     const action = entry?.action;
     if (!entry || !action) return;
-    this.#actions[action.id]?.();
+    // The handler learns what the notice was about (a host id), if it says.
+    this.#actions[action.id]?.(entry.entityId);
     this.dismiss(id);
   }
 
@@ -559,6 +599,7 @@ class NoticeCenter {
       action: notice.action ? { id: notice.action, label: LABELS[notice.action] } : null,
       leaving: false,
       signature,
+      entityId: notice.entityId,
       duration,
     };
     this.#entries.set(entry.id, entry);

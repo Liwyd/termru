@@ -197,7 +197,13 @@ export type SessionUpdate =
   | { kind: 'status'; status: SessionStatus }
   | { kind: 'data'; base64: string }
   | { kind: 'exit'; code: number | null }
-  | { kind: 'forward'; forward: ForwardUpdate };
+  | { kind: 'forward'; forward: ForwardUpdate }
+  /**
+   * The session connected without the host's startup command, agent
+   * forwarding, environment and forwards that are not loopback only: this
+   * device has not approved the values that arrived through sync.
+   */
+  | { kind: 'exec_pending' };
 
 export interface SessionInfo {
   id: string;
@@ -205,6 +211,31 @@ export interface SessionInfo {
   status: SessionStatus;
   /** The forwards that are up (or failed) right now; omitted when there are none. */
   forwards?: ForwardUpdate[];
+  /** The session runs without the host's unapproved exec-like fields; omitted when it does not. */
+  exec_pending?: boolean;
+}
+
+/**
+ * The fields of a host that act when it is connected to, and which a device
+ * must approve before a connection uses them (see ADR 0010).
+ */
+export interface ExecFields {
+  startup_command: string | null;
+  agent_forward: boolean;
+  env: EnvVar[];
+  /** Only the enabled forwards whose listener is not loopback only. */
+  forwards: Forward[];
+}
+
+/** What `host_exec_review` returns: the fields a host asks for and whether they are approved. */
+export interface HostExecReview {
+  host_id: string;
+  host_name: string;
+  /** Sent back to `host_exec_approve`: the backend accepts it only for these exact fields. */
+  hash: string;
+  /** The fields are not approved on this device. */
+  pending: boolean;
+  fields: ExecFields;
 }
 
 /** Secrets for one connection. Never persisted; memory only. */

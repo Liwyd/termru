@@ -163,10 +163,24 @@ ALTER TABLE hosts ADD COLUMN agent_forward INTEGER NOT NULL DEFAULT 0
 ALTER TABLE hosts ADD COLUMN auth_order TEXT;
 "#,
     },
+    Migration {
+        version: 3,
+        name: "host_exec_approvals",
+        // Device-local, like `identity_bindings` and `recents`: it is never
+        // part of a host's sync payload. The hash is what this device's user
+        // approved of the host's exec-like fields (`termru_core::exec_approval`).
+        sql: r#"
+CREATE TABLE host_exec_approvals (
+    host_id      TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+    hash         TEXT NOT NULL,
+    approved_at  INTEGER NOT NULL
+);
+"#,
+    },
 ];
 
 /// Current schema version (must equal the highest migration version).
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 fn ensure_tracking_table(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(
@@ -313,7 +327,7 @@ mod tests {
         .unwrap();
 
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 2);
+        assert_eq!(current_version(&conn).unwrap(), SCHEMA_VERSION);
 
         let host = crate::repos::hosts::get_row(&conn, "11111111-1111-4111-8111-111111111111")
             .unwrap()
@@ -330,7 +344,37 @@ mod tests {
 
         // Idempotent: running again changes nothing.
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 2);
+        assert_eq!(current_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_exec_approvals_table_is_device_local_and_follows_its_host() {
+        let mut conn = at_version_1();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        run(&mut conn).unwrap();
+        // Not a column of the host, so it is in no synced payload.
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('hosts')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|name| name.contains("approv")));
+        conn.execute_batch(
+            "INSERT INTO hosts (id, name, address, port, username, auth, term, created_at, \
+             updated_at) VALUES ('h1', 'a', 'a.example.com', 22, 'u', '{}', 'xterm', 1, 1);
+             INSERT INTO host_exec_approvals (host_id, hash, approved_at) VALUES ('h1', 'x', 1);",
+        )
+        .unwrap();
+        conn.execute("DELETE FROM hosts WHERE id = 'h1'", [])
+            .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM host_exec_approvals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[test]

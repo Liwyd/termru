@@ -89,6 +89,15 @@ describe('mock backend: command coverage', () => {
     hostList: () => api.hostList(),
     recentList: () => api.recentList(),
     hostSave: () => api.hostSave(host),
+    hostExecReview: async () => {
+      await api.hostSave(host);
+      return api.hostExecReview(host.id);
+    },
+    hostExecApprove: async () => {
+      await api.hostSave(host);
+      const review = await api.hostExecReview(host.id);
+      return api.hostExecApprove(host.id, review.hash);
+    },
     hostDelete: () => api.hostDelete(host.id),
     hostSetFavorite: () => api.hostSetFavorite(host.id, true),
     groupList: () => api.groupList(),
